@@ -98,6 +98,10 @@ pub struct Searcher {
     pub(crate) stopped: bool,
     /// Position key per ply, used for repetition detection.
     pub(crate) keys: Box<[u64]>,
+    /// Keys of the positions that preceded the root in the game, oldest first
+    /// (the root itself is `keys[0]`). A repetition of one of them counts like
+    /// a repetition inside the search.
+    pub(crate) game_keys: Vec<u64>,
     /// Static evaluation per ply, used by the improving heuristic.
     pub(crate) evals: Box<[i32]>,
     /// The move played at each ply (`move_stack[ply]` is the move the node at
@@ -150,6 +154,7 @@ impl Searcher {
             seldepth: 0,
             stopped: false,
             keys: vec![0; MAX_PLY + 1].into_boxed_slice(),
+            game_keys: Vec::new(),
             evals: vec![0; MAX_PLY + 1].into_boxed_slice(),
             move_stack: vec![Move::NONE; MAX_PLY + 1].into_boxed_slice(),
             move_counts: vec![0; MAX_PLY + 1].into_boxed_slice(),
@@ -175,6 +180,37 @@ impl Searcher {
         self.correction.clear();
         self.killers.clear();
         self.pv.reset();
+    }
+
+    /// Clears the per-ply stacks and the countermove table at the start of a
+    /// search.
+    ///
+    /// The history tables deliberately persist between searches; everything
+    /// that describes the previous search's path does not. The stacks are read
+    /// before they are written for the first time (a null-move child reads its
+    /// parent's slot), so a stale value left by an earlier search would leak
+    /// into this one.
+    fn reset_stacks(&mut self) {
+        self.keys.fill(0);
+        self.evals.fill(0);
+        self.move_stack.fill(Move::NONE);
+        self.move_counts.fill(0);
+        self.reduction_stack.fill(0);
+        self.history.clear_counters();
+    }
+
+    /// Sets the positions that preceded the search root in the game, oldest
+    /// first and excluding the root itself.
+    ///
+    /// The `position ... moves ...` command supplies them. Without them the
+    /// search only sees repetitions along its own path and would walk into (or
+    /// miss) a repetition of a position from earlier in the game. Only the
+    /// positions since the last irreversible move can repeat, so a long history
+    /// is trimmed to the last 100 plies.
+    pub fn set_game_history(&mut self, keys: &[u64]) {
+        let keep = keys.len().min(100);
+        self.game_keys.clear();
+        self.game_keys.extend_from_slice(&keys[keys.len() - keep..]);
     }
 
     /// Returns the current search parameters.
@@ -203,15 +239,24 @@ impl Searcher {
     }
 
     /// Initializes the time manager for a clock-controlled search.
+    ///
+    /// The search clock starts here, when the `go` command is handled. The
+    /// manager stores its limits as absolute milliseconds on that clock, so
+    /// the clock must not be restarted afterwards: restarting it in
+    /// [`Searcher::search`] shifted every limit by the time since the previous
+    /// search began, which made timed searches overrun by about that much.
     pub fn init_clock(&mut self, control: &TimeControl) {
         self.sync_time_levers();
+        self.start = std::time::Instant::now();
         self.time_manager
             .init(control, self.move_overhead_ms, self.now_ms());
     }
 
-    /// Initializes the time manager for a fixed `movetime` search.
+    /// Initializes the time manager for a fixed `movetime` search (the clock
+    /// starts here, see [`Searcher::init_clock`]).
     pub fn init_movetime(&mut self, milliseconds: u64) {
         self.sync_time_levers();
+        self.start = std::time::Instant::now();
         self.time_manager
             .set_fixed_time(milliseconds, self.move_overhead_ms, self.now_ms());
     }
@@ -219,6 +264,7 @@ impl Searcher {
     /// Switches the time manager to infinite mode.
     pub fn init_infinite(&mut self) {
         self.sync_time_levers();
+        self.start = std::time::Instant::now();
         self.time_manager.set_infinite();
     }
 
@@ -254,14 +300,16 @@ impl Searcher {
         limits: Limits,
         observer: &mut dyn FnMut(&SearchInfo),
     ) -> SearchResult {
+        // The search clock is started by the `init_*` call that configured the
+        // time manager; it is deliberately not restarted here.
         self.limits = limits;
-        self.start = std::time::Instant::now();
         self.completed_depth = 0;
         self.nodes = 0;
         self.seldepth = 0;
         self.stopped = false;
         self.pv.reset();
         self.killers.clear();
+        self.reset_stacks();
         *self.nodes_per_move = [0; 64 * 64];
         self.tt.new_generation();
 
@@ -454,17 +502,33 @@ impl Searcher {
         if !self.params.use_twofold_repetition_draw {
             return false;
         }
+        self.repetition_count(position, ply) > 0
+    }
+
+    /// Returns how many earlier positions with the same side to move equal
+    /// `position`, looking back along the search path and then into the game
+    /// history, as far as the fifty-move clock allows (a capture or pawn move
+    /// makes every earlier position unreachable).
+    pub(crate) fn repetition_count(&self, position: &Position, ply: usize) -> u32 {
         let key = position.key();
         let clock = usize::from(position.halfmove_clock());
-        let distance = clock.min(ply);
+        let reachable = clock.min(ply + self.game_keys.len());
+        let mut count = 0;
         let mut back = 2;
-        while back <= distance {
-            if self.keys[ply - back] == key {
-                return true;
+        while back <= reachable {
+            let found = if back <= ply {
+                self.keys[ply - back] == key
+            } else {
+                // `beyond` plies before the root: 1 is the position just before it.
+                let beyond = back - ply;
+                self.game_keys[self.game_keys.len() - beyond] == key
+            };
+            if found {
+                count += 1;
             }
             back += 2;
         }
-        false
+        count
     }
 
     /// Returns whether neither side can deliver checkmate: king against
@@ -723,4 +787,81 @@ pub(crate) fn tt_entry(
 #[inline]
 pub(crate) const fn mated_in(ply: i32) -> i32 {
     -MATE_SCORE + ply
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Searcher;
+    use crate::board::fen::STARTPOS_FEN;
+    use crate::board::movegen::legal;
+    use crate::board::position::Position;
+
+    /// Plays the UCI moves in order and returns every position reached,
+    /// starting with the given one.
+    fn play(start: &Position, moves: &[&str]) -> Vec<Position> {
+        let mut positions = vec![*start];
+        for text in moves {
+            let current = *positions.last().expect("at least the start");
+            let mv = legal(&current)
+                .as_slice()
+                .iter()
+                .copied()
+                .find(|mv| mv.to_uci() == *text)
+                .unwrap_or_else(|| panic!("{text} is not legal"));
+            positions.push(current.make_move(mv));
+        }
+        positions
+    }
+
+    #[test]
+    fn a_repetition_of_an_earlier_game_position_is_seen_by_the_search() {
+        // The game returns to the start position after four plies, then the
+        // search's root is that position and its path plays g1f3 g8f6 again.
+        // The node two plies below the root equals the game position two plies
+        // before the root, which only the game history can reveal.
+        let start = Position::from_fen(STARTPOS_FEN).unwrap();
+        let game = play(&start, &["g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6"]);
+        let root = game[4];
+        let node = game[6];
+
+        let mut searcher = Searcher::new(1);
+        searcher.keys[0] = root.key();
+        searcher.keys[1] = game[5].key();
+
+        assert_eq!(searcher.repetition_count(&node, 2), 0, "no history yet");
+        assert!(!searcher.is_draw(&node, 2));
+
+        let earlier: Vec<u64> = game[..4].iter().map(|position| position.key()).collect();
+        searcher.set_game_history(&earlier);
+        assert_eq!(searcher.repetition_count(&node, 2), 1);
+        assert!(searcher.is_draw(&node, 2));
+    }
+
+    #[test]
+    fn history_beyond_an_irreversible_move_cannot_repeat() {
+        // A pawn move resets the fifty-move clock, so nothing before it counts
+        // even when the key happens to match.
+        let start = Position::from_fen(STARTPOS_FEN).unwrap();
+        let game = play(&start, &["g1f3", "g8f6", "f3g1", "f6g8", "e2e4"]);
+        let node = game[5];
+        assert_eq!(node.halfmove_clock(), 0);
+
+        let mut searcher = Searcher::new(1);
+        searcher.keys[0] = node.key();
+        let earlier: Vec<u64> = game[..5].iter().map(|position| position.key()).collect();
+        searcher.set_game_history(&earlier);
+        assert_eq!(searcher.repetition_count(&node, 0), 0);
+    }
+
+    #[test]
+    fn game_history_is_trimmed_to_the_last_hundred_plies() {
+        let mut searcher = Searcher::new(1);
+        let keys: Vec<u64> = (0..250).collect();
+        searcher.set_game_history(&keys);
+        assert_eq!(searcher.game_keys.len(), 100);
+        assert_eq!(searcher.game_keys[0], 150);
+        assert_eq!(searcher.game_keys[99], 249);
+        searcher.set_game_history(&[]);
+        assert!(searcher.game_keys.is_empty());
+    }
 }

@@ -1,6 +1,6 @@
 # KnightByte â€” Migration Plan: the predecessor C# engine â†’ Rust
 
-**Status:** Phase 0 complete; Phase 1 oracle capture and Phase 2 perft are complete; Phase 3 scalar evaluation is bit-exact. SIMD kernels and the incremental accumulator are deferred to the performance phase. Phase 4 (search), including 4d time management and lever exposure, is complete: the parity gate is resolved as a documented deviation (ADR-0004); the determinism pin replaces node identity. Next: Phase 5.  
+**Status:** Phase 0 complete; Phase 1 oracle capture and Phase 2 perft are complete; Phase 3 scalar evaluation is bit-exact. SIMD kernels and the incremental accumulator are deferred to the performance phase. Phase 4 (search), including 4d time management and lever exposure, is complete: the search is node-identical to the reference (ADR-0005, which supersedes the ADR-0004 deviation); `bench 6/12/16/18` match exactly. Next: Phase 5.  
 **Companion documents:** `project-rules.md`, `additional-nodes.md`, `maximizing_performance_in_a_rust_uci_chess_engine.md`  
 **Source of behaviour:** the predecessor C# tree (internal, not published with KnightByte)  
 **Target:** a headless UCI engine named **KnightByte**, MIT licensed, built with the current stable Rust toolchain (`rustc 1.100.0` at the time of writing).
@@ -171,7 +171,7 @@ KnightByte/
 
 Primary development stays on the M4. The Rust code is portable; only the Windows packaging, ISA-specific optimization and PGO work need a Windows host.
 
-* **Move code with git, not by copying the working directory.** Use a private remote, or `git bundle create knightbyte.bundle --all`, copy the bundle and clone it on Windows. Never copy `target/`: it contains host-specific build artifacts and is ignored.
+* **Move code with git, not by copying the working directory.** The single remote is the public repository `https://github.com/JoergKau/knightbyte-unfinished`; clone and pull on every host (no private remote, no bundles). Never copy `target/`: it contains host-specific build artifacts and is ignored.
 * `.gitattributes` normalizes text files to LF and marks the network file as binary, so a Windows checkout cannot corrupt either.
 * **Windows host roles:**
   * **Zen 4 box:** primary Windows development host, `v4-vnni`/AVX-512 path, universal-executable prototype, `v4-vnni` PGO, and same-host reproduction of the C# Windows baseline.
@@ -316,13 +316,15 @@ A phase is not done because the code compiles. It is done when its gate passes:
 **Progress:** 4a-4d complete, including the full time-management port
 (allocation, panic mode, stability ladders, clock imbalance, minimum-depth
 guard, per-move node attribution) and lever exposure (39 of 83 wired). The
-parity gate is **resolved as a documented deviation** (ADR-0004,
-2026-11-17): the audit found and fixed fourteen defects
-(`docs-new/new-bugs.md` B1-B17), depths 1-4 are exact at all four bench
-positions, `bench 6` is within 0.1 % of the reference and `bench 18`
-within 1.8 %. The determinism pin (`bench 6` = 14,963, asserted in
-`tests/search.rs`) replaces node identity as the regression discipline; the
-audit record is `docs/audit/migration-audit.md`.
+parity gate is **passed with exact node identity** (ADR-0005, 2026-11-17).
+The first audit round (B1-B17) had closed the gate as a documented
+deviation (ADR-0004); a second round, driven by per-node ledgers of both
+engines, found that the residual was not learned-state drift but eleven
+concrete porting differences (B18-B28) plus one predecessor quirk (Q2). Now
+`bench 6` = 14,979, `bench 12` = 416,533, `bench 16` = 3,169,859 and
+`bench 18` = 6,925,762, and every captured per-position count matches.
+`tests/search.rs` asserts the `bench 6` total and the per-position counts
+of depths 1-8; the audit record is `docs/audit/migration-audit.md`.
 
 - [x] `board/zobrist.rs`: fixed-seed piece, castling, en-passant-file and side keys, incremental updates in `Position::make_move`, pawn and non-pawn sub-keys, key consistency across a perft tree and a pinned startpos value.
 - [x] `search/tt.rs` (the C# `tt/` directory): lockless 16-byte entries, 64-byte buckets, exact-key verification, generation ageing, static-eval field, PV (`Exact`) flag, prefetch hook, power-of-two sizing, thread-safe sharing without locks.
@@ -342,15 +344,17 @@ audit record is `docs/audit/migration-audit.md`.
 - [ ] Build `docs/SEARCH-PARITY.md`: every C# search feature, its Rust module, its lever name, its test.
 - [x] Deterministic `bench [depth]` and `go depth|nodes`, with search tests (mate in one/two, playable PV, reproducible node totals, node limit).
 
-**Exit gate G3 + G4 (search part):** resolved by ADR-0004: the node-identity
-goal is retired in favour of the determinism pin (`bench 6` = 14,963,
-asserted in `tests/search.rs`); depths 1-4 are exact and the deep tree is
-within ~2 % of the reference. Every deviation is documented
-(`docs/audit/migration-audit.md`, `docs-new/new-bugs.md`).
+**Exit gate G3 + G4 (search part):** **passed** with exact node identity
+(ADR-0005, superseding ADR-0004): `bench 6/12/16/18` = 14,979 / 416,533 /
+3,169,859 / 6,925,762 and every captured per-position count identical.
+Predecessor quirks that look wrong are reproduced on purpose and logged
+(`docs-new/new-bugs.md` Q1-Q4); the most consequential is that singular
+extensions never fire in the reference.
 
-> If node counts change after a search change, update the pin in the same
-> commit and record the reason. Search behaviour is still pinned and
-> deterministic; only identity with the predecessor is retired.
+> If node counts change after a search change, it is a search change: update
+> `tests/search.rs`, `tests/golden/bench.json` and `docs/baselines.md` in the
+> same commit and record the reason. Identity with the predecessor is the
+> regression discipline again.
 
 ---
 
@@ -621,9 +625,11 @@ KnightByte 1.0 is done when:
 
 - [ ] `cargo test` passes on macOS arm64, Ubuntu x64 and Windows x64.
 - [ ] `cargo clippy -- -D warnings` and `cargo fmt --check` are clean.
-- [ ] The determinism gates pass: `bench 6/12/16/18` reproduce the pinned
-      KnightByte totals (ADR-0004); the reference identity totals are
-      recorded in `docs/baselines.md` for the strength comparisons.
+- [ ] The node-identity gates pass on every host: `bench 6/12/16/18` reproduce
+      the reference totals exactly (ADR-0005). Verified on Windows x64 (Zen 4);
+      pinned in `tests/search.rs` (`bench 6` and the per-position counts of
+      depths 1-8) and recorded in `docs/baselines.md`. Still to confirm on
+      macOS and Linux (G6).
 - [ ] Every C# option/lever is present, visible and functional; the count is documented.
 - [ ] 1,000-game safety match shows no illegal moves, crashes or time losses.
 - [ ] macOS, Linux and Windows artifacts run `uci`/`isready`/`bench` and agree on node counts.

@@ -16,7 +16,7 @@ and identical · [F] fixed during audit · [D] deliberate deviation (ADR)
 |---|-----------|-----------|------------|--------|
 | 1 | Zobrist keys | `Board/Zobrist.cs` | `board/zobrist.rs` | [x] |
 | 2 | FEN parse/serialize | `Board/Fen.cs` | `board/fen.rs` | [x] |
-| 3 | Move generation + perft | `Board/MoveGenerator.cs` | `board/movegen.rs`, `board/perft.rs` | [ ] |
+| 3 | Move generation + perft | `Board/MoveGenerator.cs` | `board/movegen.rs`, `board/perft.rs` | [F] pawn capture order (second round) |
 | 4 | SEE | `Board/Position.See.cs` | `search/see.rs` | [ ] |
 | 5 | Transposition table | `TranspositionTable/TranspositionTable.cs` | `search/tt.rs` | [F] |
 | 6 | Evaluation cache | `Search/EvalCache.cs` | `search/eval_cache.rs` | [x] |
@@ -81,12 +81,55 @@ and identical · [F] fixed during audit · [D] deliberate deviation (ADR)
     early gate) mis-drew sparse-material positions at deep iterations and
     cost ~15 % of the depth-12 tree; re-fixed with the gate in place.
 
+### Second round (2026-11-17, node identity reached)
+
+The first round's closing note blamed the residual on learned-state drift.
+That was wrong: reading the node ledger of both engines side by side, every
+remaining difference was a concrete decision. Details and reproductions are
+in `docs-new/new-bugs.md` (B18-B28 and the quirks Q1-Q2).
+
+11. **Null move gate** — the reference has no node-type or exclusion condition;
+    the port had put it under `!pv_node && excluded_move.is_none()` (B18).
+    **Fixed.**
+12. **Per-ply evaluation stack timing** — written per searched move in the
+    reference, at node entry in the port (B19). **Fixed**, together with the
+    per-search reset of the stacks and the countermove table.
+13. **Cutoff branch** — "not a capture", not "quiet and not a promotion"
+    (B20). **Fixed.**
+14. **Excluded-only-move node** — returns the mate/draw score, not minus
+    infinity (B21). **Fixed.**
+15. **Countermove keying** — origin and destination squares, not piece and
+    destination (B22). **Fixed.**
+16. **Capture scoring time** — after the table move's subtree, not before
+    (B23). **Fixed** (a separate `GenerateCaptures` picker stage).
+17. **Quiescence picker** — no capture history there (B24). **Fixed.**
+18. **Early table-cutoff bonus** — every deep-enough lower-bound entry at a
+    non-PV node, not only a cutting one (B25). **Fixed.**
+19. **Move identity** — killers and countermoves compare without the
+    double-push marker; the picker returns the generated move (B26).
+    **Fixed.**
+20. **Pawn capture generation order** — black `-7` before `-9`, en passant
+    interleaved per direction (B27). **Fixed** (this closes the row-3 gap
+    that the first round left open: the first round audited piece-class order
+    only).
+21. **Countermove snapshot** — the LMR test uses the value read before the
+    move loop (B28). **Fixed.**
+22. **Table moves lose castle and en-passant markers** in the reference
+    (Q2). **Reproduced on purpose**; singular extensions never fire in either
+    engine (Q1), also reproduced.
+
+Result: depths 1-12, 14, 16 and 18 are node-identical at all four bench
+positions (see `docs/SEARCH-PARITY.md` §2). The rows of the table above that
+are still `[ ]` (SEE, time management, options/levers) were not part of this
+round; node identity at depth 18 is strong evidence for the search-side
+behaviour of SEE but not a line-by-line audit of it.
+
 ## Open items (next audit session)
 
-- The correction/history **update values** at matched nodes (the depth-5
-  seed: the killer-state divergence visible at node 1481 of the startpos
-  depth-5 tree) — moot while ADR-0004 stands: the residual divergence is the
-  documented, accepted deviation, and the determinism pin guards regressions.
+- The correction/history **update values** — **closed**: the "depth-5 seed"
+  was the early table-cutoff bonus (B25) plus the picker and generation
+  differences listed above, not learned-state drift. ADR-0005 supersedes
+  ADR-0004.
 - Time management (Phase 4d) — **closed**: the full port (allocation, panic
   mode, stability ladders, clock imbalance, minimum-depth guard, per-move
   node attribution) is in and unit-tested; the pins are unchanged.

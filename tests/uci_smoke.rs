@@ -148,3 +148,53 @@ fn setoption_and_time_limited_go_work() {
         "missing bestmove after a timed search"
     );
 }
+
+/// Runs the engine on `input` and returns everything it printed.
+fn run_engine(input: &[u8]) -> String {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_knightbyte"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn knightbyte");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(input)
+        .expect("write UCI commands");
+    let output = child.wait_with_output().expect("wait for knightbyte");
+    assert!(output.status.success(), "engine exited with failure");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
+fn an_unsupported_go_limiter_still_gets_a_bestmove() {
+    // A GUI waits for a bestmove after every go. An unparsable go must not
+    // leave it waiting until its clock runs out.
+    let stdout = run_engine(b"position startpos\ngo ponder wtime 1000 btime 1000\nquit\n");
+    assert!(stdout.contains("not supported"), "missing diagnostic");
+    let bestmove = stdout
+        .lines()
+        .find(|line| line.starts_with("bestmove "))
+        .expect("missing bestmove after an unsupported go");
+    assert_ne!(bestmove, "bestmove 0000", "a legal move exists");
+}
+
+#[test]
+fn go_without_a_position_still_gets_a_bestmove() {
+    let stdout = run_engine(b"go depth 3\nquit\n");
+    assert!(stdout.contains("bestmove 0000"), "missing null bestmove");
+}
+
+#[test]
+fn a_clocked_search_after_a_game_with_moves_returns_in_time() {
+    // The clock starts at `go`, and the game history of the position command
+    // is accepted: two knights out and back repeat the start position.
+    let stdout = run_engine(
+        b"ucinewgame\nposition startpos moves g1f3 g8f6 f3g1 f6g8\n\
+          go wtime 2000 btime 2000 winc 20 binc 20\nquit\n",
+    );
+    assert!(stdout.contains("info depth 1 "), "no search happened");
+    assert!(stdout.contains("bestmove "), "missing bestmove");
+}

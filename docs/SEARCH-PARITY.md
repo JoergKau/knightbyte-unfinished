@@ -4,14 +4,14 @@ This file tracks the port of the predecessor search, feature by feature, and
 records where KnightByte currently diverges. It is the working document for the
 Phase 4 node-count gate.
 
-**Status:** the node-count gate is **resolved as a documented deviation**
-(ADR-0004, 2026-11-17). Depths 1-4 are exact at all four bench positions;
-depth 5-6 are within 0.1 % and the deep tree within ~2 %. The ported pipeline
-matches the reference source line-by-line at the audit's pinned commit; the
-residual divergence is a learned-history-state seed from depth 5 on. The
-determinism gate (`bench 6` = 14,963, asserted in `tests/search.rs`) replaces
-node identity as the regression discipline. The audit record is
-`docs/audit/migration-audit.md`.
+**Status:** the search is **node-identical** to the reference (second audit
+round, 2026-11-17, ADR-0005, which supersedes the ADR-0004 deviation). Every
+captured depth (1-12, 14, 16, 18) matches at all four bench positions:
+`bench 6` = 14,979, `bench 12` = 416,533, `bench 16` = 3,169,859, `bench 18` =
+6,925,762. `tests/search.rs` asserts the `bench 6` total and the per-position
+counts of depths 1-8. The audit record is `docs/audit/migration-audit.md`; the
+defects are `docs-new/new-bugs.md` (B18-B28, quirks Q1-Q4). Everything below
+the first divergence table is the history of how the gap was closed.
 
 ## 1. Oracle
 
@@ -45,10 +45,43 @@ python tools/capture_bench.py compare --engine <engine> \
 Node counts are parsed by stripping locale separators, because the reference
 prints numbers with the host's digit grouping.
 
-## 2. Divergence status (2026-11-17, after the migration audit round)
+## 2. Divergence status (2026-11-17): none
 
-Per-position node counts, reference → KnightByte (the audit fixed the
-correction-update gate, the promotion order, the staged picker, the
+Current state, reference and KnightByte (the per-position counts are identical
+too; the oracle is `tests/golden/search_parity.json`):
+
+| Depth | Pos 1 | Pos 2 | Pos 3 | Pos 4 | Total | Delta |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 6 | 5,728 | 2,706 | 2,011 | 4,534 | 14,979 | 0 |
+| 12 | 276,529 | 61,017 | 28,547 | 50,440 | 416,533 | 0 |
+| 14 | 828,843 | 195,860 | 56,030 | 141,069 | 1,221,802 | 0 |
+| 16 | 2,041,912 | 599,976 | 118,626 | 409,345 | 3,169,859 | 0 |
+| 18 | 4,461,267 | 1,396,061 | 246,520 | 821,914 | 6,925,762 | 0 |
+
+Depths 1-5 and 7-11 are exact at every position as well (see
+`tests/search.rs` for depths 1-8).
+
+### 2.1 How the last differences were found
+
+Each row is one round of "first divergent node, then the deciding input":
+
+| First divergence | Deciding input | Fix |
+| :--- | :--- | :--- |
+| `bench 6`, all positions at depth 5-7 | null-move gate, evaluation-stack timing, cutoff branch, countermove keying | B18-B22 |
+| Kiwipete depth 7, endgame/tactical depth 8-9 | capture scores read before the table move's subtree; capture history inside quiescence; castle/en-passant table moves | B23, B24, Q2 |
+| startpos depth 5, node 836 | early table-cutoff bonus only on a cutting entry | B25 |
+| endgame depth 14, node 9391 | killer recorded as a pawn double push, rook move on the same squares | B26 |
+| startpos depth 13, node 7816 | black pawn capture direction order, en passant interleave | B27 |
+| startpos depth 14, node 625555 | countermove read live instead of once before the loop | B28 |
+
+### 2.2 History: the state before the second round
+
+The table below is the state recorded at the end of the first audit round
+(when ADR-0004 accepted the deviation). It is kept as history only.
+
+
+Per-position node counts, reference → KnightByte, before the second round
+(the first audit fixed the correction-update gate, the promotion order, the staged picker, the
 quiescence EP quirk and added the missing insufficient-material draws):
 
 | Depth | Pos 1 | Pos 2 | Pos 3 | Pos 4 | Total ref | Total ours | Delta |
@@ -117,22 +150,6 @@ What the coupled port fixed (compare the depth-18 column: +22.8 % before,
 * **Null move**: the gate carries the cut-node arm; a non-mate fail-high cuts
   fail-hard at beta while a mate line falls through and keeps searching.
 
-Remaining divergence, in bisection order:
-
-1. **One node at depth 3 of the endgame position** (273 vs 272): the seed of
-   the mid-depth wobble. The trees at depths 1-2 are exact; iteration 3 adds
-   133 nodes in the reference and 132 here. Everything deeper cascades from
-   such seeds (the PV and best-move choices diverge by depth 4, so the
-   mid-depth totals swing while the deep shape stays close).
-2. **The reference staged picker** is approximated by a tiered picker with the
-   same emission order. Ordering within a tier differs where the reference's
-   lazy stages tie-break differently.
-3. **ProbCut, the shallow-pruning package, bad-noisy pruning and the LMR v2
-   schedule** are OFF in the reference's shipped configuration and were not
-   ported.
-4. **The quiescence node-accounting seed** at depth 1 of the tactical
-   position (371 vs 364) predates the coupled port and is still unexplained.
-
 What the port already fixed:
 
 * **Node accounting** is identical (depth 1, positions 1–3 match exactly).
@@ -176,21 +193,8 @@ What the port already fixed:
 * Depth 18 is within **0.8 %** of the reference (6,979,505 vs 6,925,762),
   depth 12 within 3.1 %, depth 16 within 6.8 %.
 
-Known remaining differences, in bisection order:
-
-1. **The single-node seeds.** Depths 1–2 are exact at positions 1–3; iteration
-   3 of the endgame position adds 133 nodes in the reference and 132 here, and
-   iteration 3 of the startpos diverges by +92. The mid-depth totals wobble
-   around the reference (-12 % … +7 %) while the deep shape is close (18:
-   +0.8 %) — the classic signature of correct coupled machinery with one small
-   formula difference seeding PV divergence.
-2. **The staged picker** is a tier approximation; ordering inside a tier can
-   differ from the reference's lazy stages.
-3. **The quiescence node-accounting seed** at depth 1 of the tactical position
-   (371 vs 364) predates the coupled port and is still unexplained.
-
-Scores and best moves are close: depth 8 gives positions 1–3 the same best
-move as the reference with scores within a few centipawn.
+(The first round's list of "known remaining differences" is obsolete: all
+of them were traced and fixed in the second round, see §2.1.)
 
 ## 3. Isolated port attempts (2026-11-17) - measured and reverted
 
@@ -370,7 +374,7 @@ then the full table.
 | `Search/Search.Negamax.cs` | `search/negamax.rs` | Ported for the default configuration: PVS, cut-node threading, hindsight, IIR, singular, negative extensions, pruning stack, LMR v1, re-search shave |
 | `Search/Search.Reduction.cs` | `search/negamax.rs` (LMR helpers) | Ported: base table, re-search depth, singular tiers |
 | `Search/QuiescenceSearch.cs` | `search/quiescence.rs` | Ported for the default configuration; capture ordering now uses the classical values and the capture-history cell |
-| `Search/MovePicker.cs` | `search/move_picker.rs`, `search/quiescence.rs` | Tier approximation with the reference emission order and scores; the lazy stages are not replicated |
+| `Search/MovePicker.cs` | `search/move_picker.rs`, `search/quiescence.rs` | Staged picker, node-identical: separate capture-generation stage after the table move, killers and countermove by identity, no capture history in quiescence |
 | `Search/SearchHeuristics.cs` | `search/history.rs`, `search/correction.rs` | Ported: butterfly/capture/1-2-4-6-ply continuation (reference keying) and correction history |
 | `Search/Search.Options.cs` | `search/params.rs`, `search/options.rs` | Defaults mirrored for the shipped configuration; 39 of 83 levers wired and advertised (the rest gate off-by-default or unported features) |
 | `Search/EvalCache.cs` | `search/eval_cache.rs` | Structural parity; disabled by default in both |
@@ -402,5 +406,13 @@ then the full table.
 4. Update `tests/golden/search_parity.json` only by re-running the capture
    against a pinned reference commit.
 5. When a change alters KnightByte's totals on purpose, update
-   `docs/baselines.md`, `tests/search.rs` (`BENCH_DEPTH_6_NODES`) and the
-   divergence table in this file in the same commit.
+   `docs/baselines.md`, `tests/search.rs` (`BENCH_DEPTH_6_NODES` and the
+   per-position table), `tests/golden/bench.json` and the divergence table in
+   this file in the same commit, and record why.
+6. To hunt a divergence, do not read code first. Compare per-position counts
+   per depth, take the shallowest difference, dump the node ledger of both
+   engines (`KNIGHTBYTE_TRACE`, `tools/trace_diff.py`) and take the first
+   divergent node, then print the decision inputs at that node (ordering
+   scores, reduction terms, history cells, table hits) on both sides until one
+   input differs. The ledger needs an instrumented local build of the reference
+   that writes the same line format; keep that build out of the repository.

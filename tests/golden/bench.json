@@ -1,15 +1,15 @@
 {
   "6": {
-    "total_nodes": 14963,
-    "note": "KnightByte regression pin (ADR-0004); the reference totals are 14979 (d6), 416533 (d12), 3169859 (d16), 6925762 (d18), recorded in docs/baselines.md"
+    "total_nodes": 14979,
+    "note": "Node identity with the reference engine (ADR-0005). The totals for 12, 16 and 18 are likewise the reference totals; per-position counts for depths 1-18 are in search_parity.json."
   },
   "12": {
-    "total_nodes": 356262
+    "total_nodes": 416533
   },
   "16": {
-    "total_nodes": 3077942
+    "total_nodes": 3169859
   },
   "18": {
-    "total_nodes": 6797622
+    "total_nodes": 6925762
   }
 }

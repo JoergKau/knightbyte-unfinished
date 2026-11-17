@@ -4,13 +4,15 @@ KnightByte is a UCI chess engine written in Rust. The neural network is fixed
 and embedded in the binary. This list tracks what is implemented and what is
 still planned; it is updated after every migration step.
 
-## Current status — Phases 0–3 complete; Phase 4 complete, parity resolved as a documented deviation (2026-11-17)
+## Current status — Phases 0–3 complete; Phase 4 complete with full node identity (2026-11-17)
 
-Parity status: depths 1-4 exact at all four bench positions, `bench 6` −0.1 %
-(14,963 vs 14,979), `bench 18` −1.8 % (6,797,622 vs 6,925,762). The residual
-divergence is accepted (ADR-0004); the determinism pin (`bench 6` = 14,963)
-replaces node identity. See `docs/SEARCH-PARITY.md`,
-`docs/audit/migration-audit.md` and `docs-new/new-bugs.md` (B1-B17).
+Parity status: the search is **node-identical** to the reference at every
+captured depth and position (depths 1-12, 14, 16 and 18, all four bench
+positions): `bench 6` = 14,979, `bench 12` = 416,533, `bench 16` = 3,169,859,
+`bench 18` = 6,925,762. The earlier accepted deviation (ADR-0004) is superseded
+by ADR-0005. `bench 6` is asserted in `tests/search.rs` and the per-position
+counts for depths 1-8 are asserted as well. See `docs/SEARCH-PARITY.md`,
+`docs/audit/migration-audit.md` and `docs-new/new-bugs.md` (B1-B29, Q1-Q4).
 
 ### Engine skeleton
 
@@ -91,6 +93,12 @@ replaces node identity. See `docs/SEARCH-PARITY.md`,
 - [x] Static-exchange and move-ordering tests with verifier-checked FENs.
 - [x] Search tests: mate in one/two, playable PV, deterministic nodes, node
       limit, null-move key consistency, legal bench best moves.
+- [x] Node-identity gate: `bench 6` total and the reference per-position node
+      counts for depths 1-8; a used searcher behaves like a fresh one.
+- [x] Move-ordering identity tests: pawn capture generation order (both
+      colours, en passant interleaved), killer/countermove identity across
+      double pushes, castle table moves, capture-score timing and the
+      quiescence picker's missing capture history.
 - [x] Option catalogue: defaults match `SearchParams`, every advertised lever
       round-trips, spin values clamp, names are unique.
 - [x] Time management: fixed-time and clock allocation unit tests; the
@@ -123,8 +131,8 @@ replaces node identity. See `docs/SEARCH-PARITY.md`,
       single-response extensions.
 - [x] History pruning, singular extensions (double/triple tiers), negative
       extensions, internal iterative reduction, hindsight depth pair.
-- [x] Early TT-cutoff history bonus and the repetition gate for table
-      cutoffs.
+- [x] Early TT-cutoff history bonus (every deep-enough lower-bound entry at a
+      non-PV node) and the repetition gate for table cutoffs.
 - [x] Quiescence search with TT probe/store, SEE filtering and delta pruning
       (including the reference's en-passant classification quirk).
 - [x] Time allocation from `movetime` and the clocks (soft and hard budgets,
@@ -143,9 +151,14 @@ replaces node identity. See `docs/SEARCH-PARITY.md`,
       advertised; the remaining 44 gate reference features that ship off or
       are not ported — ProbCut, SEE-reach, LMR v2, quiescence checks, book,
       tablebases).
-- [x] Search-parity gate resolved as a documented deviation (ADR-0004);
-      depths 1-4 exact, `bench 6` within 0.1 % of the reference.
-- [ ] Exact search-parity gate (`bench 6/12/16/18` node-identical).
+- [x] Exact search-parity gate: `bench 6/12/16/18` node-identical, and every
+      captured per-position count identical (ADR-0005, supersedes ADR-0004).
+- [x] KnightByte-only research lever `SingularExcludeTtCutoff` (default off =
+      reference behaviour, where singular extensions never fire). Measured, no
+      gain; see ADR-0006. It is not one of the reference's 95 option names.
+- [x] Game history: repetitions of positions from earlier in the game are seen
+      by the search (B31). Timed searches are measured from the `go` command
+      (B30). Every `go` is answered with a `bestmove` (B32).
 
 ### Endgame and book
 

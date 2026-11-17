@@ -80,6 +80,24 @@ impl Move {
         (self.0 >> 12) as u8
     }
 
+    /// Returns the move with a double-push marker replaced by the plain
+    /// marker.
+    ///
+    /// A double push is an ordinary two-square pawn move as far as move
+    /// *identity* goes: the same two squares reached by a different piece in a
+    /// later position are the same move. Killer and countermove memories carry
+    /// moves between positions and so compare in this form. Castling,
+    /// en-passant and promotion markers are kept, because they change what the
+    /// move is.
+    #[inline(always)]
+    pub const fn without_double_push(self) -> Self {
+        if self.flag() == flags::DOUBLE_PUSH {
+            Self::new(self.from(), self.to(), flags::NORMAL)
+        } else {
+            self
+        }
+    }
+
     /// Returns `true` for the no-move sentinel.
     #[inline(always)]
     pub const fn is_none(self) -> bool {
@@ -175,6 +193,20 @@ mod tests {
         assert_eq!(Move::new(52, 60, flags::PROMO_QUEEN).to_uci(), "e7e8q");
         assert_eq!(Move::new(52, 60, flags::PROMO_KNIGHT).to_uci(), "e7e8n");
         assert!(Move::new(52, 60, flags::PROMO_ROOK).is_promotion());
+    }
+
+    #[test]
+    fn double_push_marker_is_not_part_of_move_identity() {
+        let push = Move::new(14, 30, flags::DOUBLE_PUSH);
+        let plain = Move::new(14, 30, flags::NORMAL);
+        assert_ne!(push, plain);
+        assert_eq!(push.without_double_push(), plain);
+        assert_eq!(plain.without_double_push(), plain);
+        // Markers that change what the move is stay.
+        let castle = Move::new(4, 6, flags::CASTLE);
+        assert_eq!(castle.without_double_push(), castle);
+        let promotion = Move::new(52, 60, flags::PROMO_QUEEN);
+        assert_eq!(promotion.without_double_push(), promotion);
     }
 
     #[test]

@@ -43,6 +43,7 @@ pub const MAX_MOVES: usize = 256;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Stage {
     TtMove,
+    GenerateCaptures,
     GoodCaptures,
     Killers,
     Countermove,
@@ -75,7 +76,6 @@ pub struct PickerState {
     stage: Stage,
     killer_index: usize,
     skip_quiets: bool,
-    partitioned: bool,
 }
 
 impl Default for PickerState {
@@ -108,7 +108,6 @@ impl PickerState {
             stage: Stage::TtMove,
             killer_index: 0,
             skip_quiets: false,
-            partitioned: false,
         }
     }
 
@@ -116,8 +115,9 @@ impl PickerState {
     /// cursor back at the table move.
     ///
     /// `qsearch` selects the quiescence search's picker shape: no killer or
-    /// countermove stages and quiets ordered by generation only (the
-    /// reference passes null tables there). `captures_only` drops quiet moves
+    /// countermove stages, no capture-history term and quiets ordered by
+    /// generation only (the reference passes null tables there).
+    /// `captures_only` drops quiet moves
     /// at partition time — the reference's captures-only generation, which
     /// the quiescence search uses when not in check.
     #[allow(clippy::too_many_arguments)]
@@ -155,7 +155,17 @@ impl PickerState {
         self.stage = Stage::TtMove;
         self.killer_index = 0;
         self.skip_quiets = false;
-        self.partitioned = false;
+    }
+
+    /// Returns the countermove captured when the picker was reset.
+    ///
+    /// The reference reads its countermove once, before the move loop, and
+    /// every later use in the loop (the late-move-reduction test) sees that
+    /// value. The live table can change underneath a long loop — a deeper
+    /// node with the same previous move overwrites the cell — so the loop
+    /// must use this snapshot and not the table.
+    pub fn counter_move(&self) -> Move {
+        self.counter_move
     }
 
     /// Aborts the quiet stage (late-move and futility pruning).
@@ -183,9 +193,11 @@ impl PickerState {
     }
 
     /// Partitions the legal move list into the stage buffers, generation
-    /// order preserved inside each. The capture scores are computed here —
-    /// the reference scores its captures at partition time too, before any
-    /// child has run.
+    /// order preserved inside each. The capture scores are computed here, in
+    /// the capture-generation stage — which runs only after the table move
+    /// (when there is one) has been searched, so the capture history already
+    /// reflects that subtree. Quiescence orders captures without the capture
+    /// history.
     fn partition(&mut self, position: &Position, history: &History, moves: &[Move]) {
         for &mv in moves {
             if !self.tt_move.is_none() && mv == self.tt_move {
@@ -199,9 +211,14 @@ impl PickerState {
                         piece_type(position.piece_at(mv.to()))
                     };
                     let moving_type = piece_type(position.piece_at(mv.from()));
+                    let history_term = if self.qsearch {
+                        0
+                    } else {
+                        history.capture(moving_type, mv, victim)
+                    };
                     self.caps[self.caps_count] = mv;
                     self.cap_scores[self.caps_count] =
-                        capture_score(position, history, moving_type, mv, victim);
+                        capture_score(position, moving_type, mv, victim, history_term);
                     self.caps_count += 1;
                 } else {
                     self.bad[self.bad_count] = mv;
@@ -212,24 +229,24 @@ impl PickerState {
                 self.quiets_count += 1;
             }
         }
-        self.partitioned = true;
     }
 
     /// Returns the next move in stage order, or `None` when exhausted.
     pub fn next(&mut self, position: &Position, history: &History, moves: &[Move]) -> Option<Move> {
-        if !self.partitioned {
-            self.partition(position, history, moves);
-        }
         loop {
             match self.stage {
                 Stage::TtMove => {
-                    self.stage = Stage::GoodCaptures;
+                    self.stage = Stage::GenerateCaptures;
                     // The legal move list is the validation: the partition
-                    // skipped the table move, so membership in the original
+                    // skips the table move, so membership in the original
                     // list decides whether it is legal here.
                     if !self.tt_move.is_none() && moves.contains(&self.tt_move) {
                         return Some(self.tt_move);
                     }
+                }
+                Stage::GenerateCaptures => {
+                    self.partition(position, history, moves);
+                    self.stage = Stage::GoodCaptures;
                 }
                 Stage::GoodCaptures => {
                     if self.caps_index < self.caps_count {
@@ -254,12 +271,17 @@ impl PickerState {
                         }
                         if let Some(slot) = self.quiets[..self.quiets_count]
                             .iter()
-                            .position(|&mv| mv == killer)
+                            .position(|&mv| mv.without_double_push() == killer)
                         {
                             // Mark the killer played so the quiet stage never
-                            // re-emits it.
+                            // re-emits it. The generated move is returned, not
+                            // the remembered one: a killer recorded as a pawn
+                            // double push can match another piece's move on
+                            // the same squares, and only the generated move
+                            // carries the right marker for the position.
+                            let generated = self.quiets[slot];
                             self.quiets[slot] = Move::NONE;
-                            return Some(killer);
+                            return Some(generated);
                         }
                     }
                     self.stage = Stage::Countermove;
@@ -269,10 +291,11 @@ impl PickerState {
                     if !self.counter_move.is_none()
                         && let Some(slot) = self.quiets[..self.quiets_count]
                             .iter()
-                            .position(|&mv| mv == self.counter_move)
+                            .position(|&mv| mv.without_double_push() == self.counter_move)
                     {
+                        let generated = self.quiets[slot];
                         self.quiets[slot] = Move::NONE;
-                        return Some(self.counter_move);
+                        return Some(generated);
                     }
                 }
                 Stage::GenerateQuiets => {
@@ -359,16 +382,17 @@ fn pick_best(scores: &mut [i32], moves: &mut [Move], start: usize, count: usize)
 }
 
 /// Returns the reference capture-ordering score: the classical material
-/// swing, the exact exchange value and the raw capture-history cell.
+/// swing, the exact exchange value and the raw capture-history cell
+/// (`history_term`, zero where the picker has no capture history).
 fn capture_score(
     position: &Position,
-    history: &History,
     moving_type: usize,
     mv: Move,
     victim: usize,
+    history_term: i32,
 ) -> i32 {
     let material = ORDER_VALUES[victim] * 100 - ORDER_VALUES[moving_type];
-    1_000_000 + material + see_value(position, mv) + history.capture(moving_type, mv, victim)
+    1_000_000 + material + see_value(position, mv) + history_term
 }
 
 /// Dumps the full picker order for a node — the test/tooling view of the

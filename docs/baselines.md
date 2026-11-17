@@ -20,27 +20,28 @@ These are behavioural gates, not speed measurements. They must match exactly.
 The `bench` set is four fixed positions (startpos, Kiwipete, an endgame and a
 tactical middlegame), Hash 256 MB, one thread.
 
-### KnightByte current totals (regression pin, ADR-0004)
+### KnightByte current totals (node identity, ADR-0005)
 
-KnightByte `bench` after the migration audit round (2026-11-17),
+KnightByte `bench` after the second audit round (2026-11-17),
 Windows 11 / Ryzen 7 260, Rust 1.100.0 release, Hash 256 MB, one thread:
 
 | Run | Nodes | Reference | Delta |
 | :--- | ---: | ---: | ---: |
-| `bench 6` | 14,963 | 14,979 | -0.1 % |
-| `bench 12` | 356,262 | 416,533 | -14.5 % |
-| `bench 16` | 3,077,942 | 3,169,859 | -2.9 % |
-| `bench 18` | 6,797,622 | 6,925,762 | -1.8 % |
+| `bench 6` | 14,979 | 14,979 | 0 |
+| `bench 12` | 416,533 | 416,533 | 0 |
+| `bench 16` | 3,169,859 | 3,169,859 | 0 |
+| `bench 18` | 6,925,762 | 6,925,762 | 0 |
 
-Depths 1-4 are exact at all four positions; depth 5-6 are within 0.1 %. The
-deeper tree is narrower than the reference (the correction/history update
-values diverge at the depth-5 seed and cascade). The audit record is
-`docs/audit/migration-audit.md`; the deviation is accepted in
-`docs/decisions/ADR-0004-search-parity-deviation.md`.
+Every per-position count of the captured depths (1-12, 14, 16, 18) is
+identical to the reference as well. The earlier state (ADR-0004: `bench 6`
+14,963, `bench 12` 356,262, `bench 16` 3,077,942, `bench 18` 6,797,622) was
+traced to concrete porting differences and removed; ADR-0005 supersedes it.
+The audit record is `docs/audit/migration-audit.md`, the defects are
+`docs-new/new-bugs.md` (B18-B28).
 
-The `bench 6` total is asserted in `tests/search.rs`, so CI fails if any host or
-build mode produces a different count — the **determinism** gate survives;
-the node-identity-with-the-predecessor goal is retired by ADR-0004.
+The `bench 6` total and the per-position counts of depths 1-8 are asserted in
+`tests/search.rs`, so CI fails if any host or build mode produces a different
+count. `tests/golden/bench.json` records all four totals.
 
 ## 2. Hosts
 

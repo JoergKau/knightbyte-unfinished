@@ -1,8 +1,12 @@
 # KnightByte — New Bugs
 
-Bugs found during the search-parity work and the migration audit round of
+Bugs found during the search-parity work and the migration audit rounds of
 2026-11-17. All are porting defects (KnightByte diverged from the reference
-implementation at the pinned commit); all are fixed unless marked open.
+implementation at the pinned commit); all are fixed unless marked open. B1-B17
+come from the first audit round, B18-B29 from the second round (the one that
+reached full node identity), B30-B32 from the CCRL-readiness audit that
+followed (time compliance and protocol robustness). The last section lists
+predecessor quirks that are reproduced on purpose.
 
 ## B1 — Missing insufficient-material draw detection
 
@@ -271,10 +275,276 @@ implementation at the pinned commit); all are fixed unless marked open.
   `[System.IO.File]::WriteAllText`); the rule stands — use the editor/write
   tool or `WriteAllText` for anything non-ASCII.
 
+## B18 — Null-move pruning was gated to non-PV, non-excluded nodes
+
+- **Date:** 2026-11-17 (second parity round)
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** all
+- **Command or FEN:** `bench 6`; any principal-variation node with
+  `eval >= beta` at depth >= 3
+- **Expected:** the null-move gate is `not root, depth >= 3, not in check,
+  eval >= beta, (no table hit or cut node or table score >= beta)` and a
+  non-pawn piece — with no node-type or exclusion condition. A PV node and a
+  singular-verification node both try the null move.
+- **Actual:** the port put the null move inside the reverse-futility/razoring
+  block (`!pv_node && !in_check && excluded_move.is_none()`).
+- **Reproduction:** compare `bench 6` per position with the oracle.
+- **Status:** fixed — `src/search/negamax.rs`.
+
+## B19 — Per-ply evaluation stack published at node entry
+
+- **Date:** 2026-11-17
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** all
+- **Command or FEN:** `bench 6` position 2 (depth 7 and deeper)
+- **Expected:** the static evaluation of a node is written to the per-ply stack
+  once per *searched move*, just before the move's search call. A null-move
+  child (reached before the first move) therefore reads the value an earlier
+  visit of that ply left behind, in the hindsight pair and in the improving
+  flag two plies further down.
+- **Actual:** the port wrote `evals[ply]` at node entry, so those reads saw the
+  current node's value.
+- **Reproduction:** compare the hindsight-pair inputs of a null-move child
+  between the two engines; the effect on node counts was not measured in
+  isolation. It was fixed in the first batch together with B18, B20 and B21;
+  the Kiwipete bench position only became exact at depth 7 after the second
+  batch (B23, B24 and the table-move flag handling of Q2).
+- **Status:** fixed. Also fixed in the same change: the per-ply stacks and the
+  countermove table are now cleared at the start of every search (the
+  reference clears them; the learned history tables persist). The clearing is
+  hygiene — bench identity does not depend on it.
+
+## B20 — Cutoff bookkeeping chose the quiet branch by "quiet and not a promotion"
+
+- **Date:** 2026-11-17
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** all
+- **Command or FEN:** any beta cutoff by a non-capturing promotion
+- **Expected:** the history branch is chosen by "not a capture": a quiet
+  promotion updates the killers, the butterfly and continuation histories and
+  the countermove (it stays out of the failed-quiet malus list).
+- **Actual:** the port sent a quiet promotion to the capture-history branch.
+- **Status:** fixed — `src/search/negamax.rs`.
+
+## B21 — Excluded table move as the only legal move returned minus infinity
+
+- **Date:** 2026-11-17
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** all
+- **Command or FEN:** a singular verification (depth >= 8) where the excluded
+  table move is the only legal move
+- **Expected:** a node that searched no legal move returns the mate score when
+  in check and the draw score otherwise (nothing is stored). The extension
+  tiers then compare that value, not minus infinity.
+- **Actual:** the port fell through to the bound computation with
+  `-INFINITE`, which would earn the triple extension tier.
+- **Status:** fixed — a zero legal-move count after the move loop returns the
+  mate/draw score. The path is only reached when the verification search is
+  not cut off by the table first, which is rare (see Q1); the fix is for
+  fidelity and no node-count effect was attributed to it.
+
+## B22 — Countermove table keyed by piece and target
+
+- **Date:** 2026-11-17
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** all
+- **Command or FEN:** any quiet beta cutoff with a previous move
+- **Expected:** the countermove table is indexed by the previous move's origin
+  and destination squares. (The correction history's countermove term is a
+  different table, indexed by piece type and destination.)
+- **Actual:** the port indexed the countermove table by piece and destination,
+  so different previous moves of the same piece type to the same square shared
+  one cell.
+- **Status:** fixed — `Previous` now carries `(piece, from, to)`.
+
+## B23 — Capture scores were computed before the table move's subtree
+
+- **Date:** 2026-11-17
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** all
+- **Command or FEN:** any node that has a table move and at least two captures
+  with close scores
+- **Expected:** the capture list is generated and scored in the stage *after*
+  the table move; the capture-history cell read for the ordering therefore
+  includes whatever the table move's subtree learned.
+- **Actual:** the port partitioned and scored at the first picker call, before
+  the table move was searched.
+- **Status:** fixed — a separate `GenerateCaptures` stage
+  (`src/search/move_picker.rs`).
+
+## B24 — Quiescence ordered captures with the capture history
+
+- **Date:** 2026-11-17
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** all
+- **Command or FEN:** any quiescence node with two or more captures
+- **Expected:** the quiescence picker is built without any history table, so the
+  capture-history term is zero.
+- **Actual:** the port used the capture history there too.
+- **Status:** fixed.
+
+## B25 — Early table-cutoff history bonus only on a cutoff
+
+- **Date:** 2026-11-17
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** all
+- **Command or FEN:** startpos, `go depth 5` (node 836, ply 2, depth 2); first
+  divergence of the startpos at depth 5
+- **Expected:** at a non-PV node, every sufficiently deep *lower-bound* table
+  entry with a quiet, non-promoting table move awards the butterfly bonus
+  (`min(207 * depth, 1202)`) when the parent found its own move quickly —
+  before the node decides whether the stored score reaches beta.
+- **Actual:** the port awarded the bonus only when the entry actually cut off.
+- **Status:** fixed — `src/search/negamax.rs`.
+
+## B26 — Killer and countermove identity depended on the double-push marker
+
+- **Date:** 2026-11-17
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** all
+- **Command or FEN:** `position fen 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1`,
+  `go depth 14` (node 9391)
+- **Expected:** a move's identity is its two squares plus the castle,
+  en-passant and promotion markers. A killer recorded as a pawn's `g2g4`
+  double push is therefore the same move as a rook's `g2g4` in a later
+  position.
+- **Actual:** the port's `DOUBLE_PUSH` marker made the two unequal, so the
+  killer was not found and the move order differed.
+- **Status:** fixed — killers and countermoves are stored and compared in
+  identity form (`Move::without_double_push`), and the picker returns the
+  *generated* move so the marker stays correct for the position.
+
+## B27 — Black pawn captures were generated in the wrong direction order
+
+- **Date:** 2026-11-17
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** all
+- **Command or FEN:** `position fen rnbqkbnr/pp2pppp/3p4/2P1P3/8/8/PPP2PPP/RNBQKBNR b KQkq - 0 4`
+  (`d6e5` before `d6c5`); first divergence of the startpos at depth 13
+- **Expected:** each pawn visits its two capture directions in a fixed order:
+  white `+7` then `+9`, black `-7` then `-9`; the en-passant capture is
+  interleaved per direction. The picker's tie-break between equally scored
+  captures inherits this order.
+- **Actual:** the port emitted ascending target squares, which is right for
+  white and wrong for black, and put the en-passant capture after the ordinary
+  captures.
+- **Status:** fixed — `src/board/movegen.rs`. Perft is unaffected (counts only).
+
+## B28 — Late-move-reduction countermove test read the live table
+
+- **Date:** 2026-11-17
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** all
+- **Command or FEN:** startpos, `go depth 14` (node 625555, ply 3, depth 11,
+  move `b7b5`)
+- **Expected:** the countermove is read once before the move loop; the
+  reduction test for every later move sees that value.
+- **Actual:** the port re-read the live table for each move, and a deeper node
+  with the same previous move had overwritten the cell during the long loop.
+- **Status:** fixed — the picker's snapshot is used
+  (`PickerState::counter_move`).
+
+## B29 — Two test assertions were silently disabled
+
+- **Date:** 2026-11-17
+- **Build / commit:** `989c6c5`
+- **Platform / CPU:** Windows host tooling
+- **Command or FEN:** `tests/search.rs` (`node_limit_stops_the_search`) and
+  `tests/move_ordering.rs` (`see_handles_promotions`)
+- **Expected:** both tests assert their numbers.
+- **Actual:** a literal backslash-n had been written into a `//` comment, so the
+  assertion that followed on the same line was part of the comment (the same
+  tooling hazard as B17).
+- **Status:** fixed; both assertions pass.
+
+## B30 — Timed searches overran by the time since the previous search began
+
+- **Date:** 2026-11-17 (found by the first match run)
+- **Build / commit:** `989c6c5` plus the second-round parity fixes
+- **Platform / CPU:** all
+- **Command or FEN:** `ucinewgame`, `position startpos`, then two `go wtime 300
+  btime 300 winc 40 binc 40` (or `go movetime 200`) a second apart
+- **Expected:** a search is limited by the clock that starts when `go` is
+  handled: 300 ms on the clock uses a few tens of milliseconds, `movetime 200`
+  takes about 190 ms.
+- **Actual:** `init_clock`/`init_movetime` stored their absolute limits on the
+  searcher's *old* clock, and `search()` then restarted that clock. Every limit
+  was shifted by the time since the previous search began. In `fastchess`
+  4+0.04 games both sides lost on time (overruns of 129 ms to 1,052 ms); a
+  300 ms clock took 463 ms; `go movetime 200` once returned after 0 ms.
+- **Reproduction:** a script that sends two timed `go` commands with a pause in
+  between; `tests/search.rs`
+  (`a_timed_search_is_measured_from_the_go_command_not_from_an_earlier_search`).
+- **Status:** fixed — the clock starts in the `init_*` calls and `search()` no
+  longer restarts it (`src/search/searcher.rs`). Bench identity is unaffected
+  (bench is untimed). The time-compliance gate of Phase 5 is still open; this
+  was one concrete cause of time losses, not a validation.
+
+## B31 — Repetitions of earlier game positions were invisible to the search
+
+- **Date:** 2026-11-17 (CCRL-readiness audit)
+- **Build / commit:** `989c6c5` plus the second-round parity fixes
+- **Platform / CPU:** all
+- **Command or FEN:** `position startpos moves g1f3 g8f6 f3g1 f6g8` then `go`;
+  any game in which a position recurs
+- **Expected:** the search counts a position that repeats an earlier *game*
+  position like one that repeats along its own path: twofold repetition scores
+  as a draw, and a repeated position is refused table cutoffs. An engine that
+  is winning avoids repeating; one that is losing can steer into it.
+- **Actual:** `parse_position` kept only the final position. The repetition
+  checks looked back only along the search path (`keys[ply - back]`), so a
+  position repeated from before the root was never recognised. In real games
+  the engine could throw away a won position by repeating, or miss a draw.
+  Bench and every parity gate start from a bare FEN, so none of them saw it.
+- **Reproduction:** `src/search/searcher.rs`
+  (`a_repetition_of_an_earlier_game_position_is_seen_by_the_search`).
+- **Status:** fixed — the UCI layer passes the keys of all earlier game
+  positions to `Searcher::set_game_history`; `repetition_count` looks back
+  through the search path and then the history, bounded by the fifty-move
+  clock. With no history the behaviour (and bench identity) is unchanged.
+
+## B32 — An unparsable `go` produced no `bestmove`
+
+- **Date:** 2026-11-17 (CCRL-readiness audit)
+- **Build / commit:** `989c6c5` plus the second-round parity fixes
+- **Platform / CPU:** all
+- **Command or FEN:** `position startpos`, `go ponder wtime 1000 btime 1000`
+  (also `go mate 3`, `go searchmoves e2e4`, and `go` before any `position`)
+- **Expected:** every `go` is answered with a `bestmove`; a GUI waits for it
+  and loses on time otherwise.
+- **Actual:** the handler printed an `info string` and returned silently.
+- **Status:** fixed — the engine now answers such a `go` with the first legal
+  move (or `0000` with no position or no legal move). The limiters themselves
+  (`ponder`, `mate`, `searchmoves`) are still unsupported; CCRL plays with
+  ponder off, so that is a Phase 5 item, not a blocker.
+
+## Predecessor quirks reproduced on purpose
+
+These are behaviours of the reference implementation that look wrong. They are
+reproduced for node identity, not fixed (migration-plan §5.2).
+
+- **Q1 — Singular extensions never fire.** The verification search probes the
+  transposition table without excluding the entry that triggered it, so it
+  takes a table cutoff on that very entry. In `bench 14` the verification ran
+  2,810 times and never produced an extension. It is pure cost in both
+  engines. A deliberate fix (skip the table cutoff in a verification node) was
+  tried behind the KnightByte-only lever `SingularExcludeTtCutoff` (default
+  off) and measured over 904 games: Elo -18.7 +/- 15.2 after 800 games, no
+  gain, run stopped before the SPRT decided. The quirk stays; see ADR-0006.
+- **Q2 — Castle and en-passant table moves lose their marker.** The table packs
+  only the two squares and the promotion piece, so a stored castling or
+  en-passant move matches no generated move: it is not tried first, it is not
+  excluded in a verification, it earns no singular extension, and it stays in
+  the generated quiet/capture list.
+- **Q3 — Quiescence never searches an en-passant capture** (its target square
+  is empty, so it counts as quiet). Logged earlier as part of B6.
+- **Q4 — The correction-history quiet gate can never see a real capture**
+  (the mover's own occupancy is tested). Logged earlier as part of B5.
+
 ## Open
 
-- The search-parity residual (a learned-history-state seed from depth 5 on)
-  is accepted per ADR-0004 — not an open defect. No open defects.
+- No open defects. The search-parity gate is closed by node identity
+  (ADR-0005), which supersedes the accepted deviation of ADR-0004.
 
 ## Verified platforms
 

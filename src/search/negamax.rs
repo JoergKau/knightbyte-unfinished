@@ -31,7 +31,7 @@ use crate::search::searcher::{
 };
 use crate::search::see::see_ge;
 use crate::search::tt::Bound;
-use crate::types::r#move::Move;
+use crate::types::r#move::{Move, flags};
 use crate::types::piece::{KING, PAWN, color_of, piece_type};
 
 /// The node at and beyond this ply returns its static evaluation without
@@ -112,17 +112,7 @@ impl Searcher {
     /// cutoffs so the search can never anchor a repetition decision to a
     /// cached score.
     fn path_repetition_count(&self, position: &Position, ply: usize) -> u32 {
-        let key = position.key();
-        let distance = usize::from(position.halfmove_clock()).min(ply);
-        let mut count = 0;
-        let mut back = 2;
-        while back <= distance {
-            if self.keys[ply - back] == key {
-                count += 1;
-            }
-            back += 2;
-        }
-        count
+        self.repetition_count(position, ply)
     }
 
     /// Searches `position` to `depth` plies and returns its score.
@@ -220,7 +210,7 @@ impl Searcher {
         let mut tt_probe = None;
         let mut tt_eval = None;
         if let Some(entry) = self.tt.probe(position.key()) {
-            tt_move = entry.mv;
+            tt_move = without_special_flags(entry.mv);
             tt_probe = Some(entry);
             let stored_eval = i32::from(entry.eval);
             if stored_eval != NO_STATIC_EVAL {
@@ -235,31 +225,43 @@ impl Searcher {
                     entry.generation
                 );
             }
-            if !is_root && allow_tt_cutoff && i32::from(entry.depth) >= depth {
+            // A verification node may be told not to take the cutoff: its
+            // entry is the one that triggered the verification, so returning
+            // on it would make the verification meaningless.
+            let verification_skips_tt =
+                self.params.singular_exclude_tt_cutoff && !excluded_move.is_none();
+            if !is_root
+                && allow_tt_cutoff
+                && !verification_skips_tt
+                && i32::from(entry.depth) >= depth
+            {
                 let score = Self::probe_score(&entry, ply);
                 match entry.bound {
                     Bound::Exact => {
                         return score;
                     }
                     Bound::Lower => {
+                        // Early transposition-table-cutoff history update:
+                        // a quiet table move found at a non-PV node, whose
+                        // parent found its own move quickly, earns a
+                        // butterfly bonus. The reference awards it for every
+                        // sufficiently deep lower-bound entry, before it
+                        // decides whether the stored score reaches beta.
+                        if !tt_move.is_none()
+                            && !pv_node
+                            && ply > 0
+                            && self.move_counts[ply - 1] < 4
+                            && !movegen::is_capture(position, tt_move)
+                            && !tt_move.is_promotion()
+                        {
+                            let bonus = (207 * depth).min(1_202);
+                            self.history.update_butterfly_bonus(
+                                color_of(position.piece_at(tt_move.from())),
+                                tt_move,
+                                bonus,
+                            );
+                        }
                         if score >= beta {
-                            // Early transposition-table-cutoff history update:
-                            // a quiet table move that cut off quickly at the
-                            // parent earns a butterfly bonus.
-                            if !tt_move.is_none()
-                                && !pv_node
-                                && ply > 0
-                                && self.move_counts[ply - 1] < 4
-                                && !movegen::is_capture(position, tt_move)
-                                && !tt_move.is_promotion()
-                            {
-                                let bonus = (207 * depth).min(1_202);
-                                self.history.update_butterfly_bonus(
-                                    color_of(position.piece_at(tt_move.from())),
-                                    tt_move,
-                                    bonus,
-                                );
-                            }
                             return score;
                         }
                         alpha = alpha.max(score);
@@ -304,7 +306,6 @@ impl Searcher {
         {
             eval = Self::probe_score(&entry, ply);
         }
-        self.evals[ply] = eval;
 
         // Hindsight depth pair: the previous ply's reduction and the two
         // evals decide whether this node earns the reduction back or loses
@@ -367,47 +368,50 @@ impl Searcher {
                     }
                 }
             }
+        }
 
-            // Null move: the gate carries the cut-node arm — at a predicted
-            // cut node the null search runs even when a table score exists
-            // below beta. A non-mate fail-high cuts fail-hard at beta; a mate
-            // line through a null move is not trusted and the node keeps
-            // searching.
-            if depth >= 3
-                && eval >= beta
-                && (tt_probe.is_none()
-                    || cut_node
-                    || tt_probe.is_some_and(|entry| Self::probe_score(&entry, ply) >= beta))
-                && Self::has_non_pawn_material(position, position.side())
-            {
-                // Eval-scaled extra reduction, clamped so a null move can never
-                // reach the current node's depth.
-                let eval_bonus = ((eval - beta) / 191).min(4);
-                let mut reduction = self.params.nmp_base_reduction
-                    + depth / self.params.nmp_depth_divisor
-                    + eval_bonus;
-                if reduction >= depth {
-                    reduction = depth - 1;
-                }
-                let next = position.make_null();
-                self.move_stack[ply] = Move::NONE;
-                let score = -self.negamax(
-                    &next,
-                    -beta,
-                    -beta + 1,
-                    depth - 1 - reduction,
-                    ply + 1,
-                    None,
-                    !cut_node,
-                    Move::NONE,
-                    extensions_used,
-                );
-                if self.stopped {
-                    return 0;
-                }
-                if score >= beta && score.abs() < MATE_LIMIT {
-                    return beta;
-                }
+        // Null move: runs at any non-root node that is not in check, including
+        // principal-variation nodes and singular-verification nodes (the gate
+        // has no node-type or exclusion condition). It carries the cut-node
+        // arm — at a predicted cut node the null search runs even when a
+        // table score exists below beta. A non-mate fail-high cuts fail-hard
+        // at beta; a mate line through a null move is not trusted and the node
+        // keeps searching.
+        if !is_root
+            && depth >= 3
+            && !in_check
+            && eval >= beta
+            && (tt_probe.is_none()
+                || cut_node
+                || tt_probe.is_some_and(|entry| Self::probe_score(&entry, ply) >= beta))
+            && Self::has_non_pawn_material(position, position.side())
+        {
+            // Eval-scaled extra reduction, clamped so a null move can never
+            // reach the current node's depth.
+            let eval_bonus = ((eval - beta) / 191).min(4);
+            let mut reduction =
+                self.params.nmp_base_reduction + depth / self.params.nmp_depth_divisor + eval_bonus;
+            if reduction >= depth {
+                reduction = depth - 1;
+            }
+            let next = position.make_null();
+            self.move_stack[ply] = Move::NONE;
+            let score = -self.negamax(
+                &next,
+                -beta,
+                -beta + 1,
+                depth - 1 - reduction,
+                ply + 1,
+                None,
+                !cut_node,
+                Move::NONE,
+                extensions_used,
+            );
+            if self.stopped {
+                return 0;
+            }
+            if score >= beta && score.abs() < MATE_LIMIT {
+                return beta;
             }
         }
 
@@ -662,9 +666,6 @@ impl Searcher {
             // Late move reduction (the live schedule): the log base plus the
             // opponent-material, history, cut-node, PV and killer terms, in
             // fixed point over 1024ths of a ply.
-            // Late move reduction (the live schedule): the log base plus the
-            // opponent-material, history, cut-node, PV and killer terms, in
-            // fixed point over 1024ths of a ply.
             let mut reduction = 0;
             if self.params.use_lmr_table
                 && depth >= 3
@@ -694,7 +695,12 @@ impl Searcher {
                 if pv_node {
                     reduction_1024 -= 1024;
                 }
-                if self.killers.contains(ply, mv) || self.history.counter_move(previous) == mv {
+                // Killers are read live; the countermove is the value the
+                // picker captured before the loop started (see
+                // `PickerState::counter_move`).
+                if self.killers.contains(ply, mv)
+                    || self.picker[ply].counter_move() == mv.without_double_push()
+                {
                     reduction_1024 -= 1024;
                 }
                 reduction = reduction_1024 / 1024;
@@ -705,7 +711,13 @@ impl Searcher {
                     reduction = 0;
                 }
             }
+            // Both per-ply stacks are published here, per searched move, and
+            // not at node entry: a null-move child (or any node reached
+            // before the first move of this node is searched) therefore sees
+            // the values an earlier visit of this ply left behind. The
+            // hindsight pair and the improving flag depend on that.
             self.reduction_stack[ply] = reduction;
+            self.evals[ply] = eval;
 
             let mut score;
             if legal_moves == 1 {
@@ -718,7 +730,7 @@ impl Searcher {
                     -alpha,
                     new_depth,
                     ply + 1,
-                    Some((moving, mv.to())),
+                    Some((moving, mv.from(), mv.to())),
                     child_cut,
                     Move::NONE,
                     extensions_used,
@@ -732,7 +744,7 @@ impl Searcher {
                     -alpha,
                     new_depth - reduction,
                     ply + 1,
-                    Some((moving, mv.to())),
+                    Some((moving, mv.from(), mv.to())),
                     true,
                     Move::NONE,
                     extensions_used,
@@ -749,7 +761,7 @@ impl Searcher {
                         -alpha,
                         re_search_depth,
                         ply + 1,
-                        Some((moving, mv.to())),
+                        Some((moving, mv.from(), mv.to())),
                         !cut_node,
                         Move::NONE,
                         extensions_used,
@@ -764,7 +776,7 @@ impl Searcher {
                         -alpha,
                         new_depth,
                         ply + 1,
-                        Some((moving, mv.to())),
+                        Some((moving, mv.from(), mv.to())),
                         false,
                         Move::NONE,
                         extensions_used,
@@ -792,7 +804,10 @@ impl Searcher {
                     alpha = score;
                     self.pv.update(ply, mv);
                     if score >= beta {
-                        if quiet_counted {
+                        // The history branch is chosen by "not a capture", so a
+                        // quiet promotion credits the quiet-move tables even
+                        // though it is excluded from the failed-quiet list.
+                        if !capture {
                             self.killers.record(ply, mv);
                             self.history.update_quiet(
                                 color_of(moving),
@@ -838,6 +853,19 @@ impl Searcher {
             }
         }
 
+        // No legal move was searched. Besides a genuine mate or stalemate this
+        // is the singular-verification case where the excluded table move is
+        // the only legal move: the node then reports the mate or draw score
+        // (nothing is stored), which is what the extension tiers compare
+        // against.
+        if legal_moves == 0 {
+            return if in_check {
+                mated_in(ply as i32)
+            } else {
+                DRAW_SCORE
+            };
+        }
+
         let bound = if best_score >= beta {
             Bound::Lower
         } else if best_score > alpha_window {
@@ -867,6 +895,25 @@ impl Searcher {
     }
 }
 
+/// Returns a table move as the reference table hands it back: its packed form
+/// holds only the two squares and the promotion piece, so the castle and
+/// en-passant markers are gone.
+///
+/// A stripped castling or en-passant move never compares equal to the
+/// generated move it came from. The picker therefore does not try it first or
+/// remove it from the generated lists, a verification search does not exclude
+/// it and it earns no singular extension — while it still counts as "a table
+/// move exists" for every presence test. Double pushes and promotions stay as
+/// stored: in the position the entry was written for they equal the generated
+/// move exactly, which is the result the reference's comparison by squares and
+/// promotion piece also gives.
+fn without_special_flags(mv: Move) -> Move {
+    match mv.flag() {
+        flags::CASTLE | flags::EN_PASSANT => Move::new(mv.from(), mv.to(), flags::NORMAL),
+        _ => mv,
+    }
+}
+
 /// Returns the number of quiet moves searched before late move pruning stops the
 /// stage. Indexed by remaining depth, capped at depth 4.
 fn lmp_limit(depth: i32) -> i32 {
@@ -889,4 +936,38 @@ fn razor_margin(depth: i32) -> i32 {
 fn rfp_margin(depth: i32) -> i32 {
     const MARGINS: [i32; 5] = [0, 102, 210, 267, 394];
     MARGINS[(depth as usize).min(4)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_special_flags;
+    use crate::types::r#move::{Move, flags};
+
+    #[test]
+    fn castle_and_en_passant_markers_are_dropped_from_a_table_move() {
+        let castle = Move::new(4, 6, flags::CASTLE);
+        let stripped = without_special_flags(castle);
+        assert_eq!((stripped.from(), stripped.to()), (4, 6));
+        assert_eq!(stripped.flag(), flags::NORMAL);
+        assert_ne!(stripped, castle, "it must not match the generated castle");
+        assert!(!stripped.is_none(), "a table move still exists");
+
+        let en_passant = Move::new(36, 43, flags::EN_PASSANT);
+        let stripped = without_special_flags(en_passant);
+        assert_eq!(stripped.flag(), flags::NORMAL);
+        assert_ne!(stripped, en_passant);
+    }
+
+    #[test]
+    fn other_table_moves_are_kept_as_stored() {
+        for mv in [
+            Move::new(12, 28, flags::DOUBLE_PUSH),
+            Move::new(52, 60, flags::PROMO_QUEEN),
+            Move::new(52, 60, flags::PROMO_KNIGHT),
+            Move::new(6, 21, flags::NORMAL),
+            Move::NONE,
+        ] {
+            assert_eq!(without_special_flags(mv), mv);
+        }
+    }
 }

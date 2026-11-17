@@ -91,7 +91,7 @@ impl CorrectionHistory {
         let black = i32::from(
             self.non_pawn[(2 + side) * TABLE_SIZE + (keys.black_non_pawn & TABLE_MASK) as usize],
         );
-        let counter = previous.map_or(0, |(piece, target)| {
+        let counter = previous.map_or(0, |(piece, _, target)| {
             i32::from(self.counter[(side * 6 + piece_type(piece)) * 64 + target as usize]) * 96
                 / 100
         });
@@ -141,7 +141,7 @@ impl CorrectionHistory {
             new_value,
             new_weight,
         );
-        if let Some((piece, target)) = previous {
+        if let Some((piece, _, target)) = previous {
             blend(
                 &mut self.counter[(side * 6 + piece_type(piece)) * 64 + target as usize],
                 old_weight,
@@ -219,12 +219,12 @@ mod tests {
     fn counter_term_depends_on_the_previous_move() {
         let mut history = CorrectionHistory::new();
         let position = Position::from_fen(START).unwrap();
-        let previous = Some((WP, 8));
+        let previous = Some((WP, 0, 8));
         history.update(&position, previous, 500, 0, 10);
         assert_ne!(history.correction(&position, previous), 0);
         assert_ne!(
             history.correction(&position, previous),
-            history.correction(&position, Some((WP, 9))),
+            history.correction(&position, Some((WP, 0, 9))),
             "a different previous move must miss the countermove cell"
         );
     }

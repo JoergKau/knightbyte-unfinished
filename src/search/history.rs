@@ -101,16 +101,19 @@ pub const CONTINUATION_DISTANCES: [usize; 4] = [1, 2, 4, 6];
 const BUTTERFLY_LEN: usize = 2 * 64 * 64;
 const CAPTURE_LEN: usize = 6 * 64 * 6;
 const CONTINUATION_LEN: usize = 2 * 64 * 64 * 64;
-const COUNTER_LEN: usize = 12 * 64;
+const COUNTER_LEN: usize = 64 * 64;
 
 /// The continuation-history context of one node: the destination square of the
 /// move played 1, 2, 4 and 6 plies earlier, or `None` when no move exists at
 /// that distance. The order matches [`CONTINUATION_DISTANCES`].
 pub type Continuations = [Option<Square>; 4];
 
-/// A position's ancestry as seen by the countermove table: the piece that
-/// moved and the square it landed on.
-pub type Previous = (Piece, Square);
+/// The move that produced a position: the piece that moved (before any
+/// promotion), its origin square and its destination square.
+///
+/// The countermove table is keyed by the two squares; the correction history's
+/// countermove term is keyed by the piece type and the destination.
+pub type Previous = (Piece, Square, Square);
 
 /// Butterfly, capture, continuation and countermove tables.
 pub struct History {
@@ -149,6 +152,11 @@ impl History {
         self.butterfly.fill(0);
         self.capture.fill(0);
         self.continuation.fill(0);
+        self.counter.fill(Move::NONE);
+    }
+
+    /// Forgets the countermove table only; the score tables are kept.
+    pub fn clear_counters(&mut self) {
         self.counter.fill(Move::NONE);
     }
 
@@ -219,8 +227,8 @@ impl History {
     #[inline]
     pub fn counter_move(&self, previous: Option<Previous>) -> Move {
         match previous {
-            Some((previous_piece, previous_to)) => {
-                self.counter[counter_index(previous_piece, previous_to)]
+            Some((_, previous_from, previous_to)) => {
+                self.counter[counter_index(previous_from, previous_to)]
             }
             None => Move::NONE,
         }
@@ -283,9 +291,13 @@ impl History {
     }
 
     /// Remembers `reply` as the countermove to `previous`.
+    ///
+    /// The reply is stored in identity form (no double-push marker); see
+    /// [`Move::without_double_push`]. [`History::counter_move`] therefore
+    /// returns that form, and callers compare against it the same way.
     pub fn update_counter(&mut self, previous: Option<Previous>, reply: Move) {
-        if let Some((previous_piece, previous_to)) = previous {
-            self.counter[counter_index(previous_piece, previous_to)] = reply;
+        if let Some((_, previous_from, previous_to)) = previous {
+            self.counter[counter_index(previous_from, previous_to)] = reply.without_double_push();
         }
     }
 }
@@ -322,8 +334,8 @@ fn continuation_index(color: Color, table: usize, previous_to: Square, mv: Move)
 }
 
 #[inline(always)]
-fn counter_index(previous_piece: Piece, previous_to: Square) -> usize {
-    (previous_piece as usize - 1) * 64 + previous_to as usize
+fn counter_index(previous_from: Square, previous_to: Square) -> usize {
+    previous_from as usize * 64 + previous_to as usize
 }
 
 #[cfg(test)]
@@ -334,7 +346,7 @@ mod tests {
     };
     use crate::types::color::{BLACK, WHITE};
     use crate::types::r#move::{Move, flags};
-    use crate::types::piece::{PAWN, QUEEN, WP};
+    use crate::types::piece::{PAWN, QUEEN, WN, WP};
 
     fn mv(from: u8, to: u8) -> Move {
         Move::new(from, to, flags::NORMAL)
@@ -438,11 +450,15 @@ mod tests {
     #[test]
     fn countermove_is_stored_per_previous_move() {
         let mut history = History::new();
-        let previous = Some((WP, 8));
+        let previous = Some((WP, 0, 8));
         let reply = mv(16, 24);
         history.update_counter(previous, reply);
         assert_eq!(history.counter_move(previous), reply);
-        assert!(history.counter_move(Some((WP, 9))).is_none());
+        assert!(history.counter_move(Some((WP, 0, 9))).is_none());
+        // The table is keyed by origin and destination, not by piece: the
+        // same destination from another origin square is a different cell.
+        assert!(history.counter_move(Some((WP, 1, 8))).is_none());
+        assert_eq!(history.counter_move(Some((WN, 0, 8))), reply);
         assert!(history.counter_move(None).is_none());
     }
 
@@ -450,7 +466,7 @@ mod tests {
     fn clear_empties_every_table() {
         let mut history = History::new();
         let context = cont();
-        let previous = Some((WP, 8));
+        let previous = Some((WP, 0, 8));
         history.update_quiet(WHITE, mv(9, 17), 5, &[], &context);
         history.update_capture(3, mv(0, 9), 1, 4);
         history.update_counter(previous, mv(1, 2));

@@ -1,7 +1,10 @@
 # ADR-0004 — Search-parity gate closed as a documented deviation
 
 **Date:** 2026-11-17
-**Status:** accepted
+**Status:** superseded by ADR-0005 (the deviation was traced to concrete
+porting differences and removed; the search is node-identical to the
+reference). Kept as the record of the earlier decision; the numbers below are
+the pre-fix state.
 
 ## Context
 

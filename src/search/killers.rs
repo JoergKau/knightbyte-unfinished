@@ -51,10 +51,14 @@ impl Killers {
 
     /// Records `mv` as the most recent killer for `ply`.
     ///
-    /// Re-recording the current first killer does not shift the others, so a
-    /// single tactical move cannot fill the whole table.
+    /// Killers are kept in identity form (no double-push marker): the memory
+    /// carries a move to other positions, where the same two squares may be a
+    /// different piece's move. Re-recording the current first killer does not
+    /// shift the others, so a single tactical move cannot fill the whole
+    /// table.
     #[inline]
     pub fn record(&mut self, ply: usize, mv: Move) {
+        let mv = mv.without_double_push();
         let Some(slots) = self.slots.get_mut(ply) else {
             return;
         };
@@ -75,13 +79,13 @@ impl Killers {
         if mv.is_none() {
             return false;
         }
-        self.get(ply).contains(&mv)
+        self.get(ply).contains(&mv.without_double_push())
     }
 
     /// Returns whether `mv` is the first (most recent) killer for `ply`.
     #[inline]
     pub fn is_first(&self, ply: usize, mv: Move) -> bool {
-        self.get(ply)[0] == mv && !mv.is_none()
+        self.get(ply)[0] == mv.without_double_push() && !mv.is_none()
     }
 }
 

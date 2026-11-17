@@ -1,21 +1,23 @@
 # KnightByte — next steps and open problems
 
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
-**History:** starts with the public snapshot of 2026-11-17; the earlier
-development history is kept in the private archive `JoergKau/knightbyte-archive`.  
-**Last updated:** 2026-11-17 (Phase 4 complete, including 4d time management)  
+**History:** starts with the public snapshot of 2026-11-17. There is no private
+repository or archive any more; everything lives in the repository above.  
+**Last updated:** 2026-11-17 (Phase 4 complete with exact node identity; the ADR-0004 deviation is gone)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
 
 Phases 0–3 are complete and verified. Phase 4 (search) is **complete,
-including 4d**: the migration audit found and fixed fourteen porting defects
-(`docs-new/new-bugs.md` B1–B17, `docs/audit/migration-audit.md`), depths 1–4
-are exact at all four bench positions, `bench 6` is within 0.1 % of the
-reference (14,963 vs 14,979) and `bench 18` within 1.8 %. The parity gate is
-**resolved as a documented deviation** (ADR-0004): the determinism pin
-(`bench 6` = 14,963, asserted in `tests/search.rs`) replaces node identity as
-the regression discipline. The full time-management port is in (allocation
+including 4d**, and the search is now **node-identical to the reference**:
+`bench 6` = 14,979, `bench 12` = 416,533, `bench 16` = 3,169,859 and
+`bench 18` = 6,925,762, plus every captured per-position count at depths
+1–12, 14, 16 and 18. The earlier "accepted deviation" (ADR-0004) was wrong
+about its cause: it was not learned-state drift but eleven concrete porting
+differences (`docs-new/new-bugs.md` B18–B28) and one predecessor quirk (Q2),
+found with per-node ledgers of both engines (ADR-0005 supersedes ADR-0004;
+audit record `docs/audit/migration-audit.md`, first round B1–B17). The full
+time-management port is in (allocation
 with the tournament cap, sudden-death increment, tactical floor and safety
 buffer; panic mode; the legacy PV-stability multipliers; the stable-TM
 three-signal scaler with the five-iteration minimum-depth guard; one-sided
@@ -23,9 +25,11 @@ time advantage; two-sided clock imbalance; per-move node attribution), and
 39 of the 83 research levers are wired and advertised. Next: Phase 5
 (threading, `stop`/`ponderhit`, Lazy SMP).
 
-Verification status on the last run: all 159 tests pass locally on Windows
+Verification status on the last run: all 172 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
-fmt/clippy clean; `bench 6` pin = 14,963.
+fmt/clippy clean; `bench 6` pin = 14,979 (the reference total). Node
+identity is verified on this Windows host only; macOS and Linux still have
+to confirm it (migration-plan G6).
 
 ---
 
@@ -57,7 +61,7 @@ fmt/clippy clean; `bench 6` pin = 14,963.
   ply), histories (`search/history.rs`) with reference gravity bounds, linear
   bonuses/maluses, bad-quiet malus lists and 7/8 ageing per iteration.
 
-### Phase 4c — search (functionally complete, parity open)
+### Phase 4c - search (complete, node-identical to the reference)
 
 - Iterative deepening, aspiration windows, PVS, TT probe/store, null move,
   reverse futility (formula + damped spill), razoring, LMP, futility, SEE capture
@@ -113,13 +117,22 @@ fmt/clippy clean; `bench 6` pin = 14,963.
 
 Each item states the symptom, the evidence and the concrete next action.
 
-### 2.1 Search-parity gate — resolved (ADR-0004)
+### 2.1 Search-parity gate — passed with exact node identity (ADR-0005)
 
-Depths 1-4 exact at all four bench positions; `bench 6` -0.1 % (14,963 vs
-14,979); the deep tree within ~2 % (`bench 18`: 6,797,622 vs 6,925,762). The
-residual divergence (a learned-history-state seed from depth 5 on) is
-accepted and documented in `docs/decisions/ADR-0004-search-parity-deviation.md`.
-Do not reopen node-count forensics without a concrete defect symptom.
+`bench 6/12/16/18` = 14,979 / 416,533 / 3,169,859 / 6,925,762, identical to
+the reference, and every captured per-position count matches. ADR-0004 (the
+accepted deviation) is superseded: its "learned-state drift" explanation
+was wrong. If a node count ever moves again, treat it as a search change
+(update the pins and say why) and use the ledger method in
+`docs/SEARCH-PARITY.md` §8 rule 6 to find the first divergent node.
+
+Known and deliberately reproduced: singular extensions never fire in the
+reference (the verification search takes a table cutoff on its own
+trigger entry; `docs-new/new-bugs.md` Q1). It was tried behind the
+KnightByte-only lever `SingularExcludeTtCutoff` and showed no gain over 904
+games (Elo -18.7 +/- 15.2 at 800 games); the default stays the reference
+behaviour (ADR-0006). Whether to keep or remove the lever is still to be
+decided.
 
 ### 2.2 Remaining time-management gaps — resolved
 
@@ -185,12 +198,39 @@ through a `-replace | Set-Content` pipeline, see B17). Prefer the editor/write
 tool for files containing non-ASCII, or write with
 `[System.IO.File]::WriteAllText(path, text, [Text.UTF8Encoding]::new($false))`.
 
+### 2.10 CCRL readiness (status 2026-11-17)
+
+The requirement list comes from the predecessor's CCRL notes: UCI, runs under
+cutechess-cli/fastchess, handles `uci/isready/ucinewgame/position/go/quit`,
+**no crashes, no illegal moves, no time losses**, own book off, ponder off, a
+Windows x64 zip with readme and licence, stable public versions only.
+CCRL's conditions: 40/15 and 40/4 and 2+1, Hash 128 or 256 MB, 3-4-5 piece
+Syzygy optional.
+
+| Item | KnightByte today |
+| :--- | :--- |
+| UCI handshake, `position`, `go` limiters (`depth`, `nodes`, `movetime`, clocks, `movestogo`, `infinite`) | done; `ponder`, `mate`, `searchmoves` are unsupported but now answered with a legal `bestmove` (B32) |
+| No time losses | two real causes fixed (B30 clock restarted late; B32 silent `go`); a 216-search compliance grid (clocks 40 ms-10 s, increments 0/100/1000, `movestogo` none/1/3/40) shows no overrun. **Still open:** a 40/15 and a 40/4 run with zero timeouts on record |
+| No illegal moves | `fastchess` flags them; all 904 finished games of the singular-extension experiment (8+0.08, ADR-0006) had no illegal move, time loss or crash. A dedicated self-play legality check of every PV and bestmove is not written yet |
+| Repetitions of earlier game positions | fixed (B31); bench could never have shown it |
+| Own book off, ponder off | trivially true: the book and ponder options are accepted and inert |
+| Hash 128/256 MB | the `Hash` option accepts 1-1024 MB (default 256) |
+| Threads | accepted, single-threaded until Phase 5 |
+| Syzygy | not implemented (optional for CCRL, Phase 6) |
+| Windows x64 zip, README, licence | README and MIT licence exist; the release packaging, a tagged public release and a Linux build are Phase 8 |
+
+The lesson of this round: node identity says nothing about *time* or *game
+history*. Both bugs lived in code that bench never runs. Before a CCRL
+submission, run real games at CCRL's time controls and read the `Timeouts` and
+`Crashed` columns of the result table, not just the exit code.
+
 ### 2.9 Documentation items that only close with features
 
 - `migration-plan.md` Phase 5 checklists still open by design (threading is
   next).
-- The audit's open items: `docs/audit/migration-audit.md` (only the
-  ADR-0004-moot forensics remain).
+- The audit's open items: `docs/audit/migration-audit.md` (the forensics are
+  closed; the SEE, time-management and option/lever rows were not line-by-line
+  audited in the second round, and node identity is the evidence for them).
 
 ---
 
@@ -242,9 +282,9 @@ cargo build --release
 ### Parity measurement
 
 ```powershell
-# per-depth comparison against the captured oracle
+# per-depth comparison against the captured oracle (every delta must be +0)
 python tools\capture_bench.py compare --engine .\target\release\knightbyte.exe `
-    --baseline tests\golden\search_parity.json --depths 6,8,10,12,14
+    --baseline tests\golden\search_parity.json --depths 1-12,14,16,18
 ```
 
 ### Smoke transcript
@@ -265,10 +305,14 @@ Expected `perft 3` on startpos: `Nodes: 8902`; `nnueeval` on startpos: `27`.
 
 ## 5. Git workflow
 
-The code lives in a private GitHub repository. Each machine clones once, then
-pulls and pushes; do not copy folders between machines.
+All work goes to one public repository,
+<https://github.com/JoergKau/knightbyte-unfinished> (branch `main`). There is no
+private repository, private mirror or archive, and no second remote. Each
+machine clones it once, then pulls and pushes; do not copy folders (or git
+bundles) between machines.
 
 ```bash
+git clone https://github.com/JoergKau/knightbyte-unfinished.git   # once per machine
 git pull --rebase
 git status
 # ...work...
@@ -287,14 +331,24 @@ Useful: `git log --oneline -5`, `gh run list --limit 3`,
 `session-*.md` notes, `.bundle` files. They are in `.gitignore`. The network and
 the golden test data **are** part of the repository.
 
+Because the repository is public, everything pushed is public immediately:
+check `git status` and `git diff --stat` before every commit, and never add the
+predecessor tree, reference-engine material, tool paths on this machine that
+name other engines, or anything that is not meant to be published (see
+`project-rules.md`).
+
 ---
 
-## 6. When to publish
+## 6. Publishing and CCRL
 
-The repository can stay private during development. CCRL requires publicly
-available source and a license, so before the first submission either make the
-repository public or publish a source release/mirror.
+Nothing needs to be made public any more: the source and the MIT licence are
+already published in the repository, which is what CCRL asks for. What is still
+open for a submission is the release artifact (a tagged GitHub Release with the
+Windows x64 zip, readme and licence; Phase 8) and the stability evidence in
+§2.10.
 
-Private-repository Actions minutes are limited; macOS and Windows runners consume
-more than Ubuntu. If the budget becomes a problem, keep the default CI
-Ubuntu-only and run the macOS/Windows jobs manually or on tags (see §2.8).
+GitHub Actions on a public repository is not minute-limited the way a private
+one is. The macOS runner queue can still be slow (§2.7); that is a latency
+problem, not a budget one.
+
+---

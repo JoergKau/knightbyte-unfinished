@@ -173,7 +173,7 @@ impl Searcher {
                     continue;
                 }
                 if ply as i32 >= self.params.qs_recapture_only_ply
-                    && let Some((_, target)) = previous
+                    && let Some((_, _, target)) = previous
                     && mv.to() != target
                 {
                     continue;
@@ -208,7 +208,7 @@ impl Searcher {
                 -beta,
                 -alpha,
                 ply + 1,
-                Some((position.piece_at(mv.from()), mv.to())),
+                Some((position.piece_at(mv.from()), mv.from(), mv.to())),
             );
             if self.stopped {
                 return 0;

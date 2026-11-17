@@ -55,7 +55,10 @@ pub fn run() -> io::Result<()> {
             parser::Command::Bench => bench::run(command, &mut output)?,
             parser::Command::SetOption => handle_set_option(command, &mut searcher, &mut output)?,
             parser::Command::Position => match parse_position(command) {
-                Ok(next) => position = Some(next),
+                Ok((next, earlier_keys)) => {
+                    searcher.set_game_history(&earlier_keys);
+                    position = Some(next);
+                }
                 Err(error) => output.line(&format!("info string {error}"))?,
             },
             parser::Command::Go => {
@@ -74,7 +77,12 @@ pub fn run() -> io::Result<()> {
 }
 
 /// Parses `position startpos|fen <fields>` with an optional `moves` tail.
-fn parse_position(line: &str) -> Result<Position, String> {
+///
+/// Returns the final position and the keys of every position that preceded it
+/// in the game (the starting position and each intermediate one, oldest
+/// first), which the search needs to recognise repetitions of earlier game
+/// positions.
+fn parse_position(line: &str) -> Result<(Position, Vec<u64>), String> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
     let (mut position, next) = match tokens.get(1).copied() {
         Some("startpos") => (
@@ -91,9 +99,11 @@ fn parse_position(line: &str) -> Result<Position, String> {
         _ => return Err("position command expects 'startpos' or 'fen <six fields>'".to_owned()),
     };
 
+    let mut earlier_keys = Vec::new();
     match tokens.get(next).copied() {
         Some("moves") => {
             for text in &tokens[next + 1..] {
+                earlier_keys.push(position.key());
                 position = apply_uci_move(&position, text)?;
             }
         }
@@ -104,7 +114,7 @@ fn parse_position(line: &str) -> Result<Position, String> {
         }
         None => {}
     }
-    Ok(position)
+    Ok((position, earlier_keys))
 }
 
 /// Applies one UCI move string to `position`.
@@ -241,12 +251,12 @@ fn handle_go(
         Ok((limits, time_setup)) => (limits, time_setup),
         Err(message) => {
             output.line(&format!("info string {message}"))?;
-            return Ok(());
+            return answer_without_search(position, output);
         }
     };
     let Some(position) = position else {
         output.line("info string no position set")?;
-        return Ok(());
+        return answer_without_search(None, output);
     };
     match time_setup {
         Some(TimeSetup::Fixed(move_time)) => searcher.init_movetime(move_time),
@@ -269,6 +279,20 @@ fn handle_go(
     }
 
     output.line(&format!("bestmove {}", result.best_move.to_uci()))
+}
+
+/// Answers a `go` that cannot be searched (an unsupported limiter, a missing
+/// position) with a move anyway.
+///
+/// A GUI waits for a `bestmove` after every `go`; staying silent would leave it
+/// waiting until its clock runs out, which is a lost game. The first legal move
+/// is a legal, if unconsidered, answer; with no legal move or no position the
+/// null move `0000` is the protocol's way to say so.
+fn answer_without_search(position: Option<&Position>, output: &mut Output) -> io::Result<()> {
+    let fallback = position
+        .and_then(|position| legal(position).as_slice().first().copied())
+        .map_or_else(|| "0000".to_owned(), |mv| mv.to_uci());
+    output.line(&format!("bestmove {fallback}"))
 }
 
 /// Formats one `info` line for a completed iteration.

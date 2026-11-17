@@ -87,20 +87,35 @@ fn generate_pawns(position: &Position, us: u8, them: u8, moves: &mut MoveList) {
             }
         }
 
-        let mut targets = pawn_attacks(us, from) & enemy;
-        while targets != 0 {
-            let to = crate::board::bitboard::lsb(targets);
-            targets &= targets.wrapping_sub(1);
-            if rank(to) == promotion_rank {
-                add_promotions(moves, from, to);
-            } else {
-                moves.push(Move::new(from, to, flags::NORMAL));
-            }
+        // The two capture directions are visited in a fixed order: for white
+        // the +7 direction (lower target square) before +9, for black -7
+        // (higher target square) before -9. For each direction the ordinary
+        // capture comes first, then the en-passant capture onto that square.
+        // The picker's generation-order tie-break inherits this order, so it
+        // is not interchangeable with plain ascending square order.
+        let attacked = pawn_attacks(us, from);
+        let mut targets = [0_u8; 2];
+        let mut target_count = 0;
+        for to in bits(attacked) {
+            targets[target_count] = to;
+            target_count += 1;
+        }
+        if us != WHITE {
+            targets[..target_count].reverse();
         }
 
         let ep = position.en_passant();
-        if ep != NO_SQUARE && pawn_attacks(us, from) & bit(ep) != 0 && position.piece_at(ep) == 0 {
-            moves.push(Move::new(from, ep, flags::EN_PASSANT));
+        for &to in &targets[..target_count] {
+            if enemy & bit(to) != 0 {
+                if rank(to) == promotion_rank {
+                    add_promotions(moves, from, to);
+                } else {
+                    moves.push(Move::new(from, to, flags::NORMAL));
+                }
+            }
+            if to == ep && ep != NO_SQUARE && position.piece_at(ep) == 0 {
+                moves.push(Move::new(from, ep, flags::EN_PASSANT));
+            }
         }
     }
 }

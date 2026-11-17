@@ -11,10 +11,11 @@ use knightbyte::board::movegen::legal;
 use knightbyte::board::position::Position;
 use knightbyte::search::history::{Continuations, History, Previous};
 use knightbyte::search::killers::Killers;
-use knightbyte::search::move_picker::debug_dump_picker_order;
+use knightbyte::search::move_picker::{PickerState, debug_dump_picker_order};
 use knightbyte::search::see::{see_approximate, see_value};
 use knightbyte::types::color::WHITE;
-use knightbyte::types::r#move::Move;
+use knightbyte::types::r#move::{Move, flags};
+use knightbyte::types::piece::PAWN;
 
 const STARTPOS: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
@@ -119,7 +120,9 @@ fn see_handles_en_passant() {
 #[test]
 fn see_handles_promotions() {
     let position = verified("4k3/P7/8/8/8/8/8/4K3 w - - 0 1");
-    // The reference adds the promotion delta twice (once in the move value,\n    // once in the exchange walk); reproduced faithfully for parity.\n    assert_eq!(see_value(&position, legal_move(&position, "a7a8q")), 2_375);
+    // The reference adds the promotion delta twice (once in the move value,
+    // once in the exchange walk); reproduced faithfully for parity.
+    assert_eq!(see_value(&position, legal_move(&position, "a7a8q")), 2_375);
     assert_eq!(see_value(&position, legal_move(&position, "a7a8n")), 697);
 }
 
@@ -201,11 +204,160 @@ fn countermove_is_tried_before_other_quiets() {
     let position = verified(STARTPOS);
     let mut history = History::new();
     let killers = Killers::new();
-    let previous: Previous = (1, 8);
+    let previous: Previous = (1, 8, 16);
     let reply = legal_move(&position, "b1c3");
     history.update_counter(Some(previous), reply);
     let picked = ordered(&position, &history, Move::NONE, &killers, Some(previous));
     assert_eq!(picked[0], reply);
+}
+
+/// Rook on g2 with the king far away: `g2g4` is an ordinary rook move here.
+const ROOK_ON_G2: &str = "4k3/8/8/8/8/8/6R1/4K3 w - - 0 1";
+
+#[test]
+fn killer_recorded_as_a_pawn_double_push_matches_the_same_squares_of_another_piece() {
+    // A killer travels between positions. Recorded as a pawn's g2-g4 double
+    // push, it must still be recognised when a rook can play g2-g4, and the
+    // picker must hand back the *generated* rook move, not the remembered one
+    // (which carries the double-push marker and would corrupt the position).
+    let position = verified(ROOK_ON_G2);
+    let history = History::new();
+    let mut killers = Killers::new();
+    killers.record(0, Move::new(14, 30, flags::DOUBLE_PUSH));
+    let picked = ordered(&position, &history, Move::NONE, &killers, None);
+    assert_eq!(picked[0].to_uci(), "g2g4");
+    assert_eq!(picked[0].flag(), flags::NORMAL);
+    assert!(legal(&position).as_slice().contains(&picked[0]));
+    assert!(killers.contains(0, legal_move(&position, "g2g4")));
+}
+
+#[test]
+fn countermove_recorded_as_a_pawn_double_push_matches_the_same_squares_of_another_piece() {
+    let position = verified(ROOK_ON_G2);
+    let mut history = History::new();
+    let killers = Killers::new();
+    let previous: Previous = (1, 52, 36);
+    history.update_counter(Some(previous), Move::new(14, 30, flags::DOUBLE_PUSH));
+    let picked = ordered(&position, &history, Move::NONE, &killers, Some(previous));
+    assert_eq!(picked[0].to_uci(), "g2g4");
+    assert_eq!(picked[0].flag(), flags::NORMAL);
+}
+
+#[test]
+fn black_pawn_captures_are_generated_east_before_west() {
+    // d6 can capture on e5 (the -7 direction) and on c5 (-9). The reference
+    // generator visits -7 first, and the picker's tie-break between equally
+    // scored captures follows generation order, so this order decides which
+    // subtree is searched first.
+    let position = verified("rnbqkbnr/pp2pppp/3p4/2P1P3/8/8/PPP2PPP/RNBQKBNR b KQkq - 0 4");
+    let order: Vec<String> = legal(&position)
+        .as_slice()
+        .iter()
+        .map(|mv| mv.to_uci())
+        .collect();
+    let east = order.iter().position(|mv| mv == "d6e5").expect("d6e5");
+    let west = order.iter().position(|mv| mv == "d6c5").expect("d6c5");
+    assert!(east < west, "expected d6e5 before d6c5 in {order:?}");
+}
+
+#[test]
+fn white_pawn_captures_are_generated_west_before_east() {
+    // d3 can capture on c4 (+7) and on e4 (+9), in that order.
+    let position = verified("rnbqkbnr/pp1p1ppp/8/8/2p1p3/3P4/PPP2PPP/RNBQKBNR w KQkq - 0 5");
+    let order: Vec<String> = legal(&position)
+        .as_slice()
+        .iter()
+        .map(|mv| mv.to_uci())
+        .collect();
+    let west = order.iter().position(|mv| mv == "d3c4").expect("d3c4");
+    let east = order.iter().position(|mv| mv == "d3e4").expect("d3e4");
+    assert!(west < east, "expected d3c4 before d3e4 in {order:?}");
+}
+
+#[test]
+fn en_passant_is_generated_in_capture_direction_order() {
+    // The e5 pawn can capture en passant on d6 (+7) and normally on f6 (+9).
+    // The reference interleaves the two per direction, so the en-passant
+    // capture comes first; the push comes before both.
+    let position = verified("rnbqkbnr/ppp1p1pp/5p2/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3");
+    let order: Vec<String> = legal(&position)
+        .as_slice()
+        .iter()
+        .map(|mv| mv.to_uci())
+        .filter(|mv| mv.starts_with("e5"))
+        .collect();
+    assert_eq!(order, ["e5e6", "e5d6", "e5f6"]);
+}
+
+#[test]
+fn castle_table_move_is_neither_tried_first_nor_dropped() {
+    // The reference table keeps only the two squares and the promotion piece,
+    // so a stored castling move comes back without its castle marker. It then
+    // matches no generated move: it is not emitted at the table stage and it
+    // does not remove the real castling move from the quiet list.
+    let position = verified("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1");
+    let history = History::new();
+    let killers = Killers::new();
+    let stripped = Move::new(4, 6, flags::NORMAL);
+    let picked = ordered(&position, &history, stripped, &killers, None);
+    let castle = legal_move(&position, "e1g1");
+    assert_eq!(castle.flag(), flags::CASTLE);
+    assert_eq!(picked.len(), legal(&position).len());
+    assert_eq!(picked.iter().filter(|&&mv| mv == castle).count(), 1);
+    assert_ne!(picked[0], castle, "the stripped table move must not lead");
+}
+
+#[test]
+fn capture_scores_see_the_history_left_by_the_table_move_subtree() {
+    // The capture scores are computed after the table move has been returned
+    // (and, in the search, searched), so a capture-history update made in
+    // between reorders the captures. e4 can take d5 or f5 with equal material;
+    // generation order alone puts d5 first.
+    let position = verified("4k3/8/8/3p1p2/4P3/8/8/4K3 w - - 0 1");
+    let moves = legal(&position);
+    let tt_move = legal_move(&position, "e1e2");
+    let take_f5 = legal_move(&position, "e4f5");
+    let killers = Killers::new();
+    let mut history = History::new();
+    let cont: Continuations = [None; 4];
+
+    let mut state = PickerState::new();
+    state.reset(tt_move, &killers, &history, 0, None, &cont, false, false);
+    assert_eq!(
+        state.next(&position, &history, moves.as_slice()),
+        Some(tt_move)
+    );
+    history.update_capture(PAWN, take_f5, PAWN, 8);
+    assert_eq!(
+        state.next(&position, &history, moves.as_slice()),
+        Some(take_f5),
+        "the capture-history bonus earned after the table move must count"
+    );
+}
+
+#[test]
+fn quiescence_orders_captures_without_capture_history() {
+    // Same position, quiescence shape: the picker has no capture history
+    // there, so the bonus changes nothing and generation order decides.
+    let position = verified("4k3/8/8/3p1p2/4P3/8/8/4K3 w - - 0 1");
+    let moves = legal(&position);
+    let take_d5 = legal_move(&position, "e4d5");
+    let take_f5 = legal_move(&position, "e4f5");
+    let killers = Killers::new();
+    let mut history = History::new();
+    history.update_capture(PAWN, take_f5, PAWN, 8);
+    let cont: Continuations = [None; 4];
+
+    let mut state = PickerState::new();
+    state.reset(Move::NONE, &killers, &history, 0, None, &cont, true, true);
+    assert_eq!(
+        state.next(&position, &history, moves.as_slice()),
+        Some(take_d5)
+    );
+    assert_eq!(
+        state.next(&position, &history, moves.as_slice()),
+        Some(take_f5)
+    );
 }
 
 #[test]

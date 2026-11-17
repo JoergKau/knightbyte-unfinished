@@ -71,21 +71,24 @@ diagnostic commands for the current position.
 
 ## Repository workflow
 
-Development is centralized in a private git repository; machines clone and
-pull instead of copying directories.
+Development happens in one public repository,
+<https://github.com/JoergKau/knightbyte-unfinished> (branch `main`); there is
+no private repository or second remote. Machines clone and pull instead of
+copying directories.
 
 * One-time setup on a new machine: install Git, authenticate (`gh auth login`
-  or an SSH key), then `git clone git@github.com:<owner>/knightbyte.git`.
-* Pull before a work session, commit after each completed step, push to the
-  private remote.
+  or an SSH key), then
+  `git clone https://github.com/JoergKau/knightbyte-unfinished.git`.
+* Pull before a work session, commit after each completed step, push to
+  `origin`. Everything pushed is public immediately.
 * Do not copy or commit `target/`; it contains host-specific build artifacts.
 * The internal migration sources and reference trees are git-ignored. They
   never travel with the engine repository.
 * CI runs on push. Windows/macOS artifacts are attached to tags or GitHub
   Releases rather than copied between machines.
-* The repository can stay private during development. Before a CCRL
-  submission, publish a source archive and license publicly, as CCRL requires
-  publicly available source.
+* The source and the MIT licence are already public, which is what CCRL
+  requires of a submission; what remains is a tagged release with the Windows
+  x64 zip.
 
 ## Development workflow
 

@@ -13,6 +13,7 @@ use knightbyte::board::zobrist;
 use knightbyte::search::limits::Limits;
 use knightbyte::search::searcher::{MATE_LIMIT, SearchResult, Searcher};
 use knightbyte::tools::bench;
+use std::time::{Duration, Instant};
 
 const SCHOLARS_MATE: &str = "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 4 4";
 const MATE_IN_TWO: &str = "7k/8/8/6K1/8/8/1R6/R7 w - - 0 1";
@@ -93,7 +94,9 @@ fn node_limit_stops_the_search() {
     let position = verified(STARTPOS);
     let mut searcher = Searcher::new(8);
     let result = searcher.search(&position, Limits::nodes(500), &mut |_| {});
-    // The stop flag is observed at node entry, so the final node may push the\n    // counter one or two past the limit.\n    assert!(result.nodes <= 502, "node limit exceeded: {}", result.nodes);
+    // The stop flag is observed at node entry, so the final node may push the
+    // counter one or two past the limit.
+    assert!(result.nodes <= 502, "node limit exceeded: {}", result.nodes);
     assert!(result.nodes > 0);
     assert!(
         legal(&position).as_slice().contains(&result.best_move),
@@ -126,12 +129,124 @@ fn bench_positions_return_legal_moves() {
 
 /// Recorded depth-6 bench total (Hash 256 MB, one thread).
 ///
-/// This value must be identical on every host and in debug and release builds;
-/// if a search change alters it on purpose, update this constant together with
-/// `docs/baselines.md` and `docs/decisions/ADR-0003-search-parity-baseline.md`.
-const BENCH_DEPTH_6_NODES: u64 = 14_963;
+/// This value is the node-identity total of the predecessor engine, and it
+/// must be identical on every host and in debug and release builds. If a
+/// search change alters it, the change is a search change: update this
+/// constant together with `docs/baselines.md` and the golden files, and record
+/// the reason.
+const BENCH_DEPTH_6_NODES: u64 = 14_979;
 
 #[test]
 fn bench_node_totals_match_the_recorded_baseline() {
     assert_eq!(bench::total_nodes(6), BENCH_DEPTH_6_NODES);
+}
+
+/// Per-position node counts of the predecessor engine for depths 1 to 8, in
+/// `bench::BENCH_POSITIONS` order. A fixed-depth search to depth N visits
+/// exactly the nodes of the first N iterations of a deeper search, so one
+/// depth-8 search per position can be checked at every depth.
+const REFERENCE_NODES: [[u64; 4]; 8] = [
+    [47, 110, 33, 371],
+    [213, 331, 140, 893],
+    [439, 551, 273, 1_251],
+    [1_204, 965, 1_068, 1_757],
+    [3_947, 1_660, 1_299, 3_025],
+    [5_728, 2_706, 2_011, 4_534],
+    [10_815, 4_277, 2_855, 6_117],
+    [27_811, 7_774, 4_737, 7_881],
+];
+
+#[test]
+fn bench_node_counts_are_identical_to_the_reference_per_position_and_depth() {
+    for (index, fen) in bench::BENCH_POSITIONS.iter().enumerate() {
+        let position = verified(fen);
+        let mut searcher = Searcher::new(bench::BENCH_TT_MEGABYTES);
+        searcher.clear();
+        let mut seen = Vec::new();
+        searcher.search(&position, Limits::depth(8), &mut |info| {
+            seen.push((info.depth, info.nodes));
+        });
+        assert_eq!(seen.len(), REFERENCE_NODES.len(), "{fen}: iterations");
+        for (depth_index, expected) in REFERENCE_NODES.iter().enumerate() {
+            let (depth, nodes) = seen[depth_index];
+            assert_eq!(depth as usize, depth_index + 1);
+            assert_eq!(
+                nodes,
+                expected[index],
+                "position {} differs from the reference at depth {depth}",
+                index + 1
+            );
+        }
+    }
+}
+
+#[test]
+fn singular_verification_lever_is_off_by_default_and_changes_the_search_when_on() {
+    // Off (the default) reproduces the reference: depth 9 of the start position
+    // is 41,511 nodes there, and singular extensions never fire. The
+    // KnightByte-only lever makes the verification search the alternatives,
+    // which must change the tree.
+    let position = verified(STARTPOS);
+
+    let mut reference = Searcher::new(bench::BENCH_TT_MEGABYTES);
+    reference.clear();
+    let off = reference.search(&position, Limits::depth(9), &mut |_| {});
+    assert_eq!(
+        off.nodes, 41_511,
+        "default behaviour must match the reference"
+    );
+
+    let mut research = Searcher::new(bench::BENCH_TT_MEGABYTES);
+    research.clear();
+    research.params_mut().singular_exclude_tt_cutoff = true;
+    let on = research.search(&position, Limits::depth(9), &mut |_| {});
+    assert_ne!(on.nodes, off.nodes, "the lever had no effect on the search");
+}
+
+#[test]
+fn a_timed_search_is_measured_from_the_go_command_not_from_an_earlier_search() {
+    // Regression: the search clock used to be restarted inside `search()`,
+    // after the time manager had stored its absolute limits on the old clock.
+    // Every timed search then overran by the time since the previous search
+    // began (about a second between two moves of a game), which lost games on
+    // time. Here the previous search began more than 400 ms before the `go`.
+    let position = verified(STARTPOS);
+    let mut searcher = Searcher::new(16);
+    searcher.search(&position, Limits::depth(3), &mut |_| {});
+    std::thread::sleep(Duration::from_millis(400));
+
+    searcher.init_movetime(150);
+    let started = Instant::now();
+    let result = searcher.search(&position, Limits::depth(64), &mut |_| {});
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(330),
+        "a 150 ms search ran for {elapsed:?}"
+    );
+    assert!(result.depth >= 1, "the first iteration always completes");
+    assert!(legal(&position).as_slice().contains(&result.best_move));
+}
+
+#[test]
+fn an_earlier_search_does_not_leak_into_the_next_one() {
+    // Everything that describes an earlier search's path (the per-ply stacks
+    // and the countermove table) is reset at the start of a search, and
+    // `clear()` forgets the learned tables. A used searcher must therefore
+    // behave exactly like a fresh one. This is a determinism guard: it
+    // protects the whole reset, but it does not isolate any single stack.
+    let first = verified(KIWIPETE);
+    let second = verified(STARTPOS);
+
+    let mut used = Searcher::new(16);
+    used.search(&first, Limits::depth(7), &mut |_| {});
+    used.clear();
+    let after_use = used.search(&second, Limits::depth(7), &mut |_| {});
+
+    let mut fresh = Searcher::new(16);
+    let from_fresh = fresh.search(&second, Limits::depth(7), &mut |_| {});
+
+    assert_eq!(after_use.nodes, from_fresh.nodes);
+    assert_eq!(after_use.best_move, from_fresh.best_move);
+    assert_eq!(after_use.score, from_fresh.score);
 }
