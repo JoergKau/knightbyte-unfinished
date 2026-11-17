@@ -140,6 +140,17 @@ pub struct SearchParams {
     pub use_qs_tt_probe: bool,
     /// Whether the first repetition of a position scores as a draw.
     pub use_twofold_repetition_draw: bool,
+    /// Whether the stable time-management model (the three-signal
+    /// soft-limit scaler) replaces the legacy PV-stability multipliers on
+    /// clock-controlled searches.
+    pub use_stable_time_management: bool,
+    /// Whether the two-sided clock-imbalance scaler runs (it supersedes the
+    /// one-sided time-advantage multiplier when enabled).
+    pub use_clock_imbalance: bool,
+    /// Ahead-side clock-imbalance scale, in percent of the ratio surplus.
+    pub clock_imbalance_ahead_scale: i32,
+    /// Behind-side clock-imbalance scale, in percent of the ratio deficit.
+    pub clock_imbalance_behind_scale: i32,
 }
 
 impl Default for SearchParams {
@@ -198,6 +209,10 @@ impl Default for SearchParams {
             use_eval_cache: false,
             use_qs_tt_probe: true,
             use_twofold_repetition_draw: true,
+            use_stable_time_management: true,
+            use_clock_imbalance: false,
+            clock_imbalance_ahead_scale: 50,
+            clock_imbalance_behind_scale: 50,
         }
     }
 }
@@ -262,5 +277,9 @@ mod tests {
         );
         assert!(params.use_qs_tt_probe);
         assert!(params.use_twofold_repetition_draw);
+        assert!(params.use_stable_time_management);
+        assert!(!params.use_clock_imbalance);
+        assert_eq!(params.clock_imbalance_ahead_scale, 50);
+        assert_eq!(params.clock_imbalance_behind_scale, 50);
     }
 }

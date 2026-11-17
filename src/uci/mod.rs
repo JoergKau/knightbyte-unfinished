@@ -17,7 +17,7 @@ use crate::output::Output;
 use crate::search::limits::Limits;
 use crate::search::options::{LEVERS, OptionKind, PUBLIC_OPTIONS};
 use crate::search::searcher::{MATE_LIMIT, MATE_SCORE, SearchInfo, Searcher};
-use crate::search::time_manager::{TimeControl, allocate, fixed};
+use crate::search::time_manager::TimeControl;
 use crate::tools::bench;
 
 pub mod parser;
@@ -121,8 +121,12 @@ fn apply_uci_move(position: &Position, text: &str) -> Result<Position, String> {
 /// Parses the limiters of a `go` command.
 ///
 /// Clock limiters are read as absolute white/black values and then selected for
-/// the side to move.
-fn parse_go(line: &str, position: Option<&Position>, overhead_ms: u64) -> Result<Limits, String> {
+/// the side to move. Returns the search limits (depth/nodes) and the
+/// time-manager setup.
+fn parse_go(
+    line: &str,
+    position: Option<&Position>,
+) -> Result<(Limits, Option<TimeSetup>), String> {
     let mut limits = Limits::default();
     let mut limited = false;
     let mut fixed_time = None;
@@ -132,6 +136,7 @@ fn parse_go(line: &str, position: Option<&Position>, overhead_ms: u64) -> Result
     let mut black_inc = 0_u64;
     let mut moves_to_go = None;
     let mut clock_seen = false;
+    let time_setup: Option<TimeSetup>;
     let mut tokens = line.split_whitespace().skip(1);
 
     while let Some(token) = tokens.next() {
@@ -177,6 +182,9 @@ fn parse_go(line: &str, position: Option<&Position>, overhead_ms: u64) -> Result
                     _ => moves_to_go = Some(value as u32),
                 }
             }
+            "infinite" => {
+                limited = true;
+            }
             other => {
                 return Err(format!("go limiter '{other}' is not supported yet"));
             }
@@ -184,29 +192,42 @@ fn parse_go(line: &str, position: Option<&Position>, overhead_ms: u64) -> Result
     }
 
     if let Some(move_time) = fixed_time {
-        let time_limits = fixed(move_time, overhead_ms);
-        limits.soft_time_ms = time_limits.soft_time_ms;
-        limits.hard_time_ms = time_limits.hard_time_ms;
+        time_setup = Some(TimeSetup::Fixed(move_time));
     } else if clock_seen {
         let white_to_move = position.is_none_or(|position| position.side_to_move_is_white());
-        let control = TimeControl {
+        time_setup = Some(TimeSetup::Clock(TimeControl {
             time_left_ms: if white_to_move {
                 white_time
             } else {
                 black_time
             },
+            opponent_time_ms: if white_to_move {
+                black_time
+            } else {
+                white_time
+            },
             increment_ms: if white_to_move { white_inc } else { black_inc },
             moves_to_go,
-        };
-        let time_limits = allocate(control, overhead_ms);
-        limits.soft_time_ms = time_limits.soft_time_ms;
-        limits.hard_time_ms = time_limits.hard_time_ms;
+        }));
+    } else {
+        time_setup = Some(TimeSetup::Infinite);
     }
 
     if !limited {
         limits.depth = Some(DEFAULT_GO_DEPTH);
     }
-    Ok(limits)
+    Ok((limits, time_setup))
+}
+
+/// The time-manager setup extracted from a `go` command.
+#[derive(Debug)]
+enum TimeSetup {
+    /// A fixed `movetime` budget.
+    Fixed(u64),
+    /// Clock-controlled search.
+    Clock(TimeControl),
+    /// No time limit.
+    Infinite,
 }
 
 /// Searches the current position and prints the UCI transcript.
@@ -216,8 +237,8 @@ fn handle_go(
     searcher: &mut Searcher,
     output: &mut Output,
 ) -> io::Result<()> {
-    let limits = match parse_go(line, position, searcher.move_overhead()) {
-        Ok(limits) => limits,
+    let (limits, time_setup) = match parse_go(line, position) {
+        Ok((limits, time_setup)) => (limits, time_setup),
         Err(message) => {
             output.line(&format!("info string {message}"))?;
             return Ok(());
@@ -227,6 +248,11 @@ fn handle_go(
         output.line("info string no position set")?;
         return Ok(());
     };
+    match time_setup {
+        Some(TimeSetup::Fixed(move_time)) => searcher.init_movetime(move_time),
+        Some(TimeSetup::Clock(control)) => searcher.init_clock(&control),
+        _ => searcher.init_infinite(),
+    }
 
     let mut write_error: Option<io::Error> = None;
     let result = searcher.search(position, limits, &mut |info| {
@@ -397,7 +423,7 @@ fn handle_set_option(line: &str, searcher: &mut Searcher, output: &mut Output) -
 
 #[cfg(test)]
 mod tests {
-    use super::parse_go;
+    use super::{TimeSetup, parse_go};
     use crate::board::fen::STARTPOS_FEN;
     use crate::board::position::Position;
 
@@ -407,36 +433,58 @@ mod tests {
 
     #[test]
     fn depth_and_nodes_limiters_parse() {
-        let by_depth = parse_go("go depth 5", None, 50).unwrap();
+        let (by_depth, setup) = parse_go("go depth 5", None).unwrap();
         assert_eq!(by_depth.depth, Some(5));
-        let by_nodes = parse_go("go nodes 1234", None, 50).unwrap();
+        assert!(matches!(setup, Some(TimeSetup::Infinite)));
+        let (by_nodes, _) = parse_go("go nodes 1234", None).unwrap();
         assert_eq!(by_nodes.nodes, Some(1_234));
     }
 
     #[test]
-    fn movetime_becomes_a_time_budget() {
-        let limits = parse_go("go movetime 100", None, 50).unwrap();
-        assert_eq!(limits.soft_time_ms, Some(50));
-        assert_eq!(limits.hard_time_ms, Some(50));
+    fn movetime_becomes_a_fixed_budget() {
+        let (_, setup) = parse_go("go movetime 100", None).unwrap();
+        match setup {
+            Some(TimeSetup::Fixed(milliseconds)) => assert_eq!(milliseconds, 100),
+            other => panic!("expected a fixed movetime setup, got {other:?}"),
+        }
     }
 
     #[test]
     fn clocks_are_selected_for_the_side_to_move() {
         let white = startpos();
-        let white_limits =
-            parse_go("go wtime 1000 btime 2000 winc 0 binc 0", Some(&white), 50).unwrap();
-        assert!(white_limits.soft_time_ms.unwrap() <= 951);
+        let (_, white_setup) =
+            parse_go("go wtime 1000 btime 2000 winc 0 binc 0", Some(&white)).unwrap();
+        match white_setup {
+            Some(TimeSetup::Clock(control)) => {
+                assert_eq!(control.time_left_ms, 1_000);
+                assert_eq!(control.opponent_time_ms, 2_000);
+            }
+            other => panic!("expected a clock setup, got {other:?}"),
+        }
 
         let black =
             Position::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1").unwrap();
-        let black_limits =
-            parse_go("go wtime 1000 btime 2000 winc 0 binc 0", Some(&black), 50).unwrap();
-        assert!(black_limits.soft_time_ms.unwrap() > white_limits.soft_time_ms.unwrap());
+        let (_, black_setup) =
+            parse_go("go wtime 1000 btime 2000 winc 0 binc 0", Some(&black)).unwrap();
+        match black_setup {
+            Some(TimeSetup::Clock(control)) => {
+                assert_eq!(control.time_left_ms, 2_000);
+                assert_eq!(control.opponent_time_ms, 1_000);
+            }
+            other => panic!("expected a clock setup, got {other:?}"),
+        }
     }
 
     #[test]
     fn unsupported_limiters_are_reported() {
-        assert!(parse_go("go infinite", None, 50).is_err());
-        assert!(parse_go("go ponder", None, 50).is_err());
+        assert!(parse_go("go ponder", None).is_err());
+        assert!(parse_go("go nonsense", None).is_err());
+    }
+
+    #[test]
+    fn infinite_is_supported() {
+        let (limits, setup) = parse_go("go infinite", None).unwrap();
+        assert_eq!(limits.depth, None);
+        assert!(matches!(setup, Some(TimeSetup::Infinite)));
     }
 }

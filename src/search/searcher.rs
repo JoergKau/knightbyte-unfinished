@@ -22,6 +22,7 @@ use crate::search::limits::Limits;
 use crate::search::move_picker::PickerState;
 use crate::search::params::SearchParams;
 use crate::search::pv::PvTable;
+use crate::search::time_manager::{TimeControl, TimeManager};
 use crate::search::tt::{Bound, TranspositionTable, TtEntry, score_from_tt, score_to_tt};
 use crate::types::color::{BLACK, Color, WHITE};
 use crate::types::r#move::Move;
@@ -111,6 +112,12 @@ pub struct Searcher {
     /// One staged-picker state per ply (the reference's per-thread per-ply
     /// picker buffers).
     pub(crate) picker: Box<[PickerState]>,
+    /// Stateful time manager: allocation, the stop decisions and the
+    /// stability trackers.
+    pub(crate) time_manager: TimeManager,
+    /// Nodes spent per root move, indexed `from * 64 + to`; the time
+    /// manager's node-fraction term reads the best move's share.
+    pub(crate) nodes_per_move: Box<[u64; 64 * 64]>,
     /// Per-move time overhead subtracted from every budget, in milliseconds.
     pub(crate) move_overhead_ms: u64,
     /// Start of the current search, used for the time budgets.
@@ -148,6 +155,8 @@ impl Searcher {
             move_counts: vec![0; MAX_PLY + 1].into_boxed_slice(),
             reduction_stack: vec![0; MAX_PLY + 1].into_boxed_slice(),
             picker: (0..=MAX_PLY).map(|_| PickerState::new()).collect(),
+            time_manager: TimeManager::new(),
+            nodes_per_move: Box::new([0; 64 * 64]),
             move_overhead_ms: crate::search::time_manager::DEFAULT_MOVE_OVERHEAD_MS,
             start: std::time::Instant::now(),
             completed_depth: 0,
@@ -193,6 +202,43 @@ impl Searcher {
         self.move_overhead_ms = milliseconds;
     }
 
+    /// Initializes the time manager for a clock-controlled search.
+    pub fn init_clock(&mut self, control: &TimeControl) {
+        self.sync_time_levers();
+        self.time_manager
+            .init(control, self.move_overhead_ms, self.now_ms());
+    }
+
+    /// Initializes the time manager for a fixed `movetime` search.
+    pub fn init_movetime(&mut self, milliseconds: u64) {
+        self.sync_time_levers();
+        self.time_manager
+            .set_fixed_time(milliseconds, self.move_overhead_ms, self.now_ms());
+    }
+
+    /// Switches the time manager to infinite mode.
+    pub fn init_infinite(&mut self) {
+        self.sync_time_levers();
+        self.time_manager.set_infinite();
+    }
+
+    /// Pushes the time-management levers from the parameters into the
+    /// manager. The clock-imbalance scales must be live before
+    /// [`TimeManager::init`] runs, because the allocation reads them.
+    fn sync_time_levers(&mut self) {
+        self.time_manager.set_levers(
+            self.params.use_stable_time_management,
+            self.params.use_clock_imbalance,
+            self.params.clock_imbalance_ahead_scale,
+            self.params.clock_imbalance_behind_scale,
+        );
+    }
+
+    /// Milliseconds elapsed since the search's start.
+    pub(crate) fn now_ms(&self) -> u64 {
+        self.start.elapsed().as_millis() as u64
+    }
+
     /// Returns the configured per-move overhead.
     pub fn move_overhead(&self) -> u64 {
         self.move_overhead_ms
@@ -216,6 +262,7 @@ impl Searcher {
         self.stopped = false;
         self.pv.reset();
         self.killers.clear();
+        *self.nodes_per_move = [0; 64 * 64];
         self.tt.new_generation();
 
         let root_moves = crate::board::movegen::legal(position);
@@ -247,9 +294,6 @@ impl Searcher {
         let mut last_score = 0;
 
         for depth in 1..=max_depth {
-            if depth > 1 && self.soft_time_expired() {
-                break;
-            }
             let Some((score, pv)) = self.search_root(position, depth, last_score) else {
                 break;
             };
@@ -270,13 +314,31 @@ impl Searcher {
                 nodes: best.nodes,
                 pv: best.pv.clone(),
             });
+
+            // Time management: record the completed depth, feed the node
+            // statistics and the best-move stability, then decide whether
+            // the next iteration starts. The mate score breaks first — a
+            // proven mate needs no more depth.
+            if score.abs() >= MATE_LIMIT {
+                break;
+            }
+            self.time_manager.set_completed_depth(depth);
+            let best_index =
+                usize::from(best.best_move.from()) * 64 + usize::from(best.best_move.to());
+            let best_nodes = self.nodes_per_move[best_index];
+            self.time_manager.set_node_stats(best_nodes, self.nodes);
+            self.time_manager
+                .update_pv_stability(best_index as i32, true);
+            if !self
+                .time_manager
+                .should_continue(self.now_ms(), best_index as i32, score)
+            {
+                break;
+            }
             // History ages by 7/8 per completed iteration from depth 4 on,
             // matching the reference's saturation regulator.
             if depth >= 4 {
                 self.history.age();
-            }
-            if score.abs() >= MATE_LIMIT {
-                break;
             }
         }
 
@@ -332,11 +394,12 @@ impl Searcher {
                 continue;
             }
             if score <= alpha {
-                // TEMPORARY BISECT: old widening behaviour.
-                alpha = (score - delta).max(-INFINITE);
-                beta = INFINITE;
-            } else if score >= beta {
-                beta = (score + delta).min(INFINITE);
+                // Fail-low: halve the window and shift alpha by the delta.
+                beta = (alpha + beta) / 2;
+                alpha -= delta;
+            } else {
+                // Fail-high: raise beta by the delta.
+                beta += delta;
             }
             delta += delta / 2;
             cycles += 1;
@@ -367,22 +430,13 @@ impl Searcher {
         {
             self.stopped = true;
         }
-        // The first completed iteration is always allowed to finish, so a
-        // search never returns without at least one reported depth.
-        if let Some(limit) = self.limits.hard_time_ms
-            && self.completed_depth >= 1
-            && self.start.elapsed().as_millis() as u64 >= limit
-        {
+        // The time manager decides on the hard limit and the effective soft
+        // limit (with the min-depth guard: a soft stop never plays a
+        // shallow blunder).
+        if !self.stopped && self.time_manager.should_stop(self.now_ms()) {
             self.stopped = true;
         }
         self.stopped
-    }
-
-    /// Returns whether the soft time budget has been spent.
-    pub(crate) fn soft_time_expired(&self) -> bool {
-        self.limits
-            .soft_time_ms
-            .is_some_and(|limit| self.start.elapsed().as_millis() as u64 >= limit)
     }
 
     /// Returns whether the current position repeats a position on the path or

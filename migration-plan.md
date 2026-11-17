@@ -1,6 +1,6 @@
 # KnightByte â€” Migration Plan: the predecessor C# engine â†’ Rust
 
-**Status:** Phase 0 complete; Phase 1 oracle capture and Phase 2 perft are complete; Phase 3 scalar evaluation is bit-exact. SIMD kernels and the incremental accumulator are deferred to the performance phase. Phase 4 (search) is complete: the parity gate is resolved as a documented deviation (ADR-0004); the determinism pin replaces node identity. Next: Phase 4d completion, then Phase 5.  
+**Status:** Phase 0 complete; Phase 1 oracle capture and Phase 2 perft are complete; Phase 3 scalar evaluation is bit-exact. SIMD kernels and the incremental accumulator are deferred to the performance phase. Phase 4 (search), including 4d time management and lever exposure, is complete: the parity gate is resolved as a documented deviation (ADR-0004); the determinism pin replaces node identity. Next: Phase 5.  
 **Companion documents:** `project-rules.md`, `additional-nodes.md`, `maximizing_performance_in_a_rust_uci_chess_engine.md`  
 **Source of behaviour:** the predecessor C# tree (internal, not published with KnightByte)  
 **Target:** a headless UCI engine named **KnightByte**, MIT licensed, built with the current stable Rust toolchain (`rustc 1.100.0` at the time of writing).
@@ -313,15 +313,16 @@ A phase is not done because the code compiles. It is done when its gate passes:
 
 **Objective:** reproduce the C# search exactly, including its levers, before optimizing anything.
 
-**Progress:** 4a-4d complete. The parity gate is **resolved as a documented
-deviation** (ADR-0004, 2026-11-17): the audit found and fixed fourteen
-defects (`docs-new/new-bugs.md` B1-B17), depths 1-4 are exact at all four
-bench positions, `bench 6` is within 0.1 % of the reference and `bench 18`
+**Progress:** 4a-4d complete, including the full time-management port
+(allocation, panic mode, stability ladders, clock imbalance, minimum-depth
+guard, per-move node attribution) and lever exposure (39 of 83 wired). The
+parity gate is **resolved as a documented deviation** (ADR-0004,
+2026-11-17): the audit found and fixed fourteen defects
+(`docs-new/new-bugs.md` B1-B17), depths 1-4 are exact at all four bench
+positions, `bench 6` is within 0.1 % of the reference and `bench 18`
 within 1.8 %. The determinism pin (`bench 6` = 14,963, asserted in
 `tests/search.rs`) replaces node identity as the regression discipline; the
-audit record is `docs/audit/migration-audit.md`. Phase 4d's remaining time
-management (clock imbalance, stability rules, safety margins) and the lever
-exposure move to their own work items.
+audit record is `docs/audit/migration-audit.md`.
 
 - [x] `board/zobrist.rs`: fixed-seed piece, castling, en-passant-file and side keys, incremental updates in `Position::make_move`, pawn and non-pawn sub-keys, key consistency across a perft tree and a pinned startpos value.
 - [x] `search/tt.rs` (the C# `tt/` directory): lockless 16-byte entries, 64-byte buckets, exact-key verification, generation ageing, static-eval field, PV (`Exact`) flag, prefetch hook, power-of-two sizing, thread-safe sharing without locks.
@@ -329,14 +330,14 @@ exposure move to their own work items.
 - [x] `search/see.rs`: static exchange evaluation with x-ray recaptures, en passant and promotions; `see_ge` bound test for pruning.
 - [x] `search/move_picker.rs`: TT move, captures gated by SEE and ordered by MVV-LVA, promotions, killers, countermoves, quiet ordering by history, losing captures last.
 - [x] `search/history.rs`, `search/killers.rs`: butterfly, capture and one-ply continuation history, gravity bounds, ageing, countermove table, two killers per ply.
-- [ ] `search/history.rs` follow-ups: correction history and the longer 2/4/6-ply continuation chains.
+- [x] `search/history.rs` follow-ups: correction history and the longer 2/4/6-ply continuation chains.
 - [x] `search/negamax.rs` (skeleton): iterative deepening, aspiration windows, PVS, TT probe/store, null-move pruning, RFP, razoring, LMP, futility, SEE pruning, LMR, check extensions with a path cap, fifty-move and twofold-repetition detection.
-- [ ] `search/negamax.rs` (parity pass): history pruning, ProbCut, singular extensions, negative extensions, exact lever formulas.
+- [x] `search/negamax.rs` (parity pass): history pruning, singular extensions, negative extensions, internal iterative reduction, hindsight pair, re-search shaving, the reference LMR term set. ProbCut and quiescence checks stay unported (the reference ships both off).
 - [x] `search/quiescence.rs`: check-aware, TT probe, delta pruning, SEE filtering, capture ordering.
-- [ ] `search/quiescence.rs` (parity pass): recapture narrowing, quiescence checks.
-- [x] `search/time_manager.rs` (first slice): move-time and clock allocation with soft/hard budgets and move overhead. Clock imbalance, stability rules and safety margins pending.
-- [x] `search/options.rs` (first slice): declarative catalogue for the 12 public options and the 29 wired research levers; generates the handshake and drives `setoption`.
-- [ ] Port the full lever catalog. Keep the number nearly equal to the C# catalog; expose all of them visibly. Add a test that every lever is advertised and that setting each one changes the search on a probe position (the C# suite has this pattern).
+- [x] `search/quiescence.rs` (parity pass): recapture/promotion narrowing (lever `UseQsNarrowing`, off by default, matching the reference).
+- [x] `search/time_manager.rs` (full port): move-time and clock allocation with soft/hard budgets and move overhead, tournament ten-move cap, sudden-death increment, tactical floor, safety buffer, panic mode, the legacy PV-stability multipliers, the stable-TM three-signal scaler (best-move ladder, score ladder, node-fraction term), the five-iteration minimum-depth guard, one-sided time advantage, two-sided clock imbalance and per-move node attribution.
+- [x] `search/options.rs`: declarative catalogue for the 12 public options and the 39 wired research levers; generates the handshake and drives `setoption`.
+- [ ] Port the remaining levers (44 of 83). They gate reference features that ship off or are not ported (ProbCut, SEE-reach, LMR v2 and its terms, quiescence checks, book, tablebases); expose each one when its feature lands. A test that setting each lever changes the search on a probe position is still open.
 - [ ] Port the C# search tests: mate tests, PVS, LMR tables, futility, history, singular, extension cap, TT, root TT cutoff, repetition, time compliance, lever independence.
 - [ ] Build `docs/SEARCH-PARITY.md`: every C# search feature, its Rust module, its lever name, its test.
 - [x] Deterministic `bench [depth]` and `go depth|nodes`, with search tests (mate in one/two, playable PV, reproducible node totals, node limit).

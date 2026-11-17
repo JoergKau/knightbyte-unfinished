@@ -93,8 +93,9 @@ replaces node identity. See `docs/SEARCH-PARITY.md`,
       limit, null-move key consistency, legal bench best moves.
 - [x] Option catalogue: defaults match `SearchParams`, every advertised lever
       round-trips, spin values clamp, names are unique.
-- [x] Time management: fixed-time and clock allocation unit tests; timed `go`
-      covered by a UCI smoke test.
+- [x] Time management: fixed-time and clock allocation unit tests; the
+      stability ladders, panic mode, clock imbalance and the minimum-depth
+      guard are unit-tested; timed `go` covered by a UCI smoke test.
 - [x] Network loader and evaluation parity tests.
 - [x] Every FEN used by a test is verified by an external UCI verifier at test
       time.
@@ -127,11 +128,21 @@ replaces node identity. See `docs/SEARCH-PARITY.md`,
 - [x] Quiescence search with TT probe/store, SEE filtering and delta pruning
       (including the reference's en-passant classification quirk).
 - [x] Time allocation from `movetime` and the clocks (soft and hard budgets,
-      move overhead).
-- [ ] Clock-imbalance weighting, stability rules and persistent Lazy SMP
-      workers.
-- [ ] Full lever catalogue parity (31 of the 83 research levers are wired and
-      advertised; the rest are exposed in Phase 4d).
+      move overhead): tournament share capped at a ten-move slice, sudden-death
+      clock/30 plus the full increment, tactical floor, safety buffer, hard
+      limit = min(4× allocation, clock/4), overhead-clamped soft limit.
+- [x] Stability rules: panic mode (1.5× on a collapsing score), the legacy
+      PV-stability multipliers, and the stable-TM three-signal scaler
+      (best-move ladder, score ladder, node-fraction term, clamped
+      0.12–2.45) with the five-iteration minimum-depth guard; per-move node
+      attribution feeds the node-fraction term.
+- [x] Clock-imbalance weighting (two-sided, off by default, supersedes the
+      one-sided time-advantage multiplier, which is on).
+- [ ] Persistent Lazy SMP workers.
+- [ ] Full lever catalogue parity (39 of the 83 research levers are wired and
+      advertised; the remaining 44 gate reference features that ship off or
+      are not ported — ProbCut, SEE-reach, LMR v2, quiescence checks, book,
+      tablebases).
 - [x] Search-parity gate resolved as a documented deviation (ADR-0004);
       depths 1-4 exact, `bench 6` within 0.1 % of the reference.
 - [ ] Exact search-parity gate (`bench 6/12/16/18` node-identical).

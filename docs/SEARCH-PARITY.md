@@ -365,17 +365,17 @@ then the full table.
 
 | Reference | KnightByte | Status |
 | :--- | :--- | :--- |
-| `Search/Search.cs` | `search/searcher.rs` | Partial: state, driver, draw detection; threads/time missing |
+| `Search/Search.cs` | `search/searcher.rs` | Ported: state, driver, draw detection, time-manager integration, per-move node attribution; threads missing (Phase 5) |
 | `Search/Search.IterativeDeepening.cs` | `search/searcher.rs` | Ported: aspiration widening, aging, single-legal fallback |
 | `Search/Search.Negamax.cs` | `search/negamax.rs` | Ported for the default configuration: PVS, cut-node threading, hindsight, IIR, singular, negative extensions, pruning stack, LMR v1, re-search shave |
 | `Search/Search.Reduction.cs` | `search/negamax.rs` (LMR helpers) | Ported: base table, re-search depth, singular tiers |
 | `Search/QuiescenceSearch.cs` | `search/quiescence.rs` | Ported for the default configuration; capture ordering now uses the classical values and the capture-history cell |
 | `Search/MovePicker.cs` | `search/move_picker.rs`, `search/quiescence.rs` | Tier approximation with the reference emission order and scores; the lazy stages are not replicated |
 | `Search/SearchHeuristics.cs` | `search/history.rs`, `search/correction.rs` | Ported: butterfly/capture/1-2-4-6-ply continuation (reference keying) and correction history |
-| `Search/Search.Options.cs` | `search/params.rs` | Defaults mirrored for the shipped configuration; lever exposure pending (54 of 83) |
+| `Search/Search.Options.cs` | `search/params.rs`, `search/options.rs` | Defaults mirrored for the shipped configuration; 39 of 83 levers wired and advertised (the rest gate off-by-default or unported features) |
 | `Search/EvalCache.cs` | `search/eval_cache.rs` | Structural parity; disabled by default in both |
 | `Search/PvTable.cs` | `search/pv.rs` | Ported |
-| `Search/TimeManager.cs` | `search/time_manager.rs` | First slice (Phase 4d) |
+| `Search/TimeManager.cs` | `search/time_manager.rs` | Ported (Phase 4d complete): allocation, panic mode, stability ladders, clock imbalance, minimum-depth guard, node attribution |
 | `TranspositionTable/TranspositionTable.cs` | `search/tt.rs` | Ported: 5-bit generation, depth-2 ageing, deeper-keep rule, no guard |
 | `Board/Position.See.cs` | `search/see.rs` | Ported (values, swap list, `-1` tie-break, pins) |
 | `Board/Position.Draw.cs` | `searcher::is_draw` | Fifty-move and twofold match; contempt not implemented |
@@ -388,8 +388,10 @@ then the full table.
 * The reference exposes 82 further internal search properties that are not in
   the catalogue. They still shape node counts, so the parity pass reads the
   source, not the catalogue.
-* KnightByte's `SearchParams` currently carries 22 of the 83, and only the
-  simple ones (thresholds, switches) are formula-exact.
+* KnightByte's `SearchParams` carries the shipped-configuration defaults for
+  all ported features, and `search/options.rs` advertises 39 of the 83
+  catalogue levers; the remaining 44 gate features that ship off in the
+  reference or are not ported yet.
 
 ## 8. Rules for the parity pass
 

@@ -3,24 +3,29 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17; the earlier
 development history is kept in the private archive `JoergKau/knightbyte-archive`.  
-**Last updated:** 2026-11-17 (parity gate resolved by ADR-0004)  
+**Last updated:** 2026-11-17 (Phase 4 complete, including 4d time management)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
 
-Phases 0–3 are complete and verified. Phase 4 (search) is **complete**: the
-migration audit found and fixed fourteen porting defects
+Phases 0–3 are complete and verified. Phase 4 (search) is **complete,
+including 4d**: the migration audit found and fixed fourteen porting defects
 (`docs-new/new-bugs.md` B1–B17, `docs/audit/migration-audit.md`), depths 1–4
 are exact at all four bench positions, `bench 6` is within 0.1 % of the
 reference (14,963 vs 14,979) and `bench 18` within 1.8 %. The parity gate is
 **resolved as a documented deviation** (ADR-0004): the determinism pin
 (`bench 6` = 14,963, asserted in `tests/search.rs`) replaces node identity as
-the regression discipline. Next: Phase 4d's remaining time management, then
-Phase 5 (UCI, threading, `stop`).
+the regression discipline. The full time-management port is in (allocation
+with the tournament cap, sudden-death increment, tactical floor and safety
+buffer; panic mode; the legacy PV-stability multipliers; the stable-TM
+three-signal scaler with the five-iteration minimum-depth guard; one-sided
+time advantage; two-sided clock imbalance; per-move node attribution), and
+39 of the 83 research levers are wired and advertised. Next: Phase 5
+(threading, `stop`/`ponderhit`, Lazy SMP).
 
-Verification status on the last run: all 149 tests pass locally on Windows
+Verification status on the last run: all 159 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
-fmt/clippy clean.
+fmt/clippy clean; `bench 6` pin = 14,963.
 
 ---
 
@@ -64,17 +69,32 @@ fmt/clippy clean.
 - Tests: mate in one/two, playable PV, deterministic nodes, node limits, legal
   bench moves, reproducible bench totals.
 
-### Phase 4d — time and options (first slice complete)
+### Phase 4d — time and options (complete)
 
-- `search/time_manager.rs`: `movetime` and clock allocation with soft/hard
-  budgets and move overhead; `go wtime/btime/winc/binc/movestogo` supported.
-- `search/options.rs`: declarative catalogue of the 12 public options plus the 29
-  research levers that are actually wired into the search. `uci` advertises them;
-  `setoption` applies them. `Hash`, `Clear Hash` and `Move Overhead` are
-  functional; the book/tablebase/`EvalFile`/`Contempt` names are accepted and
-  inert by design.
-- The first iteration always completes, so a timed search always reports at least
-  `info depth 1` and a `bestmove`.
+- `search/time_manager.rs`: stateful manager — `movetime` (soft 95 % / hard
+  100 %) and clock allocation (tournament share with the ten-move cap,
+  sudden-death clock/30 + full increment, tactical floor, safety buffer,
+  hard = min(4× allocation, clock/4), overhead-clamped soft limit);
+  `go wtime/btime/winc/binc/movestogo/movetime/infinite` supported.
+- Stopping: panic mode (1.5× on a collapsing score), the legacy
+  PV-stability multipliers, and the stable-TM three-signal scaler
+  (best-move ladder × score ladder × node-fraction term, clamped 0.12–2.45
+  and to hard − overhead) with the five-iteration minimum-depth guard.
+- One-sided time-advantage reinvestment and the two-sided clock-imbalance
+  scaler (off by default, supersedes the advantage term).
+- Root-move node attribution (`nodes_per_move`) feeds the node-fraction
+  term; the UCI layer hands the manager a `TimeSetup` (fixed/clock/infinite).
+- `search/options.rs`: declarative catalogue of the 12 public options plus
+  the 39 research levers wired into the search (now including
+  `UseStableTimeManagement`, `UseClockImbalance`,
+  `ClockImbalanceAheadScale/BehindScale`, `UseLmrHistoryPrecision`,
+  `UseRefSeeThresholds`, `UseNegativeExtensions`, `UseTrioHindsight`,
+  `HistPruneMargin`). `uci` advertises them; `setoption` applies them.
+  `Hash`, `Clear Hash` and `Move Overhead` are functional; the
+  book/tablebase/`EvalFile`/`Contempt` names are accepted and inert by
+  design.
+- The first iteration always completes, so a timed search always reports at
+  least `info depth 1` and a `bestmove`.
 
 ### Reference oracle (for the parity work)
 
@@ -101,35 +121,35 @@ residual divergence (a learned-history-state seed from depth 5 on) is
 accepted and documented in `docs/decisions/ADR-0004-search-parity-deviation.md`.
 Do not reopen node-count forensics without a concrete defect symptom.
 
-### 2.2 Remaining time-management gaps (Phase 4d)
+### 2.2 Remaining time-management gaps — resolved
 
-Implemented: soft/hard budgets from clocks and `movetime`, move overhead, the
-first iteration always completes.
+Phase 4d is complete: allocation, panic mode, the stability rules, the
+clock-imbalance weighting, the minimum-depth guard and per-move node
+attribution are ported and unit-tested; the bench pins are unchanged.
 
-Missing: clock-imbalance weighting (`UseClockImbalance`, scales 50/50), stable
-time management, panic mode, best-move safety margins, and per-move node
-attribution for the time manager.
+Nothing pending here; the tournament-behaviour validation (does the new
+allocation actually use the clock well?) is a Phase 7 tuning item, not a
+correctness gap.
 
-Next action: finish 4d, then Phase 5.
+### 2.3 Lever exposure (44 of the 83 research levers are not exposed)
 
-### 2.3 Lever exposure (52 of the 83 research levers are not exposed)
+39 levers are wired and advertised (`search/options.rs`). The remaining 44
+gate reference features that ship off or are not ported (ProbCut, SEE-reach,
+LMR v2 and its terms, quiescence checks, book, tablebases); each lever is
+exposed when its feature lands.
 
-31 levers are wired and advertised (`search/options.rs`). The newly ported
-features (singular extensions, IIR, hindsight, history pruning, the SEE
-thresholds, the TT policy, ...) have `SearchParams` fields but no lever rows
-yet.
+Next action: still open is a test that setting each lever changes the search
+on a probe position (the C# suite has this pattern).
 
-Next action: extend `LEVERS` and `SearchParams` together; the tests
-`lever_defaults_match_the_parameters` and `every_lever_round_trips` keep the
-table honest.
+### 2.4 Threading, `stop`, `ponder` are not implemented
 
-### 2.4 Threading, `stop`, `ponder`, `go infinite` are not implemented
-
-The UCI loop is synchronous: `go` blocks until the search returns. `Threads` is
-advertised and accepted but the engine always searches on one thread.
+`go infinite` is accepted (the manager runs in infinite mode), but the UCI
+loop is synchronous: `go` blocks until the search returns, and there is no
+way to interrupt it. `Threads` is advertised and accepted but the engine
+always searches on one thread.
 
 Next action (Phase 5): search thread plus stop flag, `stop`/`ponderhit`,
-`go infinite`, Lazy SMP workers sharing the TT.
+Lazy SMP workers sharing the TT.
 
 ### 2.5 Inert public options
 
@@ -167,30 +187,24 @@ tool for files containing non-ASCII, or write with
 
 ### 2.9 Documentation items that only close with features
 
-- `migration-plan.md` Phase 4d/5 checklists partially unticked by design.
-- The audit's open items: `docs/audit/migration-audit.md` (time management,
-  lever exposure).
+- `migration-plan.md` Phase 5 checklists still open by design (threading is
+  next).
+- The audit's open items: `docs/audit/migration-audit.md` (only the
+  ADR-0004-moot forensics remain).
 
 ---
 
 ## 3. Recommended next steps, in order
 
-### 3.1 (Highest value) Finish Phase 4d time management, expose the levers
+### 3.1 Phase 5 — UCI robustness and threading (next)
 
-- Remaining 4d: clock imbalance (`UseClockImbalance`), stability rules,
-  best-move safety margins, per-move node attribution.
-- Extend `LEVERS` and `SearchParams` together for the newly ported features
-  (singular extensions, IIR, hindsight, history pruning, the SEE thresholds,
-  the TT policy); the tests `lever_defaults_match_the_parameters` and
-  `every_lever_round_trips` keep the table honest.
-
-### 3.2 Phase 5 — UCI robustness and threading
-
-- Search thread with `stop`/`ponderhit`/`go infinite`.
+- Search thread with `stop`/`ponderhit`; `go ponder`.
 - Lazy SMP workers sharing the TT, `setoption Threads`.
 - UCI transcript tests, `info` fields (nps, time, hashfull).
+- Optional follow-up from 4d: a probe-position test that every lever
+  measurably changes the search.
 
-### 3.3 Phase 7 — performance, then releases
+### 3.2 Phase 7 — performance, then releases
 
 - Incremental NNUE accumulator, SIMD kernels (NEON/AVX2/VNNI), slider and
   make/move optimizations; the 0.36 → ≥1.5 MNPS goal at the pinned node

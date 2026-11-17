@@ -85,7 +85,12 @@ and identical · [F] fixed during audit · [D] deliberate deviation (ADR)
 
 - The correction/history **update values** at matched nodes (the depth-5
   seed: the killer-state divergence visible at node 1481 of the startpos
-  depth-5 tree) — needs the return-score ledger diff with node alignment.
-- The qsearch node-accounting seed (the depth-1 tactical position, now +1
-  node, was -7).
-- Time management (Phase 4d) and the remaining lever exposure (54 of 83).
+  depth-5 tree) — moot while ADR-0004 stands: the residual divergence is the
+  documented, accepted deviation, and the determinism pin guards regressions.
+- Time management (Phase 4d) — **closed**: the full port (allocation, panic
+  mode, stability ladders, clock imbalance, minimum-depth guard, per-move
+  node attribution) is in and unit-tested; the pins are unchanged.
+- Lever exposure — **closed for the wired features**: 39 of 83 levers are
+  advertised; the remaining 44 gate reference features that ship off or are
+  not ported (ProbCut, SEE-reach, LMR v2, quiescence checks, book,
+  tablebases). They move with their features to later phases.

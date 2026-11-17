@@ -582,6 +582,11 @@ impl Searcher {
                 quiet_move_count += 1;
             }
 
+            // Root-move node attribution for the time manager's
+            // node-fraction term: the whole subtree of this move (including
+            // the re-searches) lands in its slot.
+            let nodes_before_move = if is_root { self.nodes } else { 0 };
+
             // Late move pruning: enough quiets have been tried that the rest
             // cannot realistically be best; stop trying quiets entirely (the
             // picker's quiet stage dies; bad captures are still served).
@@ -768,6 +773,11 @@ impl Searcher {
             }
             if self.stopped {
                 return 0;
+            }
+
+            if is_root {
+                self.nodes_per_move[usize::from(mv.from()) * 64 + usize::from(mv.to())] +=
+                    self.nodes - nodes_before_move;
             }
 
             if score <= alpha && quiet_counted && quiets_count < quiets_searched.len() {
