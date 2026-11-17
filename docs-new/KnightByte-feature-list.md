@@ -4,11 +4,13 @@ KnightByte is a UCI chess engine written in Rust. The neural network is fixed
 and embedded in the binary. This list tracks what is implemented and what is
 still planned; it is updated after every migration step.
 
-## Current status — Phases 0–3 complete; Phase 4 complete except the exact parity gate (2026-11-17)
+## Current status — Phases 0–3 complete; Phase 4 functionally complete, audit round done (2026-11-17)
 
-Parity status: `bench 6` −2.0 %, `bench 8` −8.1 %, `bench 12` −1.1 %,
-`bench 18` +22.8 %. One coupled port of the remaining reference search features
-is required; see `next-steps.md` §3.1 and `docs/SEARCH-PARITY.md`.
+Parity status: depths 1-4 exact at all four bench positions, `bench 6` −0.1 %
+(14,963 vs 14,979), `bench 18` −1.8 % (6,797,622 vs 6,925,762). The remaining
+divergence is one systematic seed in the correction/history update values from
+depth 5 on; see `docs/SEARCH-PARITY.md` §2, `docs/audit/migration-audit.md`
+and `docs-new/new-bugs.md` (B1-B17).
 
 ### Engine skeleton
 
@@ -77,7 +79,8 @@ is required; see `next-steps.md` §3.1 and `docs/SEARCH-PARITY.md`.
       maintained incrementally and split into pawn/non-pawn sub-keys.
 - [x] Static exchange evaluation with x-ray recaptures, en passant and
       promotions.
-- [ ] Insufficient-material draw detection.
+- [x] Insufficient-material draw detection (K vs K, K+N, K+B, same-coloured
+      KB vs KB) inside the search.
 
 ### Quality
 
@@ -99,25 +102,37 @@ is required; see `next-steps.md` §3.1 and `docs/SEARCH-PARITY.md`.
 
 ### Search
 
-- [x] Lock-free transposition table with generation aging and prefetch.
+- [x] Lock-free transposition table with the reference replacement policy
+      (5-bit generation, depth-2 ageing, same-key deeper-keep rule) and
+      prefetch.
 - [x] Static-evaluation cache and triangular principal-variation table.
-- [x] Iterative deepening, aspiration windows, PVS, TT probe and store.
-- [x] Fifty-move and twofold-repetition draw detection inside the search.
-- [x] Move picker: TT move, SEE-gated captures with MVV-LVA, promotions,
-      killers, countermoves and losing captures last.
-- [x] Butterfly, capture and continuation history with gravity bounds and
-      ageing.
-- [ ] Correction history and longer continuation chains.
-- [x] Null move, reverse futility, razoring, LMP, futility, SEE capture
-      pruning, LMR and check extensions.
-- [ ] History pruning, ProbCut, singular extensions and negative extensions.
-- [x] Quiescence search with TT probe, SEE filtering and delta pruning.
+- [x] Iterative deepening, aspiration windows with the reference widening,
+      PVS, TT probe and store.
+- [x] Fifty-move, twofold-repetition and insufficient-material draw detection
+      inside the search.
+- [x] Staged move picker: TT move, good captures (material + exchange +
+      capture history), killers, countermove, quiets by the combined history
+      score, losing captures last — with per-stage buffers and lazy scoring.
+- [x] Butterfly, capture and 1/2/4/6-ply continuation history with gravity
+      bounds and ageing (reference keying).
+- [x] Four-term correction history with the reference update gates.
+- [x] Null move (cut-node gate, fail-hard beta, mate fall-through), reverse
+      futility, razoring, LMP, futility, SEE pruning (depth-scaled with
+      history refund), LMR v1 term set, re-search depth shaving, check and
+      single-response extensions.
+- [x] History pruning, singular extensions (double/triple tiers), negative
+      extensions, internal iterative reduction, hindsight depth pair.
+- [x] Early TT-cutoff history bonus and the repetition gate for table
+      cutoffs.
+- [x] Quiescence search with TT probe/store, SEE filtering and delta pruning
+      (including the reference's en-passant classification quirk).
 - [x] Time allocation from `movetime` and the clocks (soft and hard budgets,
       move overhead).
 - [ ] Clock-imbalance weighting, stability rules and persistent Lazy SMP
       workers.
-- [ ] Full lever catalogue parity (29 of the 83 research levers are wired and
-      advertised; the rest need their features first).
+- [ ] Full lever catalogue parity (31 of the 83 research levers are wired and
+      advertised; the rest are exposed after the parity gate closes).
+- [ ] Exact search-parity gate (`bench 6/12/16/18` node-identical).
 
 ### Endgame and book
 
