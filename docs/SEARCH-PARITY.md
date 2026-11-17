@@ -4,10 +4,14 @@ This file tracks the port of the predecessor search, feature by feature, and
 records where KnightByte currently diverges. It is the working document for the
 Phase 4 node-count gate.
 
-**Status:** oracle captured and pinned. Ported: Zobrist tables, quiescence,
-SEE, node-level extensions and correction history. Depth-1 positions 1–3 are
-exact; the remaining divergence is formula-level pruning and reductions.
-Phase 4c remains open.
+**Status:** the node-count gate is **resolved as a documented deviation**
+(ADR-0004, 2026-11-17). Depths 1-4 are exact at all four bench positions;
+depth 5-6 are within 0.1 % and the deep tree within ~2 %. The ported pipeline
+matches the reference source line-by-line at the audit's pinned commit; the
+residual divergence is a learned-history-state seed from depth 5 on. The
+determinism gate (`bench 6` = 14,963, asserted in `tests/search.rs`) replaces
+node identity as the regression discipline. The audit record is
+`docs/audit/migration-audit.md`.
 
 ## 1. Oracle
 

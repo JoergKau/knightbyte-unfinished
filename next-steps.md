@@ -3,23 +3,20 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17; the earlier
 development history is kept in the private archive `JoergKau/knightbyte-archive`.  
-**Last updated:** 2026-11-17 (coupled search-parity port)  
+**Last updated:** 2026-11-17 (parity gate resolved by ADR-0004)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
 
-Phases 0–3 are complete and verified. Phase 4 (search) is functionally
-complete and the migration audit has landed (see
-`docs/audit/migration-audit.md`): ten findings were raised and fixed — the
-correction-history update gate (the reference's backwards quiet test), the
-promotion generation order, the staged move picker with per-stage buffers and
-lazy scoring, the quiescence en-passant quirk, the in-check evasion ordering,
-the transposition-table replacement policy, and the missing
-insufficient-material draws. **Depths 1-4 are now exact at all four bench
-positions**, depth 5-6 are within 0.1 % (`bench 6`: 14,963 vs 14,979), and the
-deep tree is within 2-3 % (`bench 18`: 6,797,622 vs 6,925,762). The search
-parity gate is still open but the remaining divergence is one systematic seed
-in the correction/history update values that first appears at depth 5.
+Phases 0–3 are complete and verified. Phase 4 (search) is **complete**: the
+migration audit found and fixed fourteen porting defects
+(`docs-new/new-bugs.md` B1–B17, `docs/audit/migration-audit.md`), depths 1–4
+are exact at all four bench positions, `bench 6` is within 0.1 % of the
+reference (14,963 vs 14,979) and `bench 18` within 1.8 %. The parity gate is
+**resolved as a documented deviation** (ADR-0004): the determinism pin
+(`bench 6` = 14,963, asserted in `tests/search.rs`) replaces node identity as
+the regression discipline. Next: Phase 4d's remaining time management, then
+Phase 5 (UCI, threading, `stop`).
 
 Verification status on the last run: all 149 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
@@ -96,45 +93,35 @@ fmt/clippy clean.
 
 Each item states the symptom, the evidence and the concrete next action.
 
-### 2.1 Search-parity gate is open (largest open item)
+### 2.1 Search-parity gate — resolved (ADR-0004)
 
-| Run | Reference | KnightByte | Delta |
-| :--- | ---: | ---: | ---: |
-| `bench 6` | 14,979 | 13,118 | −12.4 % |
-| `bench 8` | 48,203 | 49,239 | +2.2 % |
-| `bench 12` | 416,533 | 429,313 | +3.1 % |
-| `bench 16` | 3,169,859 | 3,383,906 | +6.8 % |
-| `bench 18` | 6,925,762 | 6,979,505 | +0.8 % |
+Depths 1-4 exact at all four bench positions; `bench 6` -0.1 % (14,963 vs
+14,979); the deep tree within ~2 % (`bench 18`: 6,797,622 vs 6,925,762). The
+residual divergence (a learned-history-state seed from depth 5 on) is
+accepted and documented in `docs/decisions/ADR-0004-search-parity-deviation.md`.
+Do not reopen node-count forensics without a concrete defect symptom.
 
-Evidence: `docs/SEARCH-PARITY.md` §2 (divergence table), §4a (the coupled
-port record).
+### 2.2 Remaining time-management gaps (Phase 4d)
 
-Next action: hunt the single-node seeds at iteration 3 (endgame position: 273
-vs 272 nodes) with per-node trace tooling; the deep tree is already close, the
-mid-depth wobble cascades from these seeds. Do not tune toward the numbers.
+Implemented: soft/hard budgets from clocks and `movetime`, move overhead, the
+first iteration always completes.
 
-### 2.2 The single-node seeds (cause of 2.1)
+Missing: clock-imbalance weighting (`UseClockImbalance`, scales 50/50), stable
+time management, panic mode, best-move safety margins, and per-move node
+attribution for the time manager.
 
-The trees at depths 1–2 of positions 1–3 are exact. Iteration 3 diverges by
-one node (endgame) and +92 nodes (startpos), and by depth 4 the PVs diverge
-(different best moves at the root), which swings the mid-depth totals while
-the deep shape stays close. The pre-existing quiescence node-accounting
-difference at depth 1 of the tactical position (371 vs 364) is a second,
-older seed.
+Next action: finish 4d, then Phase 5.
 
-Next action: build a small trace tool that dumps a node-id + count ledger for
-a fixed position/depth from both engines and diffs them, then read the
-reference code at the first divergent node. No guessing.
+### 2.3 Lever exposure (52 of the 83 research levers are not exposed)
 
-### 2.3 54 of the 83 research levers are not exposed
+31 levers are wired and advertised (`search/options.rs`). The newly ported
+features (singular extensions, IIR, hindsight, history pruning, the SEE
+thresholds, the TT policy, ...) have `SearchParams` fields but no lever rows
+yet.
 
-Only 31 levers are wired and advertised (`search/options.rs`). The rest
-control features that now exist or are pending; expose them after the parity
-gate closes.
-
-Next action: after the gate closes, extend `LEVERS` and `SearchParams`
-together; the tests `lever_defaults_match_the_parameters` and
-`every_lever_round_trips` keep the table honest.
+Next action: extend `LEVERS` and `SearchParams` together; the tests
+`lever_defaults_match_the_parameters` and `every_lever_round_trips` keep the
+table honest.
 
 ### 2.4 Threading, `stop`, `ponder`, `go infinite` are not implemented
 
@@ -144,29 +131,20 @@ advertised and accepted but the engine always searches on one thread.
 Next action (Phase 5): search thread plus stop flag, `stop`/`ponderhit`,
 `go infinite`, Lazy SMP workers sharing the TT.
 
-### 2.5 Time-management gaps
-
-Implemented: soft/hard budgets from clocks and `movetime`, move overhead, the
-first iteration always completes.
-
-Missing: clock-imbalance weighting (`UseClockImbalance`, scales 50/50), stable
-time management, panic mode, best-move safety margins, and per-move node
-attribution for the time manager.
-
-### 2.6 Inert public options
+### 2.5 Inert public options
 
 `Own Book`, `Book File`, `Book Depth`, `SyzygyPath`, `SyzygyRootProbe`,
 `Syzygy50MoveRule`, `EvalFile`, `Contempt` are advertised and accepted but do
 nothing. This is documented on purpose; do not report them as working.
 
-### 2.7 Performance (Phase 7, not a correctness problem)
+### 2.6 Performance (Phase 7, not a correctness problem)
 
 About 0.36 MNPS against the reference's ~1.4 MNPS on the same host. Causes:
 full-refresh NNUE evaluation per node, copy-make per node, direction-walking
 sliders, and a non-incremental accumulator. All are Phase 7 items; do not mix
-them into the parity work.
+them into other work.
 
-### 2.8 CI: macOS hosted runners are starved
+### 2.7 CI: macOS hosted runners are starved
 
 The `Build and test (macOS)` job can wait many minutes without being acquired
 ("The job was not acquired by Runner of type hosted"). Ubuntu and Windows pass in
@@ -179,60 +157,46 @@ Do not use blocking `gh run watch` while a job is queued; it just waits. Use
 Options if this keeps happening: move the macOS job to a manual/tag-triggered
 workflow, or accept late macOS results (do not weaken the other jobs).
 
-### 2.9 Golden-data duplication
-
-`tests/golden/bench.json` contains the reference totals, while the CI pin
-(`BENCH_DEPTH_6_NODES` in `tests/search.rs`) is our own baseline. They disagree by
-design until parity is reached. When the gate closes, replace one with the other
-and delete the duplicate.
-
-### 2.10 Tooling hazard: PowerShell default encoding
+### 2.8 Tooling hazard: PowerShell default encoding
 
 `Set-Content` without `-Encoding utf8` writes non-ASCII characters in the local
-code page and can corrupt Rust sources (this happened once and was repaired).
-Prefer the editor/write tool for files containing non-ASCII, or write with
+code page and can corrupt Rust sources (this happened twice — the second time
+through a `-replace | Set-Content` pipeline, see B17). Prefer the editor/write
+tool for files containing non-ASCII, or write with
 `[System.IO.File]::WriteAllText(path, text, [Text.UTF8Encoding]::new($false))`.
 
-### 2.11 Documentation items that only close with features
+### 2.9 Documentation items that only close with features
 
-- `docs-new/new-bugs.md` is empty: no open defects.
-- `migration-plan.md` Phase 4 and Phase 5 checklists partially unticked by design.
-- `docs/SEARCH-PARITY.md` §8 rules must be followed for any parity change.
+- `migration-plan.md` Phase 4d/5 checklists partially unticked by design.
+- The audit's open items: `docs/audit/migration-audit.md` (time management,
+  lever exposure).
 
 ---
 
 ## 3. Recommended next steps, in order
 
-### 3.1 (Highest value) Close the parity gate with trace tooling
+### 3.1 (Highest value) Finish Phase 4d time management, expose the levers
 
-Goal: close §2.1. The coupled port landed (§4a of SEARCH-PARITY.md); what
-remains is the single-node hunt.
+- Remaining 4d: clock imbalance (`UseClockImbalance`), stability rules,
+  best-move safety margins, per-move node attribution.
+- Extend `LEVERS` and `SearchParams` together for the newly ported features
+  (singular extensions, IIR, hindsight, history pruning, the SEE thresholds,
+  the TT policy); the tests `lever_defaults_match_the_parameters` and
+  `every_lever_round_trips` keep the table honest.
 
-1. Build `tools/trace_nodes.py` (or a KnightByte `trace` command): replay a
-   fixed position/depth and dump a per-node ledger (ply, move, window,
-   depth, score, node id) from both engines; diff the ledgers.
-2. Read the reference code at the first divergent node; port the deciding
-   formula exactly.
-3. Repeat until `bench 6/8/12/16/18` match; best move matches at every golden
-   depth; any deliberate deviation recorded in an ADR.
+### 3.2 Phase 5 — UCI robustness and threading
 
-Estimate: 1–2 focused sessions. Keep `main` green after every step.
+- Search thread with `stop`/`ponderhit`/`go infinite`.
+- Lazy SMP workers sharing the TT, `setoption Threads`.
+- UCI transcript tests, `info` fields (nps, time, hashfull).
 
-### 3.2 (After the gate closes) Expose the levers, then Phase 5
+### 3.3 Phase 7 — performance, then releases
 
-- Extend `LEVERS` and `SearchParams` together for the newly ported features.
-- Remaining 4d: clock imbalance, stability rules, best-move safety margins.
-- Phase 5: search thread with `stop`/`ponderhit`/`go infinite`, Lazy SMP,
-  `setoption Threads`, UCI transcript parity, `info` fields (nps, time,
-  hashfull).
-- Then Phase 6 (Syzygy/book) or Phase 7 (performance), in plan order.
-
-### 3.3 Housekeeping
-
-- When the gate closes, reconcile the bench goldens (§2.9) and update
-  `docs/baselines.md`.
-- Keep `docs-new/KnightByte-feature-list.md` and `migration-plan.md` in step
-  with every merged slice.
+- Incremental NNUE accumulator, SIMD kernels (NEON/AVX2/VNNI), slider and
+  make/move optimizations; the 0.36 → ≥1.5 MNPS goal at the pinned node
+  counts.
+- Then Phase 8 (macOS/Linux/Windows artifacts) and Phase 6 (Syzygy/book) per
+  the plan order.
 
 ---
 

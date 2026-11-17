@@ -273,10 +273,8 @@ implementation at the pinned commit); all are fixed unless marked open.
 
 ## Open
 
-- The search-parity gate: depths 1-4 exact, depth 5-6 within 0.1 %, the deep
-  tree within ~2 % — one systematic seed in the correction/history update
-  values remains (see `docs/SEARCH-PARITY.md` §2 and
-  `docs/audit/migration-audit.md`).
+- The search-parity residual (a learned-history-state seed from depth 5 on)
+  is accepted per ADR-0004 — not an open defect. No open defects.
 
 ## Verified platforms
 

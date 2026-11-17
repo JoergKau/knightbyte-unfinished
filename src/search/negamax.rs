@@ -792,6 +792,14 @@ impl Searcher {
                                 &cont,
                             );
                             self.history.update_counter(previous, mv);
+                            if self.trace {
+                                eprintln!("K n 0 p {ply} d 0 mv {} bads 0", mv.to_uci());
+                                eprintln!(
+                                    "K h n 0 p 0 d {depth} mv {} bads {}",
+                                    mv.to_uci(),
+                                    quiets_count
+                                );
+                            }
                         } else {
                             let victim = if mv.flag() == crate::types::r#move::flags::EN_PASSANT {
                                 PAWN

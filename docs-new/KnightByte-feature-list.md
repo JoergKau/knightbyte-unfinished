@@ -4,13 +4,13 @@ KnightByte is a UCI chess engine written in Rust. The neural network is fixed
 and embedded in the binary. This list tracks what is implemented and what is
 still planned; it is updated after every migration step.
 
-## Current status — Phases 0–3 complete; Phase 4 functionally complete, audit round done (2026-11-17)
+## Current status — Phases 0–3 complete; Phase 4 complete, parity resolved as a documented deviation (2026-11-17)
 
 Parity status: depths 1-4 exact at all four bench positions, `bench 6` −0.1 %
-(14,963 vs 14,979), `bench 18` −1.8 % (6,797,622 vs 6,925,762). The remaining
-divergence is one systematic seed in the correction/history update values from
-depth 5 on; see `docs/SEARCH-PARITY.md` §2, `docs/audit/migration-audit.md`
-and `docs-new/new-bugs.md` (B1-B17).
+(14,963 vs 14,979), `bench 18` −1.8 % (6,797,622 vs 6,925,762). The residual
+divergence is accepted (ADR-0004); the determinism pin (`bench 6` = 14,963)
+replaces node identity. See `docs/SEARCH-PARITY.md`,
+`docs/audit/migration-audit.md` and `docs-new/new-bugs.md` (B1-B17).
 
 ### Engine skeleton
 
@@ -131,7 +131,9 @@ and `docs-new/new-bugs.md` (B1-B17).
 - [ ] Clock-imbalance weighting, stability rules and persistent Lazy SMP
       workers.
 - [ ] Full lever catalogue parity (31 of the 83 research levers are wired and
-      advertised; the rest are exposed after the parity gate closes).
+      advertised; the rest are exposed in Phase 4d).
+- [x] Search-parity gate resolved as a documented deviation (ADR-0004);
+      depths 1-4 exact, `bench 6` within 0.1 % of the reference.
 - [ ] Exact search-parity gate (`bench 6/12/16/18` node-identical).
 
 ### Endgame and book

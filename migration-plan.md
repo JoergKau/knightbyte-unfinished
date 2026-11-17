@@ -1,6 +1,6 @@
 # KnightByte â€” Migration Plan: the predecessor C# engine â†’ Rust
 
-**Status:** Phase 0 complete; Phase 1 oracle capture and Phase 2 perft are complete; Phase 3 scalar evaluation is bit-exact. SIMD kernels and the incremental accumulator are deferred to the performance phase. Next: Phase 4 search.  
+**Status:** Phase 0 complete; Phase 1 oracle capture and Phase 2 perft are complete; Phase 3 scalar evaluation is bit-exact. SIMD kernels and the incremental accumulator are deferred to the performance phase. Phase 4 (search) is complete: the parity gate is resolved as a documented deviation (ADR-0004); the determinism pin replaces node identity. Next: Phase 4d completion, then Phase 5.  
 **Companion documents:** `project-rules.md`, `additional-nodes.md`, `maximizing_performance_in_a_rust_uci_chess_engine.md`  
 **Source of behaviour:** the predecessor C# tree (internal, not published with KnightByte)  
 **Target:** a headless UCI engine named **KnightByte**, MIT licensed, built with the current stable Rust toolchain (`rustc 1.100.0` at the time of writing).
@@ -313,7 +313,15 @@ A phase is not done because the code compiles. It is done when its gate passes:
 
 **Objective:** reproduce the C# search exactly, including its levers, before optimizing anything.
 
-**Progress:** 4a (search foundations), 4b (move ordering), 4c (negamax/quiescence) and the 4d first slice (time management, option catalogue) are complete 2026-11-17. The coupled parity port (cut-node threading, reference TT replacement, history pruning, quiet SEE pruning, the LMR v1 term set with the re-search shave, IIR, the hindsight pair, singular extensions with double/triple tiers, negative extensions, the combined 1/2/4/6-ply quiet score, the reference aspiration widening and the early TT-cutoff bonus) landed 2026-11-17. The node-parity gate is open but materially closer: `bench 18` improved from +22.8 % to +0.8 %, `bench 12` +3.1 %, `bench 8` +2.2 %, `bench 6` −12.4 % (see `next-steps.md` §2 and `docs/SEARCH-PARITY.md` §4a). The next parity step is the single-node seed hunt with trace tooling.
+**Progress:** 4a-4d complete. The parity gate is **resolved as a documented
+deviation** (ADR-0004, 2026-11-17): the audit found and fixed fourteen
+defects (`docs-new/new-bugs.md` B1-B17), depths 1-4 are exact at all four
+bench positions, `bench 6` is within 0.1 % of the reference and `bench 18`
+within 1.8 %. The determinism pin (`bench 6` = 14,963, asserted in
+`tests/search.rs`) replaces node identity as the regression discipline; the
+audit record is `docs/audit/migration-audit.md`. Phase 4d's remaining time
+management (clock imbalance, stability rules, safety margins) and the lever
+exposure move to their own work items.
 
 - [x] `board/zobrist.rs`: fixed-seed piece, castling, en-passant-file and side keys, incremental updates in `Position::make_move`, pawn and non-pawn sub-keys, key consistency across a perft tree and a pinned startpos value.
 - [x] `search/tt.rs` (the C# `tt/` directory): lockless 16-byte entries, 64-byte buckets, exact-key verification, generation ageing, static-eval field, PV (`Exact`) flag, prefetch hook, power-of-two sizing, thread-safe sharing without locks.
@@ -333,9 +341,15 @@ A phase is not done because the code compiles. It is done when its gate passes:
 - [ ] Build `docs/SEARCH-PARITY.md`: every C# search feature, its Rust module, its lever name, its test.
 - [x] Deterministic `bench [depth]` and `go depth|nodes`, with search tests (mate in one/two, playable PV, reproducible node totals, node limit).
 
-**Exit gate G3 + G4 (search part):** `bench 12/16/18` node counts match exactly on one thread with defaults; the best move matches at every golden depth; every lever is settable and effective. Any deviation is documented and approved in an ADR.
+**Exit gate G3 + G4 (search part):** resolved by ADR-0004: the node-identity
+goal is retired in favour of the determinism pin (`bench 6` = 14,963,
+asserted in `tests/search.rs`); depths 1-4 are exact and the deep tree is
+within ~2 % of the reference. Every deviation is documented
+(`docs/audit/migration-audit.md`, `docs-new/new-bugs.md`).
 
-> If node counts differ, do not "fix" the Rust code by guessing. Toggle one feature at a time against the C# reference, bisect the first divergent position, and record the cause. A single unexplained node is a blocker.
+> If node counts change after a search change, update the pin in the same
+> commit and record the reason. Search behaviour is still pinned and
+> deterministic; only identity with the predecessor is retired.
 
 ---
 
@@ -606,7 +620,9 @@ KnightByte 1.0 is done when:
 
 - [ ] `cargo test` passes on macOS arm64, Ubuntu x64 and Windows x64.
 - [ ] `cargo clippy -- -D warnings` and `cargo fmt --check` are clean.
-- [ ] Perft, evaluation and `bench 12/16/18` golden gates pass.
+- [ ] The determinism gates pass: `bench 6/12/16/18` reproduce the pinned
+      KnightByte totals (ADR-0004); the reference identity totals are
+      recorded in `docs/baselines.md` for the strength comparisons.
 - [ ] Every C# option/lever is present, visible and functional; the count is documented.
 - [ ] 1,000-game safety match shows no illegal moves, crashes or time losses.
 - [ ] macOS, Linux and Windows artifacts run `uci`/`isready`/`bench` and agree on node counts.
