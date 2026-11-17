@@ -9,23 +9,21 @@ development history is kept in the private archive `JoergKau/knightbyte-archive`
 ## 0. Current state in one paragraph
 
 Phases 0–3 are complete and verified. Phase 4 (search) is functionally
-complete and the **coupled parity port has landed**: the reference's cut-node
-threading, TT replacement (5-bit generation, `depth − 2` ageing), history
-pruning, quiet SEE pruning, the LMR v1 term set with the re-search depth
-shave, IIR, the hindsight pair, singular extensions with double/triple tiers,
-negative extensions, the combined 1/2/4/6-ply quiet score with re-keyed
-continuation tables, the classical capture-ordering values, the reference
-aspiration widening and the early TT-cutoff history bonus. 115 unit tests
-plus the integration suites pass. **The search-parity gate is still open but
-materially closer**: node counts differ from the reference by −12.4 %
-(`bench 6`), +2.2 % (`bench 8`), +3.1 % (`bench 12`) and +0.8 % (`bench 18`,
-down from +22.8 %). The remaining divergence is seeded by single-node
-differences at iteration 3 (see `docs/SEARCH-PARITY.md` §2 and §4a).
+complete and the migration audit has landed (see
+`docs/audit/migration-audit.md`): ten findings were raised and fixed — the
+correction-history update gate (the reference's backwards quiet test), the
+promotion generation order, the staged move picker with per-stage buffers and
+lazy scoring, the quiescence en-passant quirk, the in-check evasion ordering,
+the transposition-table replacement policy, and the missing
+insufficient-material draws. **Depths 1-4 are now exact at all four bench
+positions**, depth 5-6 are within 0.1 % (`bench 6`: 14,963 vs 14,979), and the
+deep tree is within 2-3 % (`bench 18`: 6,797,622 vs 6,925,762). The search
+parity gate is still open but the remaining divergence is one systematic seed
+in the correction/history update values that first appears at depth 5.
 
-Verification status on the last run: Ubuntu and Windows CI green, macOS CI job
-never acquired a runner (GitHub capacity, not a code failure), all tests pass
-locally on Windows with the Stockfish verifier from
-`C:\dev\c#-chess-engines\stockfish`.
+Verification status on the last run: all 149 tests pass locally on Windows
+with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
+fmt/clippy clean.
 
 ---
 

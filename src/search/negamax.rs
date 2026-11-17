@@ -26,7 +26,6 @@ use crate::board::position::Position;
 use crate::search::history::{
     CONTINUATION_DISTANCES, Continuations, Previous, lmr_history_term_1024,
 };
-use crate::search::move_picker::{MAX_MOVES, MovePicker};
 use crate::search::searcher::{
     DRAW_SCORE, INFINITE, MATE_LIMIT, MATE_SCORE, NO_STATIC_EVAL, NodeResult, Searcher, mated_in,
 };
@@ -166,6 +165,7 @@ impl Searcher {
             return DRAW_SCORE;
         }
         self.keys[ply] = position.key();
+        self.trace_node('n', ply, depth, alpha, beta, cut_node, 0);
 
         // Mate-distance pruning is skipped at the root, which must complete its
         // move loop and report a real best move.
@@ -225,6 +225,15 @@ impl Searcher {
             let stored_eval = i32::from(entry.eval);
             if stored_eval != NO_STATIC_EVAL {
                 tt_eval = Some(stored_eval);
+            }
+            if self.trace && is_root {
+                eprintln!(
+                    "T t n {} tt {} depth {} gen {}",
+                    self.nodes,
+                    tt_move.to_uci(),
+                    entry.depth,
+                    entry.generation
+                );
             }
             if !is_root && allow_tt_cutoff && i32::from(entry.depth) >= depth {
                 let score = Self::probe_score(&entry, ply);
@@ -333,6 +342,12 @@ impl Searcher {
                 } else {
                     rfp_margin(depth)
                 };
+                if self.trace {
+                    eprintln!(
+                        "T f n {} p {} eval {} beta {} margin {} raw {}",
+                        self.nodes, ply, eval, beta, margin, raw_eval
+                    );
+                }
                 if eval - margin >= beta {
                     return beta + (eval - beta) / 3;
                 }
@@ -473,24 +488,17 @@ impl Searcher {
         }
 
         let cont = self.continuations(ply);
-        let mut ordered = [Move::NONE; MAX_MOVES];
-        let mut count = 0;
-        {
-            let picker = MovePicker::new(
-                position,
-                moves.as_slice(),
-                tt_move,
-                &self.killers,
-                &self.history,
-                ply,
-                previous,
-                &cont,
-            );
-            for mv in picker {
-                ordered[count] = mv;
-                count += 1;
-            }
-        }
+        self.picker[ply].reset(
+            tt_move,
+            &self.killers,
+            &self.history,
+            ply,
+            previous,
+            &cont,
+            false,
+            false,
+        );
+        self.picker[ply].trace_reset(self.nodes);
 
         let futile = !pv_node
             && !in_check
@@ -501,11 +509,10 @@ impl Searcher {
         let mut best_move = Move::NONE;
         let mut quiet_move_count = 0;
         let mut legal_moves = 0;
-        let mut skip_quiets = false;
         let mut quiets_searched = [Move::NONE; 64];
         let mut quiets_count = 0;
 
-        for &mv in &ordered[..count] {
+        while let Some(mv) = self.picker[ply].next(position, &self.history, moves.as_slice()) {
             if !excluded_move.is_none() && mv == excluded_move {
                 continue;
             }
@@ -576,7 +583,8 @@ impl Searcher {
             }
 
             // Late move pruning: enough quiets have been tried that the rest
-            // cannot realistically be best; stop trying quiets entirely.
+            // cannot realistically be best; stop trying quiets entirely (the
+            // picker's quiet stage dies; bad captures are still served).
             if !in_check
                 && quiet_counted
                 && !pv_node
@@ -588,7 +596,7 @@ impl Searcher {
                     limit = (limit / 2).max(1);
                 }
                 if quiet_move_count > limit {
-                    skip_quiets = true;
+                    self.picker[ply].skip_quiets();
                     continue;
                 }
             }
@@ -618,12 +626,7 @@ impl Searcher {
                 && piece_type(moving) != PAWN
                 && eval + futility_margin(depth) < alpha
             {
-                skip_quiets = true;
-                continue;
-            }
-
-            // Once the quiet stage is aborted, only captures remain.
-            if skip_quiets && !capture {
+                self.picker[ply].skip_quiets();
                 continue;
             }
 
@@ -798,6 +801,7 @@ impl Searcher {
                             self.history
                                 .update_capture(piece_type(moving), mv, victim, depth);
                         }
+                        self.trace_node('r', ply, depth, alpha, beta, cut_node, best_score);
                         return self.finish_node(NodeResult {
                             position,
                             ply,
@@ -828,6 +832,7 @@ impl Searcher {
         } else {
             best_move
         };
+        self.trace_node('r', ply, depth, alpha, beta, cut_node, best_score);
         self.finish_node(NodeResult {
             position,
             ply,

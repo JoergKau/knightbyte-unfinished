@@ -28,3 +28,7 @@
 
 # local predecessor checkout (never published)
 PawnForgeCS.win.final.dotnet11/
+
+# parity-trace ledger dumps (local debugging artifacts)
+kb_*.txt
+ref_*.txt

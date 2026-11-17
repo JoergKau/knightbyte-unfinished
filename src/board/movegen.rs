@@ -106,10 +106,12 @@ fn generate_pawns(position: &Position, us: u8, them: u8, moves: &mut MoveList) {
 }
 
 fn add_promotions(moves: &mut MoveList, from: Square, to: Square) {
-    moves.push(Move::new(from, to, flags::PROMO_KNIGHT));
-    moves.push(Move::new(from, to, flags::PROMO_BISHOP));
-    moves.push(Move::new(from, to, flags::PROMO_ROOK));
+    // Queen first: the reference's promotion emission order, which the
+    // picker's generation-order tie-break inherits.
     moves.push(Move::new(from, to, flags::PROMO_QUEEN));
+    moves.push(Move::new(from, to, flags::PROMO_ROOK));
+    moves.push(Move::new(from, to, flags::PROMO_BISHOP));
+    moves.push(Move::new(from, to, flags::PROMO_KNIGHT));
 }
 
 fn generate_piece_moves(

@@ -19,12 +19,13 @@ use crate::search::eval_cache::EvalCache;
 use crate::search::history::{History, Previous};
 use crate::search::killers::Killers;
 use crate::search::limits::Limits;
+use crate::search::move_picker::PickerState;
 use crate::search::params::SearchParams;
 use crate::search::pv::PvTable;
 use crate::search::tt::{Bound, TranspositionTable, TtEntry, score_from_tt, score_to_tt};
-use crate::types::color::Color;
+use crate::types::color::{BLACK, Color, WHITE};
 use crate::types::r#move::Move;
-use crate::types::piece::{BISHOP, KNIGHT, QUEEN, ROOK};
+use crate::types::piece::{BISHOP, KNIGHT, PAWN, QUEEN, ROOK};
 
 /// Score of a forced mate at the root.
 ///
@@ -107,12 +108,19 @@ pub struct Searcher {
     /// The late-move reduction applied at each ply; the child's hindsight
     /// pair reads the parent's slot.
     pub(crate) reduction_stack: Box<[i32]>,
+    /// One staged-picker state per ply (the reference's per-thread per-ply
+    /// picker buffers).
+    pub(crate) picker: Box<[PickerState]>,
     /// Per-move time overhead subtracted from every budget, in milliseconds.
     pub(crate) move_overhead_ms: u64,
     /// Start of the current search, used for the time budgets.
     pub(crate) start: std::time::Instant,
     /// Number of completed iterations; the first one always runs to the end.
     pub(crate) completed_depth: i32,
+    /// When the trace flag is on, every search node writes one ledger line to
+    /// stderr. Enabled per process with `KNIGHTBYTE_TRACE`; it is the
+    /// parity-hunt dump, never active in normal operation.
+    pub(crate) trace: bool,
 }
 
 impl Searcher {
@@ -139,9 +147,11 @@ impl Searcher {
             move_stack: vec![Move::NONE; MAX_PLY + 1].into_boxed_slice(),
             move_counts: vec![0; MAX_PLY + 1].into_boxed_slice(),
             reduction_stack: vec![0; MAX_PLY + 1].into_boxed_slice(),
+            picker: (0..=MAX_PLY).map(|_| PickerState::new()).collect(),
             move_overhead_ms: crate::search::time_manager::DEFAULT_MOVE_OVERHEAD_MS,
             start: std::time::Instant::now(),
             completed_depth: 0,
+            trace: std::env::var_os("KNIGHTBYTE_TRACE").is_some(),
         }
     }
 
@@ -381,9 +391,10 @@ impl Searcher {
     /// Twofold repetition scores as a draw because the search only needs to know
     /// that the side to move cannot make progress, which is exactly what the
     /// second occurrence proves. The lever keeps this switchable for parity
-    /// work.
+    /// work. Insufficient material (K vs K, K+N vs K, K+B vs K, and KB vs KB
+    /// with same-coloured bishops) draws regardless of the lever.
     pub(crate) fn is_draw(&self, position: &Position, ply: usize) -> bool {
-        if position.halfmove_clock() >= 100 {
+        if position.halfmove_clock() >= 100 || Self::insufficient_material(position) {
             return true;
         }
         if !self.params.use_twofold_repetition_draw {
@@ -398,6 +409,60 @@ impl Searcher {
                 return true;
             }
             back += 2;
+        }
+        false
+    }
+
+    /// Returns whether neither side can deliver checkmate: king against
+    /// king, king plus one knight against king, king plus one bishop against
+    /// king, or king plus bishop against king plus bishop with
+    /// same-coloured bishops. Any pawn, rook or queen on the board makes the
+    /// position sufficient by definition (the reference's early gate —
+    /// without it, K+P vs K+B would falsely read as KB vs KB).
+    pub(crate) fn insufficient_material(position: &Position) -> bool {
+        for piece in [PAWN, ROOK, QUEEN] {
+            if position.pieces(WHITE, piece) != 0 || position.pieces(BLACK, piece) != 0 {
+                return false;
+            }
+        }
+        let knights = |color: Color| position.pieces(color, KNIGHT).count_ones();
+        let bishops = |color: Color| position.pieces(color, BISHOP).count_ones();
+        let white_knights = knights(WHITE);
+        let black_knights = knights(BLACK);
+        let white_bishops = bishops(WHITE);
+        let black_bishops = bishops(BLACK);
+
+        // King vs king.
+        if white_knights == 0 && black_knights == 0 && white_bishops == 0 && black_bishops == 0 {
+            return true;
+        }
+        // King + knight vs king.
+        if (white_knights == 1 && white_bishops == 0 && black_knights == 0 && black_bishops == 0)
+            || (black_knights == 1
+                && black_bishops == 0
+                && white_knights == 0
+                && white_bishops == 0)
+        {
+            return true;
+        }
+        // King + bishop vs king.
+        if (white_bishops == 1 && white_knights == 0 && black_knights == 0 && black_bishops == 0)
+            || (black_bishops == 1
+                && black_knights == 0
+                && white_knights == 0
+                && white_bishops == 0)
+        {
+            return true;
+        }
+        // King + bishop vs king + bishop on the same square colour.
+        if white_knights == 0 && black_knights == 0 && white_bishops == 1 && black_bishops == 1 {
+            let white_bishop = crate::board::bitboard::lsb(position.pieces(WHITE, BISHOP));
+            let black_bishop = crate::board::bitboard::lsb(position.pieces(BLACK, BISHOP));
+            let same_color = ((white_bishop as i32 / 8 + white_bishop as i32 % 8)
+                - (black_bishop as i32 / 8 + black_bishop as i32 % 8))
+                % 2
+                == 0;
+            return same_color;
         }
         false
     }
@@ -503,10 +568,11 @@ impl Searcher {
             result.best_move,
         ));
 
-        // Reference update conditions: no mate score, not in check, a quiet or
-        // absent stored move, and a bound that carries new eval-error
-        // information. Tablebase wins are excluded because they are exact, not
-        // evaluation error.
+        // Reference update conditions: no mate score, not in check, and a
+        // best move that is neither en passant nor a promotion. (The
+        // reference's own-capture test can never fire — the mover's target
+        // is never own-occupied — so its quiet gate reduces to exactly this;
+        // capture cutoffs DO update the tables.)
         const TB_WIN_SCORE: i32 = 29_900;
         let trusted = match result.bound {
             Bound::Lower => result.raw_eval >= result.score,
@@ -519,7 +585,7 @@ impl Searcher {
             && result.score.abs() < MATE_LIMIT
             && result.score.abs() < TB_WIN_SCORE
             && (result.best_move.is_none()
-                || (!crate::board::movegen::is_capture(result.position, result.best_move)
+                || (result.best_move.flag() != crate::types::r#move::flags::EN_PASSANT
                     && !result.best_move.is_promotion()))
             && !trusted
         {
@@ -532,6 +598,47 @@ impl Searcher {
             );
         }
         result.score
+    }
+
+    /// Returns the path from the root to the node at `ply`: the moves played
+    /// at plies `0..ply`. Used by the parity-trace ledger.
+    pub(crate) fn path_to(&self, ply: usize) -> String {
+        self.move_stack[..ply.min(self.move_stack.len())]
+            .iter()
+            .filter(|mv| !mv.is_none())
+            .map(|mv| mv.to_uci())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Writes one parity-trace ledger line to stderr when the trace flag is
+    /// on. `kind` is `n` for a negamax node, `q` for a quiescence node, `r`
+    /// for a returned score.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn trace_node(
+        &self,
+        kind: char,
+        ply: usize,
+        depth: i32,
+        alpha: i32,
+        beta: i32,
+        cut: bool,
+        score: i32,
+    ) {
+        if !self.trace {
+            return;
+        }
+        eprintln!(
+            "T {kind} n {:>6} p {:>3} d {:>3} a {:>7} b {:>7} c {} s {:>7} m {}",
+            self.nodes,
+            ply,
+            depth,
+            alpha,
+            beta,
+            u8::from(cut),
+            score,
+            self.path_to(ply),
+        );
     }
 }
 

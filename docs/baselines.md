@@ -22,27 +22,22 @@ tactical middlegame), Hash 256 MB, one thread.
 
 ### KnightByte current totals (determinism baseline, not parity)
 
-KnightByte `bench` after the coupled search-parity port (2026-11-17),
+KnightByte `bench` after the migration audit round (2026-11-17),
 Windows 11 / Ryzen 7 260, Rust 1.100.0 release, Hash 256 MB, one thread:
 
 | Run | Nodes | Reference | Delta |
 | :--- | ---: | ---: | ---: |
-| `bench 6` | 13,118 | 14,979 | -12.4 % |
-| `bench 12` | 429,313 | 416,533 | +3.1 % |
-| `bench 16` | 3,383,906 | 3,169,859 | +6.8 % |
-| `bench 18` | 6,979,505 | 6,925,762 | +0.8 % |
+| `bench 6` | 14,963 | 14,979 | -0.1 % |
+| `bench 12` | 356,262 | 416,533 | -14.5 % |
+
+Depths 1-4 are exact at all four positions; depth 5-6 are within 0.1 %. The
+deeper tree is narrower than the reference (the correction/history update
+values diverge at the depth-5 seed and cascade). The remaining audit items
+are in `docs/audit/migration-audit.md`.
 
 The `bench 6` total is asserted in `tests/search.rs`, so CI fails if any host or
-build mode produces a different count.
-
-These totals are reproducible across runs and machines, but they do **not**
-match the identity gate above. The deep-depth tree shape is now close (the
-depth-18 delta shrank from +22.8 % to +0.8 %); the mid-depth tree is still
-narrower than the reference, seeded by a single-node divergence at depth 3 of
-the endgame position. The per-position, per-depth oracle and the porting order
-are in `docs/SEARCH-PARITY.md`; see also
-`docs/decisions/ADR-0003-search-parity-baseline.md`. Do not treat a match
-against these numbers as parity.
+build mode produces a different count. Do not treat a match against these
+numbers as parity.
 
 ## 2. Hosts
 

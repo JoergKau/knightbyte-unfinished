@@ -11,7 +11,7 @@ use knightbyte::board::movegen::legal;
 use knightbyte::board::position::Position;
 use knightbyte::search::history::{Continuations, History, Previous};
 use knightbyte::search::killers::Killers;
-use knightbyte::search::move_picker::MovePicker;
+use knightbyte::search::move_picker::debug_dump_picker_order;
 use knightbyte::search::see::{see_approximate, see_value};
 use knightbyte::types::color::WHITE;
 use knightbyte::types::r#move::Move;
@@ -44,7 +44,7 @@ fn ordered(
 ) -> Vec<Move> {
     let moves = legal(position);
     let cont: Continuations = [None; 4];
-    MovePicker::new(
+    debug_dump_picker_order(
         position,
         moves.as_slice(),
         tt_move,
@@ -54,7 +54,6 @@ fn ordered(
         previous,
         &cont,
     )
-    .collect()
 }
 
 #[test]

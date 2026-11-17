@@ -27,23 +27,17 @@
 use crate::board::movegen;
 use crate::board::position::Position;
 use crate::search::MAX_PLY;
-use crate::search::history::History;
 use crate::search::history::Previous;
-use crate::search::move_picker::MAX_MOVES;
 use crate::search::searcher::{
     DRAW_SCORE, MATE_LIMIT, NO_STATIC_EVAL, Searcher, mated_in, tt_entry,
 };
-use crate::search::see::{see_approximate, see_ge, see_value};
+use crate::search::see::{see_approximate, see_ge};
 use crate::search::tt::Bound;
-use crate::types::r#move::{Move, flags};
-use crate::types::piece::{EMPTY, PAWN, piece_type};
+use crate::types::r#move::Move;
+use crate::types::piece::EMPTY;
 
 /// Largest losing exchange that quiescence still searches.
 const SEE_THRESHOLD: i32 = -50;
-
-/// Material values used by the capture-ordering term (pawn 100 ... king
-/// 20,000), matching the main picker's ordering weights.
-const ORDER_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20_000];
 
 impl Searcher {
     /// Resolves captures at a leaf node.
@@ -69,6 +63,7 @@ impl Searcher {
             return DRAW_SCORE;
         }
         self.keys[ply] = position.key();
+        self.trace_node('q', ply, 0, alpha, beta, false, 0);
 
         let in_check = self.params.use_check_aware_quiescence && position.in_check(position.side());
 
@@ -136,36 +131,43 @@ impl Searcher {
 
             // Delta pruning: even the most valuable capture cannot reach alpha.
             if stand + self.params.qs_delta_margin < alpha {
+                if self.trace {
+                    eprintln!(
+                        "T d n {} p {} stand {} tt {}",
+                        self.nodes,
+                        ply,
+                        stand,
+                        tt_probe.is_some()
+                    );
+                }
                 return alpha;
             }
             best_score = stand;
         }
 
         let moves = movegen::legal(position);
-        let mut ordered = [Move::NONE; MAX_MOVES];
-        let mut scores = [0_i32; MAX_MOVES];
-        let count = if in_check {
-            let count = moves.len().min(MAX_MOVES);
-            ordered[..count].copy_from_slice(&moves.as_slice()[..count]);
-            count
-        } else {
-            order_captures(
-                position,
-                &self.history,
-                moves.as_slice(),
-                &mut ordered,
-                &mut scores,
-            )
-        };
-
-        if in_check && count == 0 {
+        if in_check && moves.is_empty() {
             return mated_in(ply as i32);
         }
+        // Both quiescence shapes run through the staged picker: captures-only
+        // when not in check (good captures sorted, bad captures in generation
+        // order), the full picker for the evasions when in check.
+        self.picker[ply].reset(
+            Move::NONE,
+            &self.killers,
+            &self.history,
+            ply,
+            previous,
+            &[None; 4],
+            true,
+            !in_check,
+        );
+        self.picker[ply].trace_reset(self.nodes);
 
         let mut best_move = Move::NONE;
         let mut legal_moves = 0;
 
-        for &mv in &ordered[..count] {
+        while let Some(mv) = self.picker[ply].next(position, &self.history, moves.as_slice()) {
             if self.params.use_qs_narrowing && !in_check {
                 if ply as i32 >= self.params.qs_promotion_max_ply && mv.is_promotion() {
                     continue;
@@ -178,8 +180,16 @@ impl Searcher {
                 }
             }
 
-            let quiet = !is_capture(position, mv) && !mv.is_promotion();
+            // Quiet = the target square is empty and the move is not a
+            // promotion — the reference's classification, which counts an
+            // en-passant capture as QUIET (its target is empty): the quirk
+            // means the reference's quiescence never searches an en-passant
+            // capture, and the in-check narrowing can break after one.
+            let quiet = position.piece_at(mv.to()) == EMPTY && !mv.is_promotion();
             if !in_check {
+                if quiet {
+                    continue;
+                }
                 if self.params.use_see_approx_prefilter
                     && see_approximate(position, mv) < SEE_THRESHOLD
                 {
@@ -191,6 +201,7 @@ impl Searcher {
             }
 
             let next = position.make_move(mv);
+            self.move_stack[ply] = mv;
             legal_moves += 1;
             let score = -self.quiescence(
                 &next,
@@ -253,82 +264,9 @@ impl Searcher {
             },
             best_move,
         ));
+        self.trace_node('r', ply, 0, alpha, beta, false, result);
         result
     }
-}
-
-/// Returns whether `mv` captures a piece (en passant included).
-#[inline]
-fn is_capture(position: &Position, mv: Move) -> bool {
-    mv.flag() == flags::EN_PASSANT || position.piece_at(mv.to()) != EMPTY
-}
-
-/// Fills `ordered` with the capture moves: good captures sorted by the
-/// reference score, then losing captures in generation order.
-fn order_captures(
-    position: &Position,
-    history: &History,
-    moves: &[Move],
-    ordered: &mut [Move; MAX_MOVES],
-    scores: &mut [i32; MAX_MOVES],
-) -> usize {
-    let mut count = 0;
-    let mut bad = [Move::NONE; MAX_MOVES];
-    let mut bad_count = 0;
-
-    for &mv in moves {
-        if !is_capture(position, mv) {
-            continue;
-        }
-        if see_ge(position, mv, 0) {
-            let victim = if mv.flag() == flags::EN_PASSANT {
-                PAWN
-            } else {
-                piece_type(position.piece_at(mv.to()))
-            };
-            let moving_type = piece_type(position.piece_at(mv.from()));
-            ordered[count] = mv;
-            scores[count] = capture_score(position, history, moving_type, mv, victim);
-            count += 1;
-        } else {
-            bad[bad_count] = mv;
-            bad_count += 1;
-        }
-    }
-
-    for &mv in &bad[..bad_count] {
-        ordered[count] = mv;
-        scores[count] = i32::MIN;
-        count += 1;
-    }
-
-    // Selection sort keeps the highest score first and preserves generation
-    // order among equal scores, which is what the reference's picker does.
-    for slot in 0..count {
-        let mut best = slot;
-        for candidate in slot + 1..count {
-            if scores[candidate] > scores[best] {
-                best = candidate;
-            }
-        }
-        ordered.swap(slot, best);
-        scores.swap(slot, best);
-    }
-    count
-}
-
-/// Returns the reference capture-ordering score for a good capture: the
-/// classical material swing, the exact exchange value and the raw
-/// capture-history cell.
-fn capture_score(
-    position: &Position,
-    history: &History,
-    moving_type: usize,
-    mv: Move,
-    victim: usize,
-) -> i32 {
-    let material = ORDER_VALUES[victim] * 100 - ORDER_VALUES[moving_type];
-    1_000_000 + material + see_value(position, mv) + history.capture(moving_type, mv, victim)
 }
 
 /// Fail-soft averaging on a quiescence fail-high.
