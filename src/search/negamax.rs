@@ -1,33 +1,141 @@
 //! Negamax search.
 //!
-//! The node function follows the usual shape: probe and use the transposition
-//! table, compute the static evaluation, apply conservative pruning at
-//! non-principal-variation nodes, then run the ordered moves with a null-window
-//! search (principal variation search) and re-search the interesting ones with
-//! the full window.
+//! The node function follows the reference pipeline exactly, in order: stop
+//! checks, draw detection, mate-distance pruning, node-level extensions (a
+//! check and a forced single reply, sharing a per-path budget), the first
+//! quiescence drop, the transposition-table probe with cutoffs and bound
+//! narrowing, static evaluation with correction history, the hindsight depth
+//! pair, the pruning stack (reverse futility, razoring, null move), the
+//! singular-extension verification, internal iterative reduction, a second
+//! quiescence drop for nodes the depth adjustments consumed, and finally the
+//! ordered move loop with late-move, history, futility and SEE pruning, late
+//! move reductions and principal-variation re-searches.
+//!
+//! The `cut_node` flag is threaded through the recursion: a child's prediction
+//! depends on how its parent was searched. The `excluded_move` parameter makes
+//! the singular-extension verification search the alternatives only.
 //!
 //! Ordering state is borrowed only while the picker is alive: the ordered move
 //! list is copied into a small local array first, so recursion never has to
 //! hold a borrow of `self`.
 
+use std::sync::OnceLock;
+
 use crate::board::movegen;
 use crate::board::position::Position;
-use crate::search::history::Previous;
+use crate::search::history::{
+    CONTINUATION_DISTANCES, Continuations, Previous, lmr_history_term_1024,
+};
 use crate::search::move_picker::{MAX_MOVES, MovePicker};
 use crate::search::searcher::{
     DRAW_SCORE, INFINITE, MATE_LIMIT, MATE_SCORE, NO_STATIC_EVAL, NodeResult, Searcher, mated_in,
 };
 use crate::search::see::see_ge;
 use crate::search::tt::Bound;
-use crate::types::r#move::{Move, flags};
-use crate::types::piece::{PAWN, piece_type};
+use crate::types::r#move::Move;
+use crate::types::piece::{KING, PAWN, color_of, piece_type};
+
+/// The node at and beyond this ply returns its static evaluation without
+/// counting, matching the reference's safety guard.
+const MAX_SEARCH_PLY: usize = 100;
+
+/// Side of the late-move-reduction base table, indexed `[depth][move number]`.
+const LMR_TABLE_SIZE: usize = 64;
+
+/// The precomputed late-move-reduction base table:
+/// `int(1.0 + ln(depth) * ln(move_number) / 1.75)`, zero at either index zero,
+/// read with both indices clamped into range.
+fn lmr_table() -> &'static [[i32; LMR_TABLE_SIZE]; LMR_TABLE_SIZE] {
+    static TABLE: OnceLock<[[i32; LMR_TABLE_SIZE]; LMR_TABLE_SIZE]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = [[0_i32; LMR_TABLE_SIZE]; LMR_TABLE_SIZE];
+        for (depth, row) in table.iter_mut().enumerate().skip(1) {
+            for (moves, cell) in row.iter_mut().enumerate().skip(1) {
+                let value = 1.0 + (depth as f64).ln() * (moves as f64).ln() / 1.75;
+                *cell = value as i32;
+            }
+        }
+        table
+    })
+}
+
+/// Returns the base late-move reduction for `depth` and the 1-based
+/// `move_number`, read from the precomputed table with clamped indices.
+fn lmr_base_reduction(depth: i32, move_number: i32) -> i32 {
+    let d = depth.clamp(0, LMR_TABLE_SIZE as i32 - 1) as usize;
+    let m = move_number.clamp(0, LMR_TABLE_SIZE as i32 - 1) as usize;
+    lmr_table()[d][m]
+}
+
+/// Returns the depth for the full-depth zero-window re-search after a reduced
+/// search failed high.
+///
+/// A large original reduction shaves one or two plies off the re-search — a
+/// move that wanted a big reduction rarely needs full re-verification — and
+/// the result is floored at the reduced depth so the re-search is never
+/// shallower than the search it improves on.
+fn compute_re_search_depth(new_depth: i32, reduction: i32, enabled: bool) -> i32 {
+    if !enabled {
+        return new_depth;
+    }
+    let mut re_search_depth = new_depth;
+    if reduction >= 3 {
+        re_search_depth -= 1;
+    }
+    if reduction >= 5 && new_depth > 2 {
+        re_search_depth -= 1;
+    }
+    let min_depth = new_depth - reduction;
+    if re_search_depth < min_depth {
+        re_search_depth = min_depth;
+    }
+    re_search_depth
+}
 
 impl Searcher {
+    /// Builds the continuation-history context of the node at `ply`: the
+    /// destination squares of the moves played 1, 2, 4 and 6 plies earlier.
+    pub(crate) fn continuations(&self, ply: usize) -> Continuations {
+        let mut cont = [None; 4];
+        for (index, &distance) in CONTINUATION_DISTANCES.iter().enumerate() {
+            if ply >= distance {
+                let mv = self.move_stack[ply - distance];
+                if !mv.is_none() {
+                    cont[index] = Some(mv.to());
+                }
+            }
+        }
+        cont
+    }
+
+    /// Returns the number of times the current position already appears on the
+    /// search path. A repeated position is refused transposition-table
+    /// cutoffs so the search can never anchor a repetition decision to a
+    /// cached score.
+    fn path_repetition_count(&self, position: &Position, ply: usize) -> u32 {
+        let key = position.key();
+        let distance = usize::from(position.halfmove_clock()).min(ply);
+        let mut count = 0;
+        let mut back = 2;
+        while back <= distance {
+            if self.keys[ply - back] == key {
+                count += 1;
+            }
+            back += 2;
+        }
+        count
+    }
+
     /// Searches `position` to `depth` plies and returns its score.
     ///
     /// `previous` identifies the move that produced `position`; it selects the
-    /// continuation-history and countermove entries. `ply` is the distance from
-    /// the root and indexes the per-ply arrays.
+    /// continuation-history and countermove entries. `ply` is the distance
+    /// from the root and indexes the per-ply arrays. `cut_node` predicts a
+    /// fail-high node (children of scouting searches). `excluded_move` is the
+    /// transposition-table move a singular verification must not search.
+    /// `path_extensions` is the extension budget already spent along this
+    /// path.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn negamax(
         &mut self,
         position: &Position,
@@ -36,7 +144,15 @@ impl Searcher {
         mut depth: i32,
         ply: usize,
         previous: Option<Previous>,
+        cut_node: bool,
+        excluded_move: Move,
+        path_extensions: i32,
     ) -> i32 {
+        // The ply guard runs before the node is counted: a node beyond the
+        // safety depth returns its static evaluation and costs nothing.
+        if ply >= MAX_SEARCH_PLY {
+            return self.evaluate(position);
+        }
         self.pv.clear(ply);
         self.nodes += 1;
         if ply > self.seldepth {
@@ -44,9 +160,6 @@ impl Searcher {
         }
         if self.should_stop() {
             return 0;
-        }
-        if ply >= super::MAX_PLY - 1 {
-            return self.evaluate(position);
         }
         let is_root = ply == 0;
         if !is_root && self.is_draw(position, ply) {
@@ -70,10 +183,10 @@ impl Searcher {
         }
 
         // Node-level extensions: a check extends the node itself, and a forced
-        // single reply extends it once the search is away from the horizon. Both
-        // share the per-path extension budget.
+        // single reply extends it once the search is away from the horizon.
+        // Both share the per-path extension budget.
         let in_check = position.in_check(position.side());
-        let mut extensions_used = self.extensions[ply];
+        let mut extensions_used = path_extensions;
         let cap = self.params.max_path_extensions;
         if in_check && extensions_used < cap {
             depth += 1;
@@ -88,14 +201,21 @@ impl Searcher {
             depth += 1;
             extensions_used += 1;
         }
-        self.extensions[ply] = extensions_used;
 
         if depth <= 0 {
             return self.quiescence(position, alpha, beta, ply, previous);
         }
 
-        let pv_node = beta - alpha > 1;
+        let pv_node = beta > alpha + 1;
+        // The exact-bound decision compares against the window as it stood
+        // before the transposition-table narrowing below.
+        let alpha_window = alpha;
 
+        // Transposition-table probe. A position that already repeats on the
+        // search path is refused table cutoffs: a cached score knows nothing
+        // about the repetition the search is trying to detect.
+        let allow_tt_cutoff = !self.params.disable_tt_cutoff_for_repetitions
+            || self.path_repetition_count(position, ply) == 0;
         let mut tt_move = Move::NONE;
         let mut tt_probe = None;
         let mut tt_eval = None;
@@ -106,14 +226,43 @@ impl Searcher {
             if stored_eval != NO_STATIC_EVAL {
                 tt_eval = Some(stored_eval);
             }
-            if ply > 0 && i32::from(entry.depth) >= depth {
+            if !is_root && allow_tt_cutoff && i32::from(entry.depth) >= depth {
                 let score = Self::probe_score(&entry, ply);
-                let usable = match entry.bound {
-                    Bound::Exact => true,
-                    Bound::Lower => score >= beta,
-                    Bound::Upper => score <= alpha,
-                };
-                if usable {
+                match entry.bound {
+                    Bound::Exact => {
+                        return score;
+                    }
+                    Bound::Lower => {
+                        if score >= beta {
+                            // Early transposition-table-cutoff history update:
+                            // a quiet table move that cut off quickly at the
+                            // parent earns a butterfly bonus.
+                            if !tt_move.is_none()
+                                && !pv_node
+                                && ply > 0
+                                && self.move_counts[ply - 1] < 4
+                                && !movegen::is_capture(position, tt_move)
+                                && !tt_move.is_promotion()
+                            {
+                                let bonus = (207 * depth).min(1_202);
+                                self.history.update_butterfly_bonus(
+                                    color_of(position.piece_at(tt_move.from())),
+                                    tt_move,
+                                    bonus,
+                                );
+                            }
+                            return score;
+                        }
+                        alpha = alpha.max(score);
+                    }
+                    Bound::Upper => {
+                        if score <= alpha {
+                            return score;
+                        }
+                        beta = beta.min(score);
+                    }
+                }
+                if alpha >= beta {
                     return score;
                 }
             }
@@ -123,8 +272,9 @@ impl Searcher {
         let mut eval = raw_eval;
 
         // Correction history: a learned offset applied before every pruning
-        // decision. The reference skips it when a usable TT move exists and when
-        // the node is in check, and only corrects nodes with remaining depth.
+        // decision. The reference skips it when a usable TT move exists and
+        // when the node is in check, and only corrects nodes with remaining
+        // depth.
         if self.params.use_correction_history
             && self.params.use_ref_correction_history
             && depth > 0
@@ -139,6 +289,7 @@ impl Searcher {
         // informed than raw + correction, so it replaces the evaluation.
         if self.params.use_tt_score_eval
             && !in_check
+            && allow_tt_cutoff
             && let Some(entry) = tt_probe
             && Self::can_use_tt_score(&entry, raw_eval, ply)
         {
@@ -146,10 +297,24 @@ impl Searcher {
         }
         self.evals[ply] = eval;
 
-        let improving = self.is_improving(ply, eval);
-        let alpha_window = alpha;
+        // Hindsight depth pair: the previous ply's reduction and the two
+        // evals decide whether this node earns the reduction back or loses
+        // another ply. Runs before every pruning decision, which therefore
+        // sees the adjusted depth.
+        if self.params.use_hindsight_reductions && ply > 0 && depth >= 2 && !in_check && !pv_node {
+            let previous_reduction = self.reduction_stack[ply - 1];
+            let previous_eval = self.evals[ply - 1];
+            if previous_reduction >= 2 && eval + previous_eval < 0 {
+                depth += 1;
+            }
+            if previous_reduction >= 1 && eval + previous_eval > 62 {
+                depth -= 1;
+            }
+        }
 
-        if !pv_node && !in_check {
+        let improving = self.is_improving(ply, eval);
+
+        if !pv_node && !in_check && excluded_move.is_none() {
             // Reverse futility: formula margin `depth * scale`, damped fail-soft
             // return so a fail-high does not hand the parent the full overshoot.
             let rfp_gate = if self.params.use_formula_rfp {
@@ -169,13 +334,7 @@ impl Searcher {
                     rfp_margin(depth)
                 };
                 if eval - margin >= beta {
-                    // Formula arm: damp the spill so the parent's alpha rises by a
-                    // third of the overshoot instead of the whole of it.
-                    return if self.params.use_formula_rfp {
-                        beta + (eval - beta) / 3
-                    } else {
-                        eval
-                    };
+                    return beta + (eval - beta) / 3;
                 }
             }
 
@@ -194,10 +353,17 @@ impl Searcher {
                 }
             }
 
+            // Null move: the gate carries the cut-node arm — at a predicted
+            // cut node the null search runs even when a table score exists
+            // below beta. A non-mate fail-high cuts fail-hard at beta; a mate
+            // line through a null move is not trusted and the node keeps
+            // searching.
             if depth >= 3
                 && eval >= beta
+                && (tt_probe.is_none()
+                    || cut_node
+                    || tt_probe.is_some_and(|entry| Self::probe_score(&entry, ply) >= beta))
                 && Self::has_non_pawn_material(position, position.side())
-                && tt_probe.is_none_or(|entry| Self::probe_score(&entry, ply) >= beta)
             {
                 // Eval-scaled extra reduction, clamped so a null move can never
                 // reach the current node's depth.
@@ -209,6 +375,7 @@ impl Searcher {
                     reduction = depth - 1;
                 }
                 let next = position.make_null();
+                self.move_stack[ply] = Move::NONE;
                 let score = -self.negamax(
                     &next,
                     -beta,
@@ -216,16 +383,84 @@ impl Searcher {
                     depth - 1 - reduction,
                     ply + 1,
                     None,
+                    !cut_node,
+                    Move::NONE,
+                    extensions_used,
                 );
                 if self.stopped {
                     return 0;
                 }
-                if score >= beta {
-                    // A mate score from a null-window line is not trustworthy;
-                    // report the bound without claiming a distance.
-                    return if score >= MATE_LIMIT { beta } else { score };
+                if score >= beta && score.abs() < MATE_LIMIT {
+                    return beta;
                 }
             }
+        }
+
+        // Singular extension: when a deep table move with a proven bound is
+        // very likely the only good move, the node is forcing. The
+        // verification search runs the alternatives (excluding the table
+        // move) at half depth inside a window below the stored score; a wide
+        // fail-low extends the node by one, two or three plies — and the
+        // extension is applied to the table move only, in the move loop.
+        let mut singular_extension = 0;
+        if self.params.use_singular_extensions
+            && !is_root
+            && depth >= self.params.singular_min_depth
+            && let Some(entry) = tt_probe
+            && !tt_move.is_none()
+            && excluded_move.is_none()
+            && matches!(entry.bound, Bound::Exact | Bound::Lower)
+            && Self::probe_score(&entry, ply).abs() < MATE_LIMIT
+            && i32::from(entry.depth) >= depth - 3
+        {
+            let tt_score = Self::probe_score(&entry, ply);
+            let singular_beta = tt_score - self.params.singular_beta_slope * depth;
+            let singular_depth = depth / 2;
+            let alternative = self.negamax(
+                position,
+                singular_beta - 1,
+                singular_beta,
+                singular_depth,
+                ply,
+                previous,
+                cut_node,
+                tt_move,
+                extensions_used,
+            );
+            if self.stopped {
+                return 0;
+            }
+            if alternative < singular_beta {
+                singular_extension = 1;
+                if self.params.use_singular_double_extensions {
+                    if alternative < singular_beta - self.params.singular_double_margin {
+                        singular_extension = 2;
+                    }
+                    if alternative < singular_beta - self.params.singular_triple_margin {
+                        singular_extension = 3;
+                    }
+                }
+            }
+        }
+
+        // Internal iterative reduction: a node without a table move has no
+        // ordering guidance and searches one ply shallower. A too-shallow
+        // entry at a cut node admits the node as well (the quality gate).
+        if self.params.use_internal_iterative_reduction
+            && depth >= 4
+            && !in_check
+            && excluded_move.is_none()
+        {
+            let quality_gate = self.params.use_micro_riders
+                && tt_probe.is_some_and(|entry| i32::from(entry.depth) < depth - 4);
+            let node_type = pv_node || is_root || (cut_node && quality_gate);
+            if (tt_move.is_none() || quality_gate) && node_type {
+                depth -= 1;
+            }
+        }
+
+        if depth <= 0 {
+            return self.quiescence(position, alpha, beta, ply, previous);
         }
 
         let moves = movegen::legal(position);
@@ -237,6 +472,7 @@ impl Searcher {
             };
         }
 
+        let cont = self.continuations(ply);
         let mut ordered = [Move::NONE; MAX_MOVES];
         let mut count = 0;
         {
@@ -248,6 +484,7 @@ impl Searcher {
                 &self.history,
                 ply,
                 previous,
+                &cont,
             );
             for mv in picker {
                 ordered[count] = mv;
@@ -255,15 +492,6 @@ impl Searcher {
             }
         }
 
-        let late_move_limit = if !pv_node && !in_check && depth <= self.params.lmp_max_depth {
-            let mut limit = lmp_limit(depth);
-            if self.params.use_improving_flag && !improving {
-                limit = (limit / 2).max(1);
-            }
-            Some(limit)
-        } else {
-            None
-        };
         let futile = !pv_node
             && !in_check
             && depth <= self.params.futility_max_depth
@@ -271,51 +499,211 @@ impl Searcher {
 
         let mut best_score = -INFINITE;
         let mut best_move = Move::NONE;
-        let mut quiet_tried = 0;
-        let mut move_index = 0;
+        let mut quiet_move_count = 0;
+        let mut legal_moves = 0;
         let mut skip_quiets = false;
-        let mut bad_quiets = [Move::NONE; 64];
-        let mut bad_count = 0;
+        let mut quiets_searched = [Move::NONE; 64];
+        let mut quiets_count = 0;
 
         for &mv in &ordered[..count] {
-            move_index += 1;
+            if !excluded_move.is_none() && mv == excluded_move {
+                continue;
+            }
             let capture = movegen::is_capture(position, mv);
-            let quiet = !capture && !mv.is_promotion();
+            let quiet_counted = !capture && !mv.is_promotion();
             let moving = position.piece_at(mv.from());
 
-            if !pv_node && !in_check {
-                if quiet {
-                    quiet_tried += 1;
-                    if move_index > 1 {
-                        // Late move pruning and futility stop the whole quiet
-                        // stage, not just the current move; captures (including
-                        // losing ones) are still tried. Pawn moves are exempt
-                        // from futility, matching the reference.
-                        if late_move_limit.is_some_and(|limit| quiet_tried > limit) {
-                            skip_quiets = true;
-                        }
-                        if futile && piece_type(moving) != PAWN {
-                            skip_quiets = true;
-                        }
-                    }
-                    if skip_quiets {
+            // Combined history score, computed pre-move: quiets read the
+            // butterfly and continuation tables, captures the capture table.
+            let history_score = if capture {
+                let victim = if mv.flag() == crate::types::r#move::flags::EN_PASSANT {
+                    PAWN
+                } else {
+                    piece_type(position.piece_at(mv.to()))
+                };
+                self.history
+                    .capture(piece_type(moving), mv, victim)
+                    .clamp(-8_033, 8_033)
+            } else {
+                self.history.pruning_score(color_of(moving), mv, &cont)
+            };
+
+            // Depth-scaled SEE pruning with a history refund; the first legal
+            // move of the node is never pruned, and king moves are exempt on
+            // the quiet side (the exchange says little about king safety).
+            // The flat legacy thresholds (-50 captures, -100 quiets, ceiling
+            // 4) remain available behind the lever.
+            let see_ceiling = if self.params.use_ref_see_thresholds {
+                self.params.see_pruning_max_depth
+            } else {
+                self.params.see_pruning_max_depth.min(4)
+            };
+            if depth <= see_ceiling && !in_check && !pv_node && legal_moves > 0 {
+                if capture {
+                    let threshold = if self.params.use_ref_see_thresholds {
+                        self.params.see_noisy_margin * depth * depth
+                            - history_score / self.params.see_history_divisor
+                    } else {
+                        -50
+                    };
+                    if !see_ge(position, mv, threshold) {
                         continue;
                     }
-                } else if capture
-                    && depth <= self.params.see_pruning_max_depth
-                    && !see_ge(position, mv, -26 * depth * depth)
-                {
-                    continue;
+                } else if !mv.is_promotion() && piece_type(moving) != KING {
+                    let threshold = if self.params.use_ref_see_thresholds {
+                        self.params.see_quiet_margin * depth
+                            - history_score / self.params.see_history_divisor
+                    } else {
+                        -100
+                    };
+                    if !see_ge(position, mv, threshold) {
+                        continue;
+                    }
                 }
             }
 
             let next = position.make_move(mv);
             let gives_check = next.in_check(next.side());
-            self.extensions[ply + 1] = extensions_used;
-            let new_depth = depth - 1;
+            self.move_stack[ply] = mv;
+
+            // The legal-move counter increments immediately after the
+            // legality check and before every pruning block, so pruned moves
+            // still occupy a slot in the count late-move reductions index by.
+            legal_moves += 1;
+            self.move_counts[ply] = legal_moves;
+            if quiet_counted {
+                quiet_move_count += 1;
+            }
+
+            // Late move pruning: enough quiets have been tried that the rest
+            // cannot realistically be best; stop trying quiets entirely.
+            if !in_check
+                && quiet_counted
+                && !pv_node
+                && legal_moves > 1
+                && depth <= self.params.lmp_max_depth
+            {
+                let mut limit = lmp_limit(depth);
+                if self.params.use_improving_flag && !improving {
+                    limit = (limit / 2).max(1);
+                }
+                if quiet_move_count > limit {
+                    skip_quiets = true;
+                    continue;
+                }
+            }
+
+            // History pruning: a quiet whose combined history is far below
+            // the depth-scaled threshold is skipped; the remaining quiets are
+            // still searched (one move at a time).
+            if self.params.use_history_pruning
+                && depth <= self.params.hist_prune_max_depth
+                && !pv_node
+                && quiet_counted
+                && !in_check
+                && legal_moves > 1
+                && history_score < -self.params.hist_prune_margin * depth
+            {
+                continue;
+            }
+
+            // Futility: the static evaluation is so far below alpha that even
+            // the margin cannot bridge the gap; quiet non-pawn moves cannot
+            // realistically improve on alpha. Pawn moves are exempt.
+            if !in_check
+                && !pv_node
+                && quiet_counted
+                && legal_moves > 1
+                && futile
+                && piece_type(moving) != PAWN
+                && eval + futility_margin(depth) < alpha
+            {
+                skip_quiets = true;
+                continue;
+            }
+
+            // Once the quiet stage is aborted, only captures remain.
+            if skip_quiets && !capture {
+                continue;
+            }
+
+            let mut extension = if mv == tt_move { singular_extension } else { 0 };
+
+            // Negative extensions: suspicious moves are searched one ply
+            // shallower — a losing capture, or a quiet the history tables
+            // have learned to distrust.
+            if self.params.use_negative_extensions
+                && depth >= 3
+                && !pv_node
+                && !in_check
+                && !gives_check
+            {
+                if capture {
+                    if !see_ge(position, mv, 0) {
+                        extension -= 1;
+                    }
+                } else if !mv.is_promotion()
+                    && self.history.butterfly(color_of(moving), mv) < -3_000
+                {
+                    extension -= 1;
+                }
+            }
+
+            let new_depth = (depth - 1 + extension).max(0);
+
+            // Late move reduction (the live schedule): the log base plus the
+            // opponent-material, history, cut-node, PV and killer terms, in
+            // fixed point over 1024ths of a ply.
+            // Late move reduction (the live schedule): the log base plus the
+            // opponent-material, history, cut-node, PV and killer terms, in
+            // fixed point over 1024ths of a ply.
+            let mut reduction = 0;
+            if self.params.use_lmr_table
+                && depth >= 3
+                && legal_moves > 3
+                && !capture
+                && !mv.is_promotion()
+                && !in_check
+                && !gives_check
+            {
+                let mut reduction_1024 = lmr_base_reduction(depth, legal_moves) * 1024;
+                // A bare endgame (the mover holds at most four pieces) makes
+                // late moves matter less.
+                if next.occupancy(color_of(moving)).count_ones() <= 4 {
+                    reduction_1024 += 1024;
+                }
+                if self.params.use_term1_not_improving && !improving {
+                    reduction_1024 += 1024;
+                }
+                reduction_1024 -= lmr_history_term_1024(
+                    history_score,
+                    true,
+                    self.params.use_lmr_history_precision,
+                );
+                if self.params.use_cut_node && cut_node {
+                    reduction_1024 += 1024;
+                }
+                if pv_node {
+                    reduction_1024 -= 1024;
+                }
+                if self.killers.contains(ply, mv) || self.history.counter_move(previous) == mv {
+                    reduction_1024 -= 1024;
+                }
+                reduction = reduction_1024 / 1024;
+                if reduction > new_depth {
+                    reduction = new_depth;
+                }
+                if reduction < 0 {
+                    reduction = 0;
+                }
+            }
+            self.reduction_stack[ply] = reduction;
 
             let mut score;
-            if move_index == 1 {
+            if legal_moves == 1 {
+                // First legal move: a principal-variation child at PV nodes,
+                // otherwise the opposite node type.
+                let child_cut = if pv_node { false } else { !cut_node };
                 score = -self.negamax(
                     &next,
                     -beta,
@@ -323,32 +711,45 @@ impl Searcher {
                     new_depth,
                     ply + 1,
                     Some((moving, mv.to())),
+                    child_cut,
+                    Move::NONE,
+                    extensions_used,
                 );
             } else {
-                let mut reduction = 0;
-                if new_depth >= 3 && move_index > 3 && quiet && !in_check && !gives_check {
-                    reduction = self.lmr_reduction(new_depth, move_index, pv_node, improving);
-                }
-                let reduced_depth = (new_depth - reduction).max(0);
+                // Reduced scout of a late move: treated as an expected cut
+                // node.
                 score = -self.negamax(
                     &next,
                     -alpha - 1,
                     -alpha,
-                    reduced_depth,
+                    new_depth - reduction,
                     ply + 1,
                     Some((moving, mv.to())),
+                    true,
+                    Move::NONE,
+                    extensions_used,
                 );
                 if score > alpha && reduction > 0 {
+                    let re_search_depth = compute_re_search_depth(
+                        new_depth,
+                        reduction,
+                        self.params.use_re_search_reduction,
+                    );
                     score = -self.negamax(
                         &next,
                         -alpha - 1,
                         -alpha,
-                        new_depth,
+                        re_search_depth,
                         ply + 1,
                         Some((moving, mv.to())),
+                        !cut_node,
+                        Move::NONE,
+                        extensions_used,
                     );
                 }
                 if score > alpha && score < beta {
+                    // Full-window re-search establishes the principal
+                    // variation: a PV child, never a cut node.
                     score = -self.negamax(
                         &next,
                         -beta,
@@ -356,6 +757,9 @@ impl Searcher {
                         new_depth,
                         ply + 1,
                         Some((moving, mv.to())),
+                        false,
+                        Move::NONE,
+                        extensions_used,
                     );
                 }
             }
@@ -363,9 +767,9 @@ impl Searcher {
                 return 0;
             }
 
-            if score <= alpha && quiet && bad_count < bad_quiets.len() {
-                bad_quiets[bad_count] = mv;
-                bad_count += 1;
+            if score <= alpha && quiet_counted && quiets_count < quiets_searched.len() {
+                quiets_searched[quiets_count] = mv;
+                quiets_count += 1;
             }
 
             if score > best_score {
@@ -375,25 +779,25 @@ impl Searcher {
                     alpha = score;
                     self.pv.update(ply, mv);
                     if score >= beta {
-                        if quiet {
+                        if quiet_counted {
                             self.killers.record(ply, mv);
                             self.history.update_quiet(
-                                previous,
-                                moving,
+                                color_of(moving),
                                 mv,
                                 depth,
-                                &bad_quiets[..bad_count],
+                                &quiets_searched[..quiets_count],
+                                &cont,
                             );
+                            self.history.update_counter(previous, mv);
                         } else {
-                            let captured = if mv.flag() == flags::EN_PASSANT {
+                            let victim = if mv.flag() == crate::types::r#move::flags::EN_PASSANT {
                                 PAWN
                             } else {
                                 piece_type(position.piece_at(mv.to()))
                             };
                             self.history
-                                .update_capture(previous, moving, mv, captured, depth);
+                                .update_capture(piece_type(moving), mv, victim, depth);
                         }
-                        self.history.update_counter(previous, mv);
                         return self.finish_node(NodeResult {
                             position,
                             ply,
@@ -405,6 +809,7 @@ impl Searcher {
                             best_move,
                             in_check,
                             previous,
+                            excluded: !excluded_move.is_none(),
                         });
                     }
                 }
@@ -434,6 +839,7 @@ impl Searcher {
             best_move: stored_move,
             in_check,
             previous,
+            excluded: !excluded_move.is_none(),
         })
     }
 }
@@ -460,39 +866,4 @@ fn razor_margin(depth: i32) -> i32 {
 fn rfp_margin(depth: i32) -> i32 {
     const MARGINS: [i32; 5] = [0, 102, 210, 267, 394];
     MARGINS[(depth as usize).min(4)]
-}
-
-impl Searcher {
-    /// Returns whether the static evaluation improved over the same line.
-    ///
-    /// The grandparent's eval is the comparison point: two plies are enough to
-    /// see whether the current side's position is trending up or down.
-    fn is_improving(&self, ply: usize, eval: i32) -> bool {
-        if !self.params.use_improving_flag || ply < 2 {
-            return true;
-        }
-        eval > self.evals[ply - 2]
-    }
-
-    /// Returns the late-move reduction for the `move_count`-th move.
-    ///
-    /// The reduction comes from an integer table so every platform produces the
-    /// same value: `log2(depth * move_count) / 2`. The "not improving" weight
-    /// adds a fixed offset, and principal-variation nodes keep a smaller
-    /// reduction.
-    fn lmr_reduction(&self, depth: i32, move_count: usize, pv_node: bool, improving: bool) -> i32 {
-        if !self.params.use_lmr_table {
-            return i32::from(depth >= 4 && move_count > 4);
-        }
-        let depth = depth.max(1) as u32;
-        let moves = move_count.max(1) as u32;
-        let mut reduction = ((depth * moves).max(2).ilog2() as i32 / 2).max(1);
-        if pv_node {
-            reduction -= 1;
-        }
-        if !improving {
-            reduction += self.params.lmr_v2_not_improving_weight / 70;
-        }
-        reduction.clamp(0, depth as i32 - 2)
-    }
 }

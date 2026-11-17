@@ -59,14 +59,73 @@ pub struct SearchParams {
     pub use_check_aware_quiescence: bool,
     /// Maximum summed extensions along one path.
     pub max_path_extensions: i32,
-    /// Weight of the "not improving" term in late move reductions.
-    pub lmr_v2_not_improving_weight: i32,
     /// Whether the improving flag is computed at all.
     pub use_improving_flag: bool,
     /// Whether reverse futility uses the formula margin instead of a constant.
     pub use_formula_rfp: bool,
     /// Whether late move reductions use the depth/move-count table.
     pub use_lmr_table: bool,
+    /// Whether the "+1 ply when not improving" late-move-reduction term is
+    /// applied. The reference ships this term OFF; the reduction schedule's
+    /// fine structure comes from the other terms.
+    pub use_term1_not_improving: bool,
+    /// Whether the history term uses multiply-before-divide fixed point
+    /// (`h * 1024 / divisor`) instead of divide-first truncation.
+    pub use_lmr_history_precision: bool,
+    /// Whether the cut-node flag drives the late-move-reduction term and the
+    /// null-move gate arm.
+    pub use_cut_node: bool,
+    /// Whether the reference transposition-table replacement policy is used:
+    /// a 5-bit generation (starting at one), a victim chosen by
+    /// `stored depth - 2 per generation of age`, a same-key refresh that keeps
+    /// a deeper current-generation entry, and no deeper-entry slack guard.
+    pub use_ref_tt_replacement: bool,
+    /// Whether quiet moves with very poor combined history are pruned at low
+    /// depth.
+    pub use_history_pruning: bool,
+    /// Deepest node that may use history pruning.
+    pub hist_prune_max_depth: i32,
+    /// History-pruning margin scale: the threshold is `-margin * depth`.
+    pub hist_prune_margin: i32,
+    /// Whether the hindsight depth pair runs: a heavily reduced parent whose
+    /// combined evaluation fell below zero earns the ply back, a reduced
+    /// parent whose combined evaluation rose above the threshold loses one.
+    pub use_hindsight_reductions: bool,
+    /// Whether a node without a transposition-table move searches one ply
+    /// shallower at principal-variation or root nodes.
+    pub use_internal_iterative_reduction: bool,
+    /// Whether the singular-extension verification search runs.
+    pub use_singular_extensions: bool,
+    /// Whether a singular move can earn a second or third extension ply on a
+    /// wide verification fail-low margin.
+    pub use_singular_double_extensions: bool,
+    /// Minimum remaining depth for the singular-extension attempt.
+    pub singular_min_depth: i32,
+    /// Singular-beta slope: the verification window sits this many centipawns
+    /// per ply below the stored score.
+    pub singular_beta_slope: i32,
+    /// Verification fail-low margin that earns a second extension ply.
+    pub singular_double_margin: i32,
+    /// Verification fail-low margin that earns a third extension ply.
+    pub singular_triple_margin: i32,
+    /// Whether suspicious moves (losing captures, historically bad quiets)
+    /// are searched one ply shallower.
+    pub use_negative_extensions: bool,
+    /// Whether the reference's depth-scaled, history-refunded SEE pruning
+    /// thresholds replace the flat legacy ones.
+    pub use_ref_see_thresholds: bool,
+    /// Quiet-move SEE-pruning margin per ply (negative = loss tolerance).
+    pub see_quiet_margin: i32,
+    /// Capture SEE-pruning margin per squared ply.
+    pub see_noisy_margin: i32,
+    /// Divisor of the combined-history refund in the SEE-pruning threshold.
+    pub see_history_divisor: i32,
+    /// Whether the re-search after a reduced fail-high is shaved for large
+    /// reductions.
+    pub use_re_search_reduction: bool,
+    /// Whether a position that already repeats on the search path is refused
+    /// transposition-table cutoffs (repetition-hunting protection).
+    pub disable_tt_cutoff_for_repetitions: bool,
     /// Whether the stored static evaluation is reused from the table.
     pub use_tt_score_eval: bool,
     /// Whether the static evaluation is corrected by learned history.
@@ -107,10 +166,31 @@ impl Default for SearchParams {
             use_micro_riders: true,
             use_check_aware_quiescence: true,
             max_path_extensions: 32,
-            lmr_v2_not_improving_weight: 70,
             use_improving_flag: true,
             use_formula_rfp: true,
             use_lmr_table: true,
+            use_term1_not_improving: false,
+            use_lmr_history_precision: true,
+            use_cut_node: true,
+            use_ref_tt_replacement: true,
+            use_history_pruning: true,
+            hist_prune_max_depth: 3,
+            hist_prune_margin: 2_000,
+            use_hindsight_reductions: true,
+            use_internal_iterative_reduction: true,
+            use_singular_extensions: true,
+            use_singular_double_extensions: true,
+            singular_min_depth: 8,
+            singular_beta_slope: 2,
+            singular_double_margin: 30,
+            singular_triple_margin: 120,
+            use_negative_extensions: true,
+            use_ref_see_thresholds: true,
+            see_quiet_margin: -43,
+            see_noisy_margin: -26,
+            see_history_divisor: 128,
+            use_re_search_reduction: true,
+            disable_tt_cutoff_for_repetitions: true,
             use_tt_score_eval: true,
             use_correction_history: true,
             use_ref_correction_history: true,
@@ -150,10 +230,31 @@ mod tests {
         assert!(params.use_micro_riders);
         assert!(params.use_check_aware_quiescence);
         assert_eq!(params.max_path_extensions, 32);
-        assert_eq!(params.lmr_v2_not_improving_weight, 70);
         assert!(params.use_improving_flag);
         assert!(params.use_formula_rfp);
         assert!(params.use_lmr_table);
+        assert!(!params.use_term1_not_improving);
+        assert!(params.use_lmr_history_precision);
+        assert!(params.use_cut_node);
+        assert!(params.use_ref_tt_replacement);
+        assert!(params.use_history_pruning);
+        assert_eq!(params.hist_prune_max_depth, 3);
+        assert_eq!(params.hist_prune_margin, 2_000);
+        assert!(params.use_hindsight_reductions);
+        assert!(params.use_internal_iterative_reduction);
+        assert!(params.use_singular_extensions);
+        assert!(params.use_singular_double_extensions);
+        assert_eq!(params.singular_min_depth, 8);
+        assert_eq!(params.singular_beta_slope, 2);
+        assert_eq!(params.singular_double_margin, 30);
+        assert_eq!(params.singular_triple_margin, 120);
+        assert!(params.use_negative_extensions);
+        assert!(params.use_ref_see_thresholds);
+        assert_eq!(params.see_quiet_margin, -43);
+        assert_eq!(params.see_noisy_margin, -26);
+        assert_eq!(params.see_history_divisor, 128);
+        assert!(params.use_re_search_reduction);
+        assert!(params.disable_tt_cutoff_for_repetitions);
         assert!(params.use_tt_score_eval);
         assert!(
             !params.use_eval_cache,

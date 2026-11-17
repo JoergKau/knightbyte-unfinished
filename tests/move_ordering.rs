@@ -9,13 +9,12 @@ mod common;
 
 use knightbyte::board::movegen::legal;
 use knightbyte::board::position::Position;
-use knightbyte::search::history::{History, Previous};
+use knightbyte::search::history::{Continuations, History, Previous};
 use knightbyte::search::killers::Killers;
 use knightbyte::search::move_picker::MovePicker;
 use knightbyte::search::see::{see_approximate, see_value};
 use knightbyte::types::color::WHITE;
 use knightbyte::types::r#move::Move;
-use knightbyte::types::piece::WN;
 
 const STARTPOS: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
@@ -44,6 +43,7 @@ fn ordered(
     previous: Option<Previous>,
 ) -> Vec<Move> {
     let moves = legal(position);
+    let cont: Continuations = [None; 4];
     MovePicker::new(
         position,
         moves.as_slice(),
@@ -52,6 +52,7 @@ fn ordered(
         history,
         0,
         previous,
+        &cont,
     )
     .collect()
 }
@@ -214,7 +215,7 @@ fn history_promotes_a_quiet_move() {
     let mut history = History::new();
     let killers = Killers::new();
     let quiet = legal_move(&position, "g1f3");
-    history.update_quiet(None, WN, quiet, 5, &[]);
+    history.update_quiet(WHITE, quiet, 5, &[], &[None; 4]);
     let picked = ordered(&position, &history, Move::NONE, &killers, None);
     assert_eq!(picked[0], quiet);
 }
@@ -224,7 +225,7 @@ fn ageing_and_clearing_history_change_the_order() {
     let position = verified(STARTPOS);
     let mut history = History::new();
     let quiet = legal_move(&position, "g1f3");
-    history.update_quiet(None, WN, quiet, 5, &[]);
+    history.update_quiet(WHITE, quiet, 5, &[], &[None; 4]);
     let before = history.butterfly(WHITE, quiet);
     history.age();
     assert_eq!(

@@ -27,18 +27,23 @@
 use crate::board::movegen;
 use crate::board::position::Position;
 use crate::search::MAX_PLY;
+use crate::search::history::History;
 use crate::search::history::Previous;
 use crate::search::move_picker::MAX_MOVES;
 use crate::search::searcher::{
     DRAW_SCORE, MATE_LIMIT, NO_STATIC_EVAL, Searcher, mated_in, tt_entry,
 };
-use crate::search::see::{piece_value, see_approximate, see_ge, see_value};
+use crate::search::see::{see_approximate, see_ge, see_value};
 use crate::search::tt::Bound;
 use crate::types::r#move::{Move, flags};
-use crate::types::piece::{EMPTY, piece_type};
+use crate::types::piece::{EMPTY, PAWN, piece_type};
 
 /// Largest losing exchange that quiescence still searches.
 const SEE_THRESHOLD: i32 = -50;
+
+/// Material values used by the capture-ordering term (pawn 100 ... king
+/// 20,000), matching the main picker's ordering weights.
+const ORDER_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20_000];
 
 impl Searcher {
     /// Resolves captures at a leaf node.
@@ -144,7 +149,13 @@ impl Searcher {
             ordered[..count].copy_from_slice(&moves.as_slice()[..count]);
             count
         } else {
-            order_captures(position, moves.as_slice(), &mut ordered, &mut scores)
+            order_captures(
+                position,
+                &self.history,
+                moves.as_slice(),
+                &mut ordered,
+                &mut scores,
+            )
         };
 
         if in_check && count == 0 {
@@ -256,6 +267,7 @@ fn is_capture(position: &Position, mv: Move) -> bool {
 /// reference score, then losing captures in generation order.
 fn order_captures(
     position: &Position,
+    history: &History,
     moves: &[Move],
     ordered: &mut [Move; MAX_MOVES],
     scores: &mut [i32; MAX_MOVES],
@@ -269,8 +281,14 @@ fn order_captures(
             continue;
         }
         if see_ge(position, mv, 0) {
+            let victim = if mv.flag() == flags::EN_PASSANT {
+                PAWN
+            } else {
+                piece_type(position.piece_at(mv.to()))
+            };
+            let moving_type = piece_type(position.piece_at(mv.from()));
             ordered[count] = mv;
-            scores[count] = capture_score(position, mv);
+            scores[count] = capture_score(position, history, moving_type, mv, victim);
             count += 1;
         } else {
             bad[bad_count] = mv;
@@ -286,33 +304,31 @@ fn order_captures(
 
     // Selection sort keeps the highest score first and preserves generation
     // order among equal scores, which is what the reference's picker does.
-    for index in 0..count {
-        let mut best = index;
-        for candidate in index + 1..count {
+    for slot in 0..count {
+        let mut best = slot;
+        for candidate in slot + 1..count {
             if scores[candidate] > scores[best] {
                 best = candidate;
             }
         }
-        ordered.swap(index, best);
-        scores.swap(index, best);
+        ordered.swap(slot, best);
+        scores.swap(slot, best);
     }
     count
 }
 
-/// Returns the reference capture-ordering score for a good capture.
-fn capture_score(position: &Position, mv: Move) -> i32 {
-    let victim = if mv.flag() == flags::EN_PASSANT {
-        0
-    } else {
-        let captured = position.piece_at(mv.to());
-        if captured == EMPTY {
-            0
-        } else {
-            piece_value(piece_type(captured))
-        }
-    };
-    let attacker = piece_value(piece_type(position.piece_at(mv.from())));
-    1_000_000 + victim * 100 - attacker + see_value(position, mv)
+/// Returns the reference capture-ordering score for a good capture: the
+/// classical material swing, the exact exchange value and the raw
+/// capture-history cell.
+fn capture_score(
+    position: &Position,
+    history: &History,
+    moving_type: usize,
+    mv: Move,
+    victim: usize,
+) -> i32 {
+    let material = ORDER_VALUES[victim] * 100 - ORDER_VALUES[moving_type];
+    1_000_000 + material + see_value(position, mv) + history.capture(moving_type, mv, victim)
 }
 
 /// Fail-soft averaging on a quiescence fail-high.

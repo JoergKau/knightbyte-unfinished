@@ -2,7 +2,7 @@
 
 ## goal of the project: Full Migration from the predecessor C# engine to rust Knightbyte
 
-Fully optimized the predecessor engine code from the predecessor tree has to be migrated and optimized to become a rust program. The Neural Network used keeps unchanged.
+Fully optimized the predecessor engine code from the predecessor tree has to be migrated and optimized to become a rust program. The Neural Network used keeps unchanged. 
 
 ## when adding or changing any code it is mandatory to add inline code documentation
 
@@ -36,6 +36,6 @@ after each step is finished first update the documentaion before the next step.
 
 ## RULE HARDENING: test FENs must be Stockfish-verified AT TEST TIME
 
-Every FEN constant used in a test must be verified against Stockfish first. On macOS stockfish is installed here: /opt/homebrew/bin/stockfish
+Every FEN constant used in a test must be verified against Stockfish first. On macOS stockfish is installed here: /opt/homebrew/bin/stockfish. on windows is it C:\dev\c#-chess-engines\stockfish
 
 ## the code must compile with no errors and warnings

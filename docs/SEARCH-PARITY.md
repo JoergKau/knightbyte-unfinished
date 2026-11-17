@@ -41,27 +41,89 @@ python tools/capture_bench.py compare --engine <engine> \
 Node counts are parsed by stripping locale separators, because the reference
 prints numbers with the host's digit grouping.
 
-## 2. Divergence status (2026-11-17, after the pruning-formula port)
+## 2. Divergence status (2026-11-17, after the coupled port)
 
 Per-position node counts, reference → KnightByte:
 
-| Depth | Pos 1 | Pos 2 | Pos 3 | Pos 4 | Total ref | Total ours |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 47 → 47 | 110 → 110 | 33 → 33 | 371 → 364 | 561 | 554 |
-| 2 | 213 → 289 | 331 → 411 | 140 → 184 | 893 → 909 | 1,577 | 1,793 |
-| 3 | 439 → 675 | 551 → 612 | 273 → 321 | 1,251 → 1,206 | 2,514 | 2,814 |
-| 4 | 1,204 → 1,969 | 965 → 1,100 | 1,068 → 1,236 | 1,757 → 1,653 | 4,994 | 5,958 |
-| 5 | 3,947 → 3,495 | 1,660 → 1,652 | 1,299 → 1,561 | 3,025 → 2,730 | 9,931 | 9,438 |
-| 6 | 5,728 → 4,984 | 2,706 → 2,585 | 2,011 → 2,306 | 4,534 → 4,802 | 14,979 | 14,677 |
-| 7 | 10,815 → 11,072 | 4,277 → 5,980 | 2,855 → 3,386 | 6,117 → 7,003 | 24,064 | 27,441 |
-| 8 | 27,811 → 19,460 | 7,774 → 10,385 | 4,737 → 4,651 | 7,881 → 9,793 | 48,203 | 44,289 |
-| 9 | 41,511 → 33,223 | 16,854 → 23,596 | 8,233 → 9,199 | 11,528 → 16,695 | 78,126 | 82,713 |
-| 10 | 95,947 → 57,814 | 27,260 → 38,615 | 11,643 → 17,737 | 20,885 → 26,948 | 155,735 | 141,114 |
-| 11 | 151,132 → 116,827 | 39,915 → 62,168 | 16,101 → 27,689 | 32,569 → 44,984 | 239,717 | 251,668 |
-| 12 | 276,529 → 211,162 | 61,017 → 93,612 | 28,547 → 42,655 | 50,440 → 64,685 | 416,533 | 412,114 |
-| 14 | 828,843 → 923,062 | 195,860 → 206,338 | 56,030 → 79,050 | 141,069 → 239,422 | 1,221,802 | 1,447,872 |
-| 16 | — | — | — | — | 3,169,859 | 3,584,452 |
-| 18 | — | — | — | — | 6,925,762 | 8,506,398 |
+| Depth | Pos 1 | Pos 2 | Pos 3 | Pos 4 | Total ref | Total ours | Delta |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 47 → 47 | 110 → 110 | 33 → 33 | 371 → 364 | 561 | 554 | -7 |
+| 2 | 213 → 186 | 331 → 331 | 140 → 140 | 893 → 900 | 1,577 | 1,557 | -20 |
+| 3 | 439 → 531 | 551 → 551 | 273 → 272 | 1,251 → 1,219 | 2,514 | 2,573 | +59 |
+| 4 | 1,204 → 882 | 965 → 965 | 1,068 → 890 | 1,757 → 1,666 | 4,994 | 4,403 | -591 |
+| 5 | 3,947 → 2,291 | 1,660 → 1,619 | 1,299 → 1,668 | 3,025 → 2,779 | 9,931 | 8,357 | -1,574 |
+| 6 | 5,728 → 3,667 | 2,706 → 2,596 | 2,011 → 2,051 | 4,534 → 4,804 | 14,979 | 13,118 | -1,861 |
+| 7 | 10,815 → 9,481 | 4,277 → 4,132 | 2,855 → 2,832 | 6,117 → 7,126 | 24,064 | 23,571 | -493 |
+| 8 | 27,811 → 28,235 | 7,774 → 7,800 | 4,737 → 4,031 | 7,881 → 9,173 | 48,203 | 49,239 | +1,036 |
+| 9 | 41,511 → 41,046 | 16,854 → 15,759 | 8,233 → 7,416 | 11,528 → 14,092 | 78,126 | 78,313 | +187 |
+| 10 | 95,947 → 81,695 | 27,260 → 26,335 | 11,643 → 12,004 | 20,885 → 19,281 | 155,735 | 139,315 | -16,420 |
+| 11 | 151,132 → 168,477 | 39,915 → 39,817 | 16,101 → 25,022 | 32,569 → 27,961 | 239,717 | 261,277 | +21,560 |
+| 12 | 276,529 → 290,363 | 61,017 → 55,728 | 28,547 → 42,299 | 50,440 → 40,923 | 416,533 | 429,313 | +12,780 |
+| 14 | 828,843 → 766,045 | 195,860 → 130,039 | 56,030 → 86,893 | 141,069 → 110,820 | 1,221,802 | 1,093,797 | -128,005 |
+| 16 | 2,041,912 → 2,277,590 | 599,976 → 495,372 | 118,626 → 165,615 | 409,345 → 445,329 | 3,169,859 | 3,383,906 | +214,047 |
+| 18 | 4,461,267 → 4,450,344 | 1,396,061 → 1,279,423 | 246,520 → 380,392 | 821,914 → 869,346 | 6,925,762 | 6,979,505 | +53,743 |
+
+What the coupled port fixed (compare the depth-18 column: +22.8 % before,
++0.8 % after):
+
+* **Cut-node threading** through the recursion with the reference's child
+  rules: a principal-variation child of a PV node is never a cut node, scouts
+  always are, the re-search after a shaved fail-high flips the flag, and the
+  full-window PV re-search is never a cut node.
+* **Reference transposition-table replacement**: 5-bit generation starting at
+  one, the victim chosen by `stored depth - 2 per generation of age`, the
+  same-key refresh that keeps a deeper current-generation entry, and no
+  deeper-entry guard.
+* **The early transposition-table-cutoff history bonus** (a quiet table move
+  that cuts off quickly at the parent earns a butterfly bonus) and the
+  repetition gate (a position that already repeats on the path is refused
+  table cutoffs and table-score-as-eval).
+* **History pruning** (legacy thresholds: depth <= 3, combined score <
+  -2,000·depth), **quiet SEE pruning** with the depth-scaled, history-refunded
+  thresholds (-43·depth quiets, -26·depth² captures, king exempt, ceiling 8),
+  and the first-legal-move protection for SEE pruning.
+* **The reference late-move-reduction schedule**: the `int(1.0 +
+  ln(d)·ln(m)/1.75)` base table, the mover-at-most-four-pieces term, the
+  continuous history term (1024ths of a ply, precise form), the cut-node, PV
+  and killer/counter terms. The not-improving term ships OFF, matching the
+  reference. The re-search depth is shaved for large reductions
+  (`ComputeReSearchDepth`).
+* **Internal iterative reduction** with the micro-rider quality gate, and the
+  **hindsight depth pair** (extend at prior reduction >= 2 and negative
+  combined eval, reduce at >= 1 and combined eval > 62).
+* **Singular extensions** with the double/triple tiers (margins 30/120),
+  verified at half depth with the table move excluded, applied to the table
+  move only; plus **negative extensions** (losing captures and historically
+  bad quiets searched one ply shallower).
+* **The combined quiet score**: butterfly + the 1-ply continuation in full +
+  the 2/4/6-ply continuations halved; the continuation tables re-keyed to
+  `(colour, previous target, from, to)` at the 1/2/4/6-ply distances, and
+  capture cutoffs updating the capture history only. Capture ordering now uses
+  the classical material values (100/320/330/500/900/20000), the raw
+  capture-history cell, and an en-passant victim counted as a pawn — in the
+  main picker and in quiescence.
+* **Aspiration windows** with the reference widening (fail-low halves the
+  window and shifts alpha by the delta; fail-high raises beta by the delta),
+  and the `improving` flag returning *not improving* at the root and first
+  ply.
+* **Null move**: the gate carries the cut-node arm; a non-mate fail-high cuts
+  fail-hard at beta while a mate line falls through and keeps searching.
+
+Remaining divergence, in bisection order:
+
+1. **One node at depth 3 of the endgame position** (273 vs 272): the seed of
+   the mid-depth wobble. The trees at depths 1-2 are exact; iteration 3 adds
+   133 nodes in the reference and 132 here. Everything deeper cascades from
+   such seeds (the PV and best-move choices diverge by depth 4, so the
+   mid-depth totals swing while the deep shape stays close).
+2. **The reference staged picker** is approximated by a tiered picker with the
+   same emission order. Ordering within a tier differs where the reference's
+   lazy stages tie-break differently.
+3. **ProbCut, the shallow-pruning package, bad-noisy pruning and the LMR v2
+   schedule** are OFF in the reference's shipped configuration and were not
+   ported.
+4. **The quiescence node-accounting seed** at depth 1 of the tactical
+   position (371 vs 364) predates the coupled port and is still unexplained.
 
 What the port already fixed:
 
@@ -95,31 +157,32 @@ What the port already fixed:
     improving; it stops the whole quiet stage;
   * futility: per-depth margins `{_, 61, 144, 268, 334}`, strict `< alpha`, pawn
     moves exempt, quiet stage stopped;
-  * SEE pruning of captures: threshold `-26 · depth^2`.
+  * SEE pruning of captures: threshold `-26 · depth^2` under the flat legacy
+    lever; the depth-scaled history-refunded thresholds are the live default.
 * **History tables** use the reference scheme: gravity `h += u - h*|u|/MAX` with
   butterfly ±8,033 (bonus 207/ply up to 1,202; malus 200/ply up to 1,255),
   continuation ±8,003 (204/1,229 and 205/1,067) and capture ±8,488
   (192/1,250). Quiets that failed low earn the malus, the cutoff move earns the
   bonus, killers keep four slots per ply, and history ages by 7/8 after each
   completed iteration from depth 4.
-* Depth 12 is **within 1.1 % of the reference** (412,114 vs 416,533), depth 6
-  within 2.0 % and depth 8 within 8.1 %.
+* Depth 18 is within **0.8 %** of the reference (6,979,505 vs 6,925,762),
+  depth 12 within 3.1 %, depth 16 within 6.8 %.
 
 Known remaining differences, in bisection order:
 
-1. **The remaining search slice.** Depths 14–18 drift high (18: +23 %), i.e.
-   KnightByte reduces less than the reference. LMR, IIR and TT replacement were
-   each ported in isolation and reverted; they must land together with the
-   cut-node gates and singular extensions (section 3).
-2. **Quiet SEE pruning** (`-43 * depth - history/128`, king moves exempt) is not
-   active yet.
-3. **IIR and TT replacement.** No internal iterative reduction yet; the
-   replacement rule still uses a 6-bit age and a different depth penalty than the
-   reference's 5-bit age and `depth - 2` per generation.
-4. **Singular, ProbCut, history pruning, aspiration trio.**
+1. **The single-node seeds.** Depths 1–2 are exact at positions 1–3; iteration
+   3 of the endgame position adds 133 nodes in the reference and 132 here, and
+   iteration 3 of the startpos diverges by +92. The mid-depth totals wobble
+   around the reference (-12 % … +7 %) while the deep shape is close (18:
+   +0.8 %) — the classic signature of correct coupled machinery with one small
+   formula difference seeding PV divergence.
+2. **The staged picker** is a tier approximation; ordering inside a tier can
+   differ from the reference's lazy stages.
+3. **The quiescence node-accounting seed** at depth 1 of the tactical position
+   (371 vs 364) predates the coupled port and is still unexplained.
 
-Scores and best moves are close: depth 8 gives positions 1–3 the same best move
-as the reference with scores within a few centipawns (position 3 is identical).
+Scores and best moves are close: depth 8 gives positions 1–3 the same best
+move as the reference with scores within a few centipawn.
 
 ## 3. Isolated port attempts (2026-11-17) - measured and reverted
 
@@ -210,9 +273,39 @@ work should be a dedicated full-negamax port reviewed against the reference
 line by line (singular search included), or the project accepts this checkpoint
 and moves to Phase 4d, returning to exact parity with that port later.
 
-Status of the gate: `bench 6` -2.0 %, `bench 8` -8.1 %, `bench 12` -1.1 %,
-`bench 18` +22.8 %. Exact parity is **not** achieved; it is a reproducible,
-documented checkpoint.
+## 4a. Full coupled port (2026-11-17) — the recommendation above, executed
+
+The full-negamax port was done: every formula above plus singular extensions
+with double/triple tiers, negative extensions, the hindsight pair, IIR with the
+quality gate, the reference aspiration widening, the combined quiet score with
+the re-keyed 1/2/4/6-ply continuation tables, the classical capture-ordering
+values with the raw capture-history cell, the early TT-cutoff history bonus,
+the repetition gate, the re-search depth shave, and the reference TT
+replacement (5-bit generation, `depth - 2` ageing, deeper-keep same-key rule,
+no deeper-entry guard).
+
+Result (divergence table in §2): depth 18 improved from **+22.8 % to +0.8 %**,
+depth 14 from +18.5 % to −10.5 %, depth 16 from +13.1 % to +6.8 %, depth 8
+from −8.1 % to +2.2 %. Depth 5–6 regressed (−302/−2.0 % to −1,861/−12.4 %) —
+the mid-depth wobble seeded by the single-node differences listed in §2.
+
+Bisection findings recorded for the next session:
+
+* Toggling each new feature OFF individually (singular, IIR, hindsight,
+  history pruning, quiet SEE, negative extensions, re-search shave, TT
+  policy, cut-node term) changes the depth-5 total by less than 1.5 % each —
+  the features are individually near-inert at shallow depth and only matter
+  as a set.
+* The old LMR schedule inside the new pipeline measures d5 −1,990 / d6 −948;
+  the reference schedule measures d5 −1,571 / d6 −1,861. Neither dominates;
+  the seed difference is elsewhere.
+* The reference binary's per-iteration `info` lines are a usable oracle for
+  per-depth cumulative node counts (`go depth N` with a kept-open stdin);
+  they localised the first divergence to iteration 3.
+
+Status of the gate: `bench 6` −12.4 %, `bench 8` +2.2 %, `bench 12` +3.1 %,
+`bench 18` +0.8 %. Exact parity is **not** achieved; it is a reproducible,
+documented checkpoint, materially closer than the §4 checkpoint above.
 
 ## 5. Bisection order for the port
 
@@ -265,17 +358,17 @@ then the full table.
 | Reference | KnightByte | Status |
 | :--- | :--- | :--- |
 | `Search/Search.cs` | `search/searcher.rs` | Partial: state, driver, draw detection; threads/time missing |
-| `Search/Search.IterativeDeepening.cs` | `search/searcher.rs` | Partial: aspiration without re-search reduction |
-| `Search/Search.Negamax.cs` | `search/negamax.rs` | Partial: PVS, node-level extensions, main pruning; singular, ProbCut, history pruning, correction history, trio, IIR pending |
-| `Search/Search.Reduction.cs` | `search/negamax.rs` (LMR helper) | Provisional integer approximation |
-| `Search/QuiescenceSearch.cs` | `search/quiescence.rs` | Ported for the default configuration; narrowing switch implemented |
-| `Search/MovePicker.cs` | `search/move_picker.rs` | Partial: tiers and SEE/MVV; ordering scores and dynamic bonuses differ |
-| `Search/SearchHeuristics.cs` | `search/history.rs`, `search/correction.rs` | Partial: butterfly/capture/1-ply continuation and correction history; longer chains pending |
-| `Search/Search.Options.cs` | `search/params.rs` | 22 of 83 catalogued levers mapped |
+| `Search/Search.IterativeDeepening.cs` | `search/searcher.rs` | Ported: aspiration widening, aging, single-legal fallback |
+| `Search/Search.Negamax.cs` | `search/negamax.rs` | Ported for the default configuration: PVS, cut-node threading, hindsight, IIR, singular, negative extensions, pruning stack, LMR v1, re-search shave |
+| `Search/Search.Reduction.cs` | `search/negamax.rs` (LMR helpers) | Ported: base table, re-search depth, singular tiers |
+| `Search/QuiescenceSearch.cs` | `search/quiescence.rs` | Ported for the default configuration; capture ordering now uses the classical values and the capture-history cell |
+| `Search/MovePicker.cs` | `search/move_picker.rs`, `search/quiescence.rs` | Tier approximation with the reference emission order and scores; the lazy stages are not replicated |
+| `Search/SearchHeuristics.cs` | `search/history.rs`, `search/correction.rs` | Ported: butterfly/capture/1-2-4-6-ply continuation (reference keying) and correction history |
+| `Search/Search.Options.cs` | `search/params.rs` | Defaults mirrored for the shipped configuration; lever exposure pending (54 of 83) |
 | `Search/EvalCache.cs` | `search/eval_cache.rs` | Structural parity; disabled by default in both |
 | `Search/PvTable.cs` | `search/pv.rs` | Ported |
-| `Search/TimeManager.cs` | — | Not started (Phase 4d) |
-| `TranspositionTable/TranspositionTable.cs` | `search/tt.rs` | Structural parity; replacement rule and age width differ |
+| `Search/TimeManager.cs` | `search/time_manager.rs` | First slice (Phase 4d) |
+| `TranspositionTable/TranspositionTable.cs` | `search/tt.rs` | Ported: 5-bit generation, depth-2 ageing, deeper-keep rule, no guard |
 | `Board/Position.See.cs` | `search/see.rs` | Ported (values, swap list, `-1` tie-break, pins) |
 | `Board/Position.Draw.cs` | `searcher::is_draw` | Fifty-move and twofold match; contempt not implemented |
 | `Tools/Benchmark.cs` | `tools/bench.rs` | Protocol matched (four positions, TT cleared per position, infinite mode) |

@@ -25,3 +25,6 @@
 
 # macOS metadata
 .DS_Store
+
+# local predecessor checkout (never published)
+PawnForgeCS.win.final.dotnet11/

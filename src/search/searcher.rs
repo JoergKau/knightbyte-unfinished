@@ -98,8 +98,15 @@ pub struct Searcher {
     pub(crate) keys: Box<[u64]>,
     /// Static evaluation per ply, used by the improving heuristic.
     pub(crate) evals: Box<[i32]>,
-    /// Summed extensions along the current path.
-    pub(crate) extensions: Box<[i32]>,
+    /// The move played at each ply (`move_stack[ply]` is the move the node at
+    /// `ply` made, leading to `ply + 1`). Indexes the continuation history.
+    pub(crate) move_stack: Box<[Move]>,
+    /// Legal moves searched so far at each ply; the parent's count gates the
+    /// early transposition-table-cutoff history bonus in the child.
+    pub(crate) move_counts: Box<[i32]>,
+    /// The late-move reduction applied at each ply; the child's hindsight
+    /// pair reads the parent's slot.
+    pub(crate) reduction_stack: Box<[i32]>,
     /// Per-move time overhead subtracted from every budget, in milliseconds.
     pub(crate) move_overhead_ms: u64,
     /// Start of the current search, used for the time budgets.
@@ -129,7 +136,9 @@ impl Searcher {
             stopped: false,
             keys: vec![0; MAX_PLY + 1].into_boxed_slice(),
             evals: vec![0; MAX_PLY + 1].into_boxed_slice(),
-            extensions: vec![0; MAX_PLY + 1].into_boxed_slice(),
+            move_stack: vec![Move::NONE; MAX_PLY + 1].into_boxed_slice(),
+            move_counts: vec![0; MAX_PLY + 1].into_boxed_slice(),
+            reduction_stack: vec![0; MAX_PLY + 1].into_boxed_slice(),
             move_overhead_ms: crate::search::time_manager::DEFAULT_MOVE_OVERHEAD_MS,
             start: std::time::Instant::now(),
             completed_depth: 0,
@@ -270,6 +279,13 @@ impl Searcher {
     ///
     /// Returns `None` when the iteration was interrupted by a limit; the caller
     /// then keeps the result of the previous depth.
+    ///
+    /// The window handling mirrors the reference: a fail-low halves the window
+    /// (`beta = (alpha + beta) / 2`) and shifts alpha down by the current
+    /// delta, a fail-high raises beta by the delta, and the delta widens
+    /// geometrically by half of itself per cycle. A mate score or an exhausted
+    /// cycle budget drops the loop back to the full window, which terminates
+    /// the iteration.
     fn search_root(
         &mut self,
         position: &Position,
@@ -277,32 +293,44 @@ impl Searcher {
         previous_score: i32,
     ) -> Option<(i32, Vec<Move>)> {
         let params = self.params;
-        if depth >= params.aspiration_start_depth {
-            let mut delta = params.aspiration_base;
-            let mut alpha = (previous_score - delta).max(-INFINITE);
-            let mut beta = (previous_score + delta).min(INFINITE);
-            for _ in 0..params.aspiration_max_cycles {
-                let score = self.negamax(position, alpha, beta, depth, 0, None);
-                if self.stopped {
-                    return None;
-                }
-                if score <= alpha {
-                    alpha = (score - delta).max(-INFINITE);
-                    delta += delta / 2;
-                } else if score >= beta {
-                    beta = (score + delta).min(INFINITE);
-                    delta += delta / 2;
-                } else {
-                    return Some((score, self.pv.line(0).to_vec()));
-                }
-            }
+        let mut delta = params.aspiration_base;
+        let mut alpha = -INFINITE;
+        let mut beta = INFINITE;
+        if depth >= params.aspiration_start_depth && previous_score.abs() < MATE_LIMIT {
+            // No clamping on the widening arithmetic: the full-window bounds
+            // stay far outside the mate range, and the reference widens in
+            // plain `int` arithmetic without bounds.
+            alpha = previous_score - delta;
+            beta = previous_score + delta;
         }
 
-        let score = self.negamax(position, -INFINITE, INFINITE, depth, 0, None);
-        if self.stopped {
-            return None;
+        let mut cycles = 0;
+        loop {
+            let score = self.negamax(position, alpha, beta, depth, 0, None, false, Move::NONE, 0);
+            if self.stopped {
+                return None;
+            }
+            if score > alpha && score < beta {
+                return Some((score, self.pv.line(0).to_vec()));
+            }
+            if score.abs() >= MATE_LIMIT || cycles >= params.aspiration_max_cycles {
+                // One final search with the full window: any score lies
+                // inside it, so the next pass terminates.
+                alpha = -INFINITE;
+                beta = INFINITE;
+                delta = params.aspiration_base;
+                continue;
+            }
+            if score <= alpha {
+                // TEMPORARY BISECT: old widening behaviour.
+                alpha = (score - delta).max(-INFINITE);
+                beta = INFINITE;
+            } else if score >= beta {
+                beta = (score + delta).min(INFINITE);
+            }
+            delta += delta / 2;
+            cycles += 1;
         }
-        Some((score, self.pv.line(0).to_vec()))
     }
 
     /// Returns the static evaluation of `position`, optionally via the cache.
@@ -399,6 +427,17 @@ impl Searcher {
         }
     }
 
+    /// Returns whether the static evaluation improved over the same line.
+    ///
+    /// The grandparent's eval is the comparison point: two plies are enough to
+    /// see whether the current side's position is trending up or down. The
+    /// root and the first ply have no comparison point and count as *not*
+    /// improving, which is the reference's convention — pruning margins there
+    /// use their not-improving scales.
+    pub(crate) fn is_improving(&self, ply: usize, eval: i32) -> bool {
+        self.params.use_improving_flag && ply >= 2 && eval > self.evals[ply - 2]
+    }
+
     /// Returns whether `color` has a piece other than pawns and the king.
     pub(crate) fn has_non_pawn_material(position: &Position, color: Color) -> bool {
         let pieces = position.pieces(color, KNIGHT)
@@ -434,12 +473,22 @@ pub(crate) struct NodeResult<'a> {
     pub in_check: bool,
     /// Move that produced the node, for the countermove correction term.
     pub previous: Option<Previous>,
+    /// Whether the node is a singular-verification call; its result is a
+    /// bound probe, never stored.
+    pub excluded: bool,
 }
 
 impl Searcher {
     /// Stores the node result and folds its evaluation error into the
     /// correction history, then returns the score.
+    ///
+    /// A singular-verification node returns its score without storing: its
+    /// window is artificial, so neither the table nor the correction history
+    /// may learn from it.
     pub(crate) fn finish_node(&mut self, result: NodeResult<'_>) -> i32 {
+        if result.excluded {
+            return result.score;
+        }
         self.store_tt(tt_entry(
             result.position,
             result.ply,

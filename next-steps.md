@@ -3,23 +3,29 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17; the earlier
 development history is kept in the private archive `JoergKau/knightbyte-archive`.  
-**Last updated:** 2026-11-17, commit `8cf8df4`  
+**Last updated:** 2026-11-17 (coupled search-parity port)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
 
-Phases 0–3 are complete and verified. Phase 4 (search) is functionally complete:
-Zobrist keys, transposition table, evaluation cache, PV table, SEE, move picker,
-histories, negamax with quiescence, a deterministic `bench`, time management and
-a UCI option catalogue all work and are covered by 143 tests. **The search-parity
-gate is still open**: node counts differ from the reference by −2.0 % (`bench 6`),
-−8.1 % (`bench 8`), −1.1 % (`bench 12`) and +22.8 % (`bench 18`). Exact parity
-requires one coupled port of the remaining reference features (see §3.1); four
-attempts to port them piecemeal were measured and reverted.
+Phases 0–3 are complete and verified. Phase 4 (search) is functionally
+complete and the **coupled parity port has landed**: the reference's cut-node
+threading, TT replacement (5-bit generation, `depth − 2` ageing), history
+pruning, quiet SEE pruning, the LMR v1 term set with the re-search depth
+shave, IIR, the hindsight pair, singular extensions with double/triple tiers,
+negative extensions, the combined 1/2/4/6-ply quiet score with re-keyed
+continuation tables, the classical capture-ordering values, the reference
+aspiration widening and the early TT-cutoff history bonus. 115 unit tests
+plus the integration suites pass. **The search-parity gate is still open but
+materially closer**: node counts differ from the reference by −12.4 %
+(`bench 6`), +2.2 % (`bench 8`), +3.1 % (`bench 12`) and +0.8 % (`bench 18`,
+down from +22.8 %). The remaining divergence is seeded by single-node
+differences at iteration 3 (see `docs/SEARCH-PARITY.md` §2 and §4a).
 
 Verification status on the last run: Ubuntu and Windows CI green, macOS CI job
-never acquired a runner (GitHub capacity, not a code failure), 143 tests pass
-locally.
+never acquired a runner (GitHub capacity, not a code failure), all tests pass
+locally on Windows with the Stockfish verifier from
+`C:\dev\c#-chess-engines\stockfish`.
 
 ---
 
@@ -82,6 +88,9 @@ locally.
 - Per-position oracle: `tests/golden/search_parity.json`.
 - Capture/compare tool: `tools/capture_bench.py`.
 - The reference `bench` output is locale-formatted; the tool strips separators.
+- The reference's per-iteration `info depth N ... nodes X` lines are a usable
+  per-depth oracle: drive the binary with a kept-open stdin pipe, then read
+  the info lines. This is what localised the first divergence to iteration 3.
 
 ---
 
@@ -93,38 +102,41 @@ Each item states the symptom, the evidence and the concrete next action.
 
 | Run | Reference | KnightByte | Delta |
 | :--- | ---: | ---: | ---: |
-| `bench 6` | 14,979 | 14,677 | −2.0 % |
-| `bench 8` | 48,203 | 44,289 | −8.1 % |
-| `bench 12` | 416,533 | 412,114 | −1.1 % |
-| `bench 16` | 3,169,859 | 3,584,452 | +13.1 % |
-| `bench 18` | 6,925,762 | 8,506,398 | +22.8 % |
+| `bench 6` | 14,979 | 13,118 | −12.4 % |
+| `bench 8` | 48,203 | 49,239 | +2.2 % |
+| `bench 12` | 416,533 | 429,313 | +3.1 % |
+| `bench 16` | 3,169,859 | 3,383,906 | +6.8 % |
+| `bench 18` | 6,925,762 | 6,979,505 | +0.8 % |
 
-Evidence: `docs/SEARCH-PARITY.md` §2 (divergence table), §3–§4 (four measured
-attempts at isolated ports, all reverted).
+Evidence: `docs/SEARCH-PARITY.md` §2 (divergence table), §4a (the coupled
+port record).
 
-Next action: one coupled port of the remaining reference features (§3.1), not
-another piecemeal change. Do not tune toward the numbers.
+Next action: hunt the single-node seeds at iteration 3 (endgame position: 273
+vs 272 nodes) with per-node trace tooling; the deep tree is already close, the
+mid-depth wobble cascades from these seeds. Do not tune toward the numbers.
 
-### 2.2 Missing search features (cause of 2.1 and of most missing levers)
+### 2.2 The single-node seeds (cause of 2.1)
 
-Not implemented yet: singular extensions (on by default in the reference), the
-extension trio, history pruning, quiet SEE pruning, internal iterative reduction,
-the reference LMR term set, the reference TT replacement (5-bit age, `depth − 2`),
-ProbCut, and the reference staged picker with the combined 1/2/4/6-ply quiet
-score.
+The trees at depths 1–2 of positions 1–3 are exact. Iteration 3 diverges by
+one node (endgame) and +92 nodes (startpos), and by depth 4 the PVs diverge
+(different best moves at the root), which swings the mid-depth totals while
+the deep shape stays close. The pre-existing quiescence node-accounting
+difference at depth 1 of the tactical position (371 vs 364) is a second,
+older seed.
 
-Note: each of these was implemented and measured **alone**; every one widened the
-tree at depth 12 and was reverted. They must land together.
+Next action: build a small trace tool that dumps a node-id + count ledger for
+a fixed position/depth from both engines and diffs them, then read the
+reference code at the first divergent node. No guessing.
 
 ### 2.3 54 of the 83 research levers are not exposed
 
-Only 29 levers are wired and advertised (`search/options.rs`). The rest control
-features from 2.2 and would be inert knobs today; exposing them is deliberately
-deferred until their features exist.
+Only 31 levers are wired and advertised (`search/options.rs`). The rest
+control features that now exist or are pending; expose them after the parity
+gate closes.
 
-Next action: after the coupled port, extend `LEVERS` and `SearchParams` together;
-the tests `lever_defaults_match_the_parameters` and `every_lever_round_trips` keep
-the table honest.
+Next action: after the gate closes, extend `LEVERS` and `SearchParams`
+together; the tests `lever_defaults_match_the_parameters` and
+`every_lever_round_trips` keep the table honest.
 
 ### 2.4 Threading, `stop`, `ponder`, `go infinite` are not implemented
 
@@ -193,32 +205,24 @@ Prefer the editor/write tool for files containing non-ASCII, or write with
 
 ## 3. Recommended next steps, in order
 
-### 3.1 (Highest value) One coupled search-parity port
+### 3.1 (Highest value) Close the parity gate with trace tooling
 
-Goal: close §2.1. Do it as a single unit, behind one switch, then bisect inside.
+Goal: close §2.1. The coupled port landed (§4a of SEARCH-PARITY.md); what
+remains is the single-node hunt.
 
-Scope, in the reference's own order:
+1. Build `tools/trace_nodes.py` (or a KnightByte `trace` command): replay a
+   fixed position/depth and dump a per-node ledger (ply, move, window,
+   depth, score, node id) from both engines; diff the ledgers.
+2. Read the reference code at the first divergent node; port the deciding
+   formula exactly.
+3. Repeat until `bench 6/8/12/16/18` match; best move matches at every golden
+   depth; any deliberate deviation recorded in an ADR.
 
-1. Thread the cut-node flag through the recursion.
-2. Reference TT replacement: 5-bit age (zero reserved), `depth − 2` per
-   generation, same-key refresh rule, no deeper-entry guard.
-3. History pruning and the cut-node-aware NMP gate.
-4. Reference LMR term set (base `1 + ln·ln/1.75`, history/opponent/cut/PV/killer
-   terms, re-search depth shaving) and IIR.
-5. Singular extensions with the double/triple tiers, negative extensions, the
-   single-response extension (already present) and the per-path cap.
-6. The reference staged picker with the combined 1/2/4/6-ply quiet score.
-7. Then bisect inside the slice against `tests/golden/search_parity.json`, with
-   `bench 12` first and `bench 18` as the deep check.
+Estimate: 1–2 focused sessions. Keep `main` green after every step.
 
-Definition of done: `bench 6/12/16/18` match exactly; best move matches at every
-golden depth; any deliberate deviation recorded in an ADR.
+### 3.2 (After the gate closes) Expose the levers, then Phase 5
 
-Estimate: 2–3 focused sessions. Keep `main` green after every step; use a
-temporary runtime switch for A/B and remove it before committing the winner.
-
-### 3.2 (If parity is paused) Finish 4d and Phase 5 robustness
-
+- Extend `LEVERS` and `SearchParams` together for the newly ported features.
 - Remaining 4d: clock imbalance, stability rules, best-move safety margins.
 - Phase 5: search thread with `stop`/`ponderhit`/`go infinite`, Lazy SMP,
   `setoption Threads`, UCI transcript parity, `info` fields (nps, time,
@@ -229,8 +233,8 @@ temporary runtime switch for A/B and remove it before committing the winner.
 
 - When the gate closes, reconcile the bench goldens (§2.9) and update
   `docs/baselines.md`.
-- Keep `docs-new/KnightByte-feature-list.md` and `migration-plan.md` in step with
-  every merged slice.
+- Keep `docs-new/KnightByte-feature-list.md` and `migration-plan.md` in step
+  with every merged slice.
 
 ---
 
@@ -241,7 +245,7 @@ temporary runtime switch for A/B and remove it before committing the winner.
 ```powershell
 cd C:\dev\knightbyte-unfinished
 git pull --rebase
-$env:KNIGHTBYTE_FEN_VERIFIER = (Get-ChildItem "C:\Program Files\ChessEngines" -Recurse -Filter "stockfish*.exe" | Select-Object -First 1).FullName
+$env:KNIGHTBYTE_FEN_VERIFIER = "C:\dev\c#-chess-engines\stockfish\stockfish-windows-x86-64-universal.exe"
 cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check

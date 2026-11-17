@@ -129,7 +129,7 @@ fn bench_positions_return_legal_moves() {
 /// This value must be identical on every host and in debug and release builds;
 /// if a search change alters it on purpose, update this constant together with
 /// `docs/baselines.md` and `docs/decisions/ADR-0003-search-parity-baseline.md`.
-const BENCH_DEPTH_6_NODES: u64 = 14_677;
+const BENCH_DEPTH_6_NODES: u64 = 13_118;
 
 #[test]
 fn bench_node_totals_match_the_recorded_baseline() {

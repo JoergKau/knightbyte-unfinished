@@ -2,26 +2,33 @@
 //!
 //! Move generation produces every legal move in one pass, so ordering is done
 //! by scoring instead of by generating one category at a time. The scores are
-//! arranged in well-separated tiers, which gives the same behaviour as a staged
-//! picker: the transposition-table move is tried first, then captures that win
-//! material, then promotions, the two killers, the countermove, quiet moves by
-//! history, and losing captures last.
+//! arranged in well-separated tiers, which gives the same behaviour as the
+//! reference's staged picker: the transposition-table move is tried first,
+//! then captures that win material (ordered by material swing, the exact
+//! exchange value and the capture history), then the four killers in slot
+//! order, the countermove, quiet moves — including quiet promotions — by the
+//! combined history score, and losing captures last.
 //!
 //! [`MovePicker`] owns only fixed-size buffers. It borrows the position, the
 //! history tables and the killer table for the duration of one node, so the
 //! search can keep one picker per ply without allocation.
 //!
 //! Tier gaps are wide enough that the contents of a tier can never reach the
-//! next tier: the largest history contribution is two tables' worth of
-//! [`super::history::MAX_HISTORY`], far below the quiet base.
+//! next tier: the largest history contribution is a few tables' worth of
+//! [`super::history::BUTTERFLY_MAX`], far below the quiet base.
 
 use crate::board::movegen;
 use crate::board::position::Position;
-use crate::search::history::{History, Previous};
-use crate::search::killers::Killers;
-use crate::search::see::{piece_value, see_ge, see_value};
+use crate::search::history::{Continuations, History, Previous};
+use crate::search::killers::{KILLER_SLOTS, Killers};
+use crate::search::see::{see_ge, see_value};
 use crate::types::r#move::{Move, flags};
-use crate::types::piece::{color_of, piece_type};
+use crate::types::piece::{PAWN, color_of, piece_type};
+
+/// Material values used by the capture-ordering term (pawn 100 ... king
+/// 20,000). These are the ordering weights, deliberately distinct from the
+/// exchange values the search's SEE returns.
+const ORDER_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20_000];
 
 /// Maximum number of moves a position can have; matches the generator's list.
 pub const MAX_MOVES: usize = 256;
@@ -30,15 +37,10 @@ pub const MAX_MOVES: usize = 256;
 const TT_SCORE: i32 = 1 << 30;
 /// Captures that do not lose material.
 const GOOD_CAPTURE_SCORE: i32 = 1 << 28;
-/// Quiet promotions.
-const PROMOTION_SCORE: i32 = 1 << 27;
-/// Most recent killer at this ply.
-const KILLER_1_SCORE: i32 = 1 << 26;
-/// Second killer at this ply.
-const KILLER_2_SCORE: i32 = (1 << 26) - 1_000;
-/// Countermove to the opponent's previous move.
-const COUNTER_SCORE: i32 = (1 << 26) - 2_000;
-/// Quiet moves, ordered by history on top of this base.
+/// Most recent killer at this ply; the remaining slots follow one centipawn
+/// apart, then the countermove, preserving the staged picker's emission order.
+const KILLER_BASE: i32 = 1 << 26;
+/// Quiet moves, ordered by the combined history score on top of this base.
 const QUIET_SCORE: i32 = 1 << 20;
 /// Captures that lose material; sorted from least bad to worst.
 const BAD_CAPTURE_SCORE: i32 = 0;
@@ -57,8 +59,11 @@ impl<'a> MovePicker<'a> {
     /// Scores `moves` for the node at `ply`.
     ///
     /// `previous` identifies the move that produced the current position; it
-    /// selects the continuation-history and countermove entries. `tt_move` may
-    /// be [`Move::NONE`], and the killers of other plies are ignored.
+    /// selects the continuation-history and countermove entries. `cont` carries
+    /// the destination squares of the moves played 1/2/4/6 plies earlier.
+    /// `tt_move` may be [`Move::NONE`], and the killers of other plies are
+    /// ignored.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         position: &'a Position,
         moves: &[Move],
@@ -67,6 +72,7 @@ impl<'a> MovePicker<'a> {
         history: &'a History,
         ply: usize,
         previous: Option<Previous>,
+        cont: &Continuations,
     ) -> Self {
         debug_assert!(moves.len() <= MAX_MOVES);
         let len = moves.len().min(MAX_MOVES);
@@ -80,7 +86,7 @@ impl<'a> MovePicker<'a> {
         };
         for (index, &mv) in moves.iter().take(len).enumerate() {
             picker.moves[index] = mv;
-            picker.scores[index] = picker.score(mv, tt_move, killers, ply, previous);
+            picker.scores[index] = picker.score(mv, tt_move, killers, ply, previous, cont);
         }
         picker
     }
@@ -134,6 +140,7 @@ impl<'a> MovePicker<'a> {
         killers: &Killers,
         ply: usize,
         previous: Option<Previous>,
+        cont: &Continuations,
     ) -> i32 {
         if mv == tt_move && !tt_move.is_none() {
             return TT_SCORE;
@@ -143,54 +150,40 @@ impl<'a> MovePicker<'a> {
         let moving_type = piece_type(moving);
 
         if movegen::is_capture(self.position, mv) {
-            // Reference capture score: victim value in hundredths minus the
-            // attacker value, plus the exact exchange value.
+            // Reference capture score: the victim material value in
+            // hundredths minus the attacker value, plus the exact exchange
+            // value and the capture-history cell. An en-passant capture
+            // removes a pawn.
             let victim = if mv.flag() == flags::EN_PASSANT {
-                0
+                PAWN
             } else {
-                let captured = self.position.piece_at(mv.to());
-                if captured == crate::types::piece::EMPTY {
-                    0
-                } else {
-                    piece_value(piece_type(captured))
-                }
+                piece_type(self.position.piece_at(mv.to()))
             };
-            let material = victim * 100 - piece_value(moving_type);
+            let material = ORDER_VALUES[victim] * 100 - ORDER_VALUES[moving_type];
+            let capture_history = self.history.capture(moving_type, mv, victim);
             return if see_ge(self.position, mv, 0) {
-                GOOD_CAPTURE_SCORE + material + see_value(self.position, mv)
+                GOOD_CAPTURE_SCORE + material + see_value(self.position, mv) + capture_history
             } else {
-                BAD_CAPTURE_SCORE + material + see_value(self.position, mv)
+                BAD_CAPTURE_SCORE + material + see_value(self.position, mv) + capture_history
             };
         }
 
-        if mv.is_promotion() {
-            return PROMOTION_SCORE + piece_value(promoted_type(mv)) / 16;
+        // Killer slots in slot order, then the countermove — the emission
+        // order of the staged picker's killer and countermove stages.
+        if ply < usize::from(u8::MAX) {
+            for slot in 0..KILLER_SLOTS {
+                if killers.get(ply)[slot] == mv && !mv.is_none() {
+                    return KILLER_BASE - slot as i32;
+                }
+            }
+        }
+        if mv == self.history.counter_move(previous) && !mv.is_none() {
+            return KILLER_BASE - KILLER_SLOTS as i32;
         }
 
-        if killers.is_first(ply, mv) {
-            return KILLER_1_SCORE;
-        }
-        if killers.contains(ply, mv) {
-            return KILLER_2_SCORE;
-        }
-        if mv == self.history.counter_move(previous) {
-            return COUNTER_SCORE;
-        }
-
-        QUIET_SCORE
-            + self.history.butterfly(color_of(moving), mv)
-            + self.history.continuation(previous, moving, mv)
-    }
-}
-
-/// Returns the promoted piece type encoded in the move flag.
-fn promoted_type(mv: Move) -> usize {
-    use crate::types::piece::{BISHOP, KNIGHT, QUEEN, ROOK};
-    match mv.flag() {
-        flags::PROMO_KNIGHT => KNIGHT,
-        flags::PROMO_BISHOP => BISHOP,
-        flags::PROMO_ROOK => ROOK,
-        _ => QUEEN,
+        // Every remaining non-capture — including quiet promotions — is
+        // ordered by the combined history score.
+        QUIET_SCORE + self.history.picker_score(color_of(moving), mv, cont)
     }
 }
 

@@ -12,9 +12,11 @@
 //! trades memory for a small false-hit rate that would make node counts harder
 //! to explain.
 //!
-//! Entries survive across searches and are aged by a 6-bit generation counter.
-//! Replacement prefers an entry from an older generation and never evicts a
-//! considerably deeper entry for a shallow current one.
+//! Entries survive across searches and are aged by a 5-bit generation counter
+//! that starts at one. Replacement refreshes a same-key entry unless a deeper
+//! entry from the current generation holds the slot; otherwise the
+//! least-precious occupant — `stored depth - 2 per generation of age` — is
+//! evicted, with no deeper-entry guard.
 
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
@@ -37,14 +39,16 @@ pub const MATE_SCORE: i16 = 31_000;
 /// Mate distances are stored relative to the root, so they must be converted.
 const MATE_WINDOW: i16 = 1_000;
 
-/// A replacement is refused when the victim is this much deeper, in plies.
-const REPLACE_SLACK: i32 = 8;
+// A replacement is never refused: the least-precious occupant
+// (`stored depth - 2 per generation of age`) is always replaced when the
+// bucket is full. The reference policy has no deeper-entry guard.
 
-/// Generation values wrap at 64; six bits are stored per entry.
-const GENERATION_MASK: u8 = 0x3f;
+/// Generation values wrap at 32; five bits are stored per entry. The counter
+/// starts at one — zero is the encoding of a fresh table, not a generation.
+const GENERATION_MASK: u8 = 0x1f;
 
 const _: () = assert!(BUCKET_BYTES == 64);
-const _: () = assert!(GENERATION_MASK == 63);
+const _: () = assert!(GENERATION_MASK == 31);
 
 /// How a stored score relates to the true value of the position.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -191,7 +195,8 @@ impl TranspositionTable {
         Self {
             buckets: allocate(buckets),
             mask: buckets - 1,
-            generation: AtomicU8::new(0),
+            // One, not zero: zero is the empty-slot encoding, never a stamp.
+            generation: AtomicU8::new(1),
         }
     }
 
@@ -232,10 +237,13 @@ impl TranspositionTable {
     /// Advances the generation and returns the new value.
     ///
     /// The search calls this once at the start of every `go`, which makes all
-    /// entries from the previous search one step older.
+    /// entries from the previous search one step older. Zero is skipped: a
+    /// fresh table's all-zero words mean "empty slot", so generation zero is
+    /// never a valid entry stamp.
     #[inline]
     pub fn new_generation(&self) -> u8 {
-        let next = self.generation.load(Ordering::Relaxed).wrapping_add(1) & GENERATION_MASK;
+        let current = self.generation.load(Ordering::Relaxed);
+        let next = if current == u8::MAX { 1 } else { current + 1 };
         self.generation.store(next, Ordering::Relaxed);
         next
     }
@@ -247,7 +255,7 @@ impl TranspositionTable {
                 slot.store(0, Ordering::Relaxed);
             }
         }
-        self.generation.store(0, Ordering::Relaxed);
+        self.generation.store(1, Ordering::Relaxed);
     }
 
     /// Looks up `key`.
@@ -302,7 +310,6 @@ impl TranspositionTable {
             .store(pack(&entry), Ordering::Relaxed);
         bucket.key_slot(slot).store(entry.key, Ordering::Release);
     }
-
     /// Prefetches the bucket for `key` into the first-level cache.
     ///
     /// Call this several plies before the probe, for example right after a move
@@ -375,32 +382,52 @@ fn allocate(count: usize) -> Box<[Bucket]> {
     (0..count).map(|_| Bucket::default()).collect()
 }
 
-/// Chooses the slot to write, or `None` when the bucket must be left alone.
+/// Chooses the slot to write and returns its index, or `None` when a deeper
+/// current-generation same-key entry must be kept.
+///
+/// The reference policy, in order:
+///
+/// 1. **Same key** — the entry is refreshed in place unless it is a
+///    *current-generation* entry that is strictly deeper than what is being
+///    stored; such an entry is kept (its extra search depth is worth more
+///    than the fresh score).
+/// 2. **Empty slot** — the first empty slot wins, never evicting a live
+///    entry while a free one exists.
+/// 3. **Least-precious victim** — the occupied-by-another-key slot with the
+///    lowest `stored depth - 2 per generation of age`. There is no
+///    deeper-entry guard: a full bucket always loses its least-precious
+///    occupant.
 fn choose_slot(bucket: &Bucket, key: u64, depth: u8, generation: u8) -> Option<usize> {
-    let mut best_slot = 0;
-    let mut best_value = i32::MAX;
+    let current_generation = generation & GENERATION_MASK;
+    let mut victim = 0;
+    let mut victim_precious = i32::MAX;
     for slot in 0..BUCKET_SLOTS {
         let stored_key = bucket.key_slot(slot).load(Ordering::Relaxed);
+        let data = bucket.data_slot(slot).load(Ordering::Relaxed);
         if stored_key == key {
+            let stored_depth = entry_depth(data);
+            let stored_generation = entry_generation(data);
+            if i32::from(depth) >= i32::from(stored_depth)
+                || current_generation != stored_generation
+            {
+                return Some(slot);
+            }
+            // A deeper entry from the current generation is kept.
+            return None;
+        }
+        if stored_key == 0 {
+            // The first empty slot wins; a live entry is never evicted while
+            // a free one exists.
             return Some(slot);
         }
-        let data = bucket.data_slot(slot).load(Ordering::Relaxed);
-        let value = if stored_key == 0 {
-            // Prefer an empty slot over any occupied one, lowest first.
-            i32::MIN + slot as i32
-        } else {
-            let age = generation.wrapping_sub(entry_generation(data)) & GENERATION_MASK;
-            entry_depth(data) as i32 - 8 * age as i32
-        };
-        if value < best_value {
-            best_value = value;
-            best_slot = slot;
+        let age = current_generation.wrapping_sub(entry_generation(data)) & GENERATION_MASK;
+        let precious = i32::from(entry_depth(data)) - 2 * i32::from(age);
+        if precious < victim_precious {
+            victim_precious = precious;
+            victim = slot;
         }
     }
-    if best_value > depth as i32 + REPLACE_SLACK {
-        return None;
-    }
-    Some(best_slot)
+    Some(victim)
 }
 
 /// Packs an entry into its 64-bit data word.
@@ -490,7 +517,7 @@ mod tests {
         let table = TranspositionTable::new(1);
         let mut stored = entry(0x1234_5678_9abc_def0, 7, -1234);
         stored.bound = Bound::Upper;
-        stored.generation = 42;
+        stored.generation = 21; // five bits are stored per entry
         table.store(stored);
 
         let found = table.probe(stored.key).expect("entry must be found");
@@ -500,7 +527,7 @@ mod tests {
         assert_eq!(found.eval, -17);
         assert_eq!(found.depth, 7);
         assert_eq!(found.bound, Bound::Upper);
-        assert_eq!(found.generation, 42);
+        assert_eq!(found.generation, 21);
         assert!(table.probe(stored.key.wrapping_add(1)).is_none());
     }
 
@@ -536,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn shallow_entry_needs_a_free_bucket_slot_or_a_stale_victim() {
+    fn shallow_entry_replaces_the_least_precious_occupant() {
         let table = TranspositionTable::new(1);
         // Keys one bucket apart collide because the bucket count is a power of
         // two and indexing is `key & mask`.
@@ -546,19 +573,42 @@ mod tests {
         }
         let intruder = 1 + BUCKET_SLOTS as u64 * stride;
 
+        // The reference policy has no deeper-entry guard: a full bucket always
+        // loses its least-precious occupant to the newcomer.
         table.store(stamped(&table, intruder, 2));
         assert!(
-            table.probe(intruder).is_none(),
-            "a shallow entry must not evict a full bucket of depth-20 entries"
+            table.probe(intruder).is_some(),
+            "a full bucket must yield a slot to any store"
+        );
+        let remaining = (0..BUCKET_SLOTS as u64)
+            .filter(|slot| table.probe(1 + slot * stride).is_some())
+            .count();
+        assert_eq!(
+            remaining,
+            BUCKET_SLOTS - 1,
+            "exactly one victim was evicted"
         );
 
-        // Once the deep entries age, the shallow one is worth the slot.
+        // Once the deep entries age, they lose to any current-generation
+        // store: two generations of staleness cost 4 plies of preciousness.
         table.new_generation();
-        table.store(stamped(&table, intruder, 4));
-        assert!(
-            table.probe(intruder).is_some(),
-            "an ageing bucket loses a slot to the current generation"
-        );
+        table.new_generation();
+        let latecomer = 1 + (BUCKET_SLOTS + 1) as u64 * stride;
+        table.store(stamped(&table, latecomer, 4));
+        assert!(table.probe(latecomer).is_some());
+    }
+
+    #[test]
+    fn deeper_current_generation_entry_is_kept() {
+        let table = TranspositionTable::new(1);
+        table.store(stamped(&table, 99, 9));
+        // Same generation, shallower depth: the stored entry stays.
+        table.store(stamped(&table, 99, 3));
+        assert_eq!(table.probe(99).unwrap().depth, 9);
+        // A different generation always refreshes.
+        table.new_generation();
+        table.store(stamped(&table, 99, 3));
+        assert_eq!(table.probe(99).unwrap().depth, 3);
     }
 
     #[test]
