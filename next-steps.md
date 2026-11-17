@@ -2,7 +2,7 @@
 
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17; the earlier
-development history is kept in a private archive repository.  
+development history is kept in the private archive `JoergKau/knightbyte-archive`.  
 **Last updated:** 2026-11-17, commit `8cf8df4`  
 **Rule:** update this document at the end of every working session.
 
