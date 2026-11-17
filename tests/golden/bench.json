@@ -1,0 +1,17 @@
+{
+  "12": {
+    "total_nodes": 416533,
+    "total_time_ms": 494,
+    "average_nps": 843184
+  },
+  "16": {
+    "total_nodes": 3169859,
+    "total_time_ms": 2381,
+    "average_nps": 1331314
+  },
+  "18": {
+    "total_nodes": 6925762,
+    "total_time_ms": 5024,
+    "average_nps": 1378535
+  }
+}

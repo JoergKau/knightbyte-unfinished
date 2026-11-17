@@ -1,0 +1,32 @@
+[package]
+name = "knightbyte"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+description = "A UCI chess engine written in Rust"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+# Test-only dependency used to verify the embedded network checksum.
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+overflow-checks = false
+debug-assertions = false
+incremental = false
+
+[lints.rust]
+warnings = "deny"
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"

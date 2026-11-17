@@ -1,0 +1,27 @@
+# Rust build output
+/target/
+
+# Internal migration sources and reference material (not part of the published tree)
+/predecessor*/
+/reference_engines/
+
+# Local analysis scripts (not part of the engine)
+/perf-test/diff_search_options.py
+/perf-test/nps_floor_gate.py
+/perf-test/test_futility_impact.py
+/perf-test/validate_givescheck.py
+/perf-test/validate_mates.py
+
+# Local benchmark output and captures
+/perf-test/__pycache__/
+*.pgn
+*.log
+*.profraw
+*.profdata
+
+# Local scratch notes and offline transfer bundles
+/session-*.md
+*.bundle
+
+# macOS metadata
+.DS_Store

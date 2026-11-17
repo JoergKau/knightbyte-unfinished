@@ -1,0 +1,583 @@
+[
+  {
+    "name": "AspirationBase",
+    "type": "spin",
+    "default": "50",
+    "min": 10,
+    "max": 100
+  },
+  {
+    "name": "AspirationMaxCycles",
+    "type": "spin",
+    "default": "8",
+    "min": 1,
+    "max": 16
+  },
+  {
+    "name": "AspirationStartDepth",
+    "type": "spin",
+    "default": "5",
+    "min": 1,
+    "max": 10
+  },
+  {
+    "name": "ClockImbalanceAheadScale",
+    "type": "spin",
+    "default": "50",
+    "min": 0,
+    "max": 100
+  },
+  {
+    "name": "ClockImbalanceBehindScale",
+    "type": "spin",
+    "default": "50",
+    "min": 0,
+    "max": 80
+  },
+  {
+    "name": "FutilityMaxDepth",
+    "type": "spin",
+    "default": "7",
+    "min": 4,
+    "max": 10
+  },
+  {
+    "name": "HistPruneMargin",
+    "type": "spin",
+    "default": "2000",
+    "min": 800,
+    "max": 4000
+  },
+  {
+    "name": "LmpMaxDepth",
+    "type": "spin",
+    "default": "4",
+    "min": 2,
+    "max": 8
+  },
+  {
+    "name": "LmrV2NotImprovingWeight",
+    "type": "spin",
+    "default": "70",
+    "min": 0,
+    "max": 600
+  },
+  {
+    "name": "MaxPathExtensions",
+    "type": "spin",
+    "default": "32",
+    "min": 8,
+    "max": 64
+  },
+  {
+    "name": "NmpBaseReduction",
+    "type": "spin",
+    "default": "3",
+    "min": 1,
+    "max": 6
+  },
+  {
+    "name": "NmpDepthDivisor",
+    "type": "spin",
+    "default": "4",
+    "min": 1,
+    "max": 8
+  },
+  {
+    "name": "QsDeltaMargin",
+    "type": "spin",
+    "default": "1100",
+    "min": 700,
+    "max": 1500
+  },
+  {
+    "name": "QsPromotionMaxPly",
+    "type": "spin",
+    "default": "2",
+    "min": 0,
+    "max": 8
+  },
+  {
+    "name": "QsRecaptureOnlyPly",
+    "type": "spin",
+    "default": "8",
+    "min": 0,
+    "max": 16
+  },
+  {
+    "name": "RazorMaxDepth",
+    "type": "spin",
+    "default": "3",
+    "min": 2,
+    "max": 8
+  },
+  {
+    "name": "RazorNotImprovingDelta",
+    "type": "spin",
+    "default": "0",
+    "min": -200,
+    "max": 200
+  },
+  {
+    "name": "RfpFormulaMaxDepth",
+    "type": "spin",
+    "default": "8",
+    "min": 4,
+    "max": 12
+  },
+  {
+    "name": "RfpImprovingDelta",
+    "type": "spin",
+    "default": "0",
+    "min": -200,
+    "max": 200
+  },
+  {
+    "name": "RfpImprovingScale",
+    "type": "spin",
+    "default": "65",
+    "min": 10,
+    "max": 200
+  },
+  {
+    "name": "RfpMaxDepth",
+    "type": "spin",
+    "default": "4",
+    "min": 4,
+    "max": 12
+  },
+  {
+    "name": "RfpNotImprovingDelta",
+    "type": "spin",
+    "default": "0",
+    "min": -200,
+    "max": 200
+  },
+  {
+    "name": "RfpNotImprovingScale",
+    "type": "spin",
+    "default": "95",
+    "min": 10,
+    "max": 300
+  },
+  {
+    "name": "RfpOpponentWorseningDelta",
+    "type": "spin",
+    "default": "0",
+    "min": -200,
+    "max": 200
+  },
+  {
+    "name": "SeePruningMaxDepth",
+    "type": "spin",
+    "default": "8",
+    "min": 2,
+    "max": 10
+  },
+  {
+    "name": "SeeReachHistoryDivisor",
+    "type": "spin",
+    "default": "133",
+    "min": 32,
+    "max": 512
+  },
+  {
+    "name": "SeeReachMaxDepth",
+    "type": "spin",
+    "default": "10",
+    "min": 2,
+    "max": 12
+  },
+  {
+    "name": "SeeReachNoisyMargin",
+    "type": "spin",
+    "default": "-17",
+    "min": -200,
+    "max": 0
+  },
+  {
+    "name": "SeeReachQuietMargin",
+    "type": "spin",
+    "default": "-44",
+    "min": -200,
+    "max": 0
+  },
+  {
+    "name": "TtExtensionMaxDepth",
+    "type": "spin",
+    "default": "6",
+    "min": 0,
+    "max": 12
+  },
+  {
+    "name": "UseAdaptiveReSearch",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseAlphaRaiseReduction",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseBadNoisyPruning",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseCapturesOnlyMovegen",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseClockImbalance",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseCutNode",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseEvalCache",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseEvalSwingBonus",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseExtensionTrio",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseFormulaLmp",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseFormulaRfp",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseImprovingFlag",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLazySee",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLinearFutilityMargin",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrHistoryPrecision",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrNoisyMoves",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrReductionFloor",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrTable",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrTermComplexity",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrTermCutNode",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrTermFailHighCount",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrTermFutile",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrTermHistory",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrTermNotImproving",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrTermPvDistance",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrTermTtPv",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseLmrV2",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseMicroRiders",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseNegativeExtensions",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseProbCut",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseQsCorrectionHistory",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseQsNarrowing",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseQsTtProbe",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseQuiescenceChecks",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseRefCorrectionHistory",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseRefFutilityFormula",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseRefHistoryPruning",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseRefLmp",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseRefNmpEvalScale",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseRefSeeThresholds",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseSecondaryProbCut",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseSeeReach",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseSelectiveSingular",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseSkipFans",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseStableTimeManagement",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseTerm1NotImproving",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseTrioAlphaRaise",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseTrioHindsight",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseTrioTtShrink",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseTtExtension",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseTtScoreEval",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseTwofoldRepetitionDraw",
+    "type": "check",
+    "default": "true",
+    "min": null,
+    "max": null
+  },
+  {
+    "name": "UseVerifiedNmp",
+    "type": "check",
+    "default": "false",
+    "min": null,
+    "max": null
+  }
+]

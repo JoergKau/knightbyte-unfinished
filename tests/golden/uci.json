@@ -1,0 +1,93 @@
+{
+  "options": [
+    {
+      "name": "Hash",
+      "type": "spin",
+      "default": "256",
+      "min": 1,
+      "max": 1024
+    },
+    {
+      "name": "Threads",
+      "type": "spin",
+      "default": "1",
+      "min": 1,
+      "max": 256
+    },
+    {
+      "name": "Move Overhead",
+      "type": "spin",
+      "default": "50",
+      "min": 0,
+      "max": 5000
+    },
+    {
+      "name": "Clear Hash",
+      "type": "button",
+      "default": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "name": "Own Book",
+      "type": "check",
+      "default": "false",
+      "min": null,
+      "max": null
+    },
+    {
+      "name": "Book File",
+      "type": "string",
+      "default": "",
+      "min": null,
+      "max": null
+    },
+    {
+      "name": "Book Depth",
+      "type": "spin",
+      "default": "16",
+      "min": 0,
+      "max": 100
+    },
+    {
+      "name": "SyzygyPath",
+      "type": "string",
+      "default": "",
+      "min": null,
+      "max": null
+    },
+    {
+      "name": "SyzygyRootProbe",
+      "type": "check",
+      "default": "false",
+      "min": null,
+      "max": null
+    },
+    {
+      "name": "Syzygy50MoveRule",
+      "type": "check",
+      "default": "true",
+      "min": null,
+      "max": null
+    },
+    {
+      "name": "EvalFile",
+      "type": "string",
+      "default": "",
+      "min": null,
+      "max": null
+    },
+    {
+      "name": "Contempt",
+      "type": "spin",
+      "default": "0",
+      "min": -50,
+      "max": 50
+    }
+  ],
+  "responses": [
+    "uciok",
+    "readyok"
+  ],
+  "unknown": "info string Unknown command: this-command-does-not-exist"
+}
