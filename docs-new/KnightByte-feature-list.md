@@ -6,20 +6,17 @@ still planned; it is updated after every migration step.
 
 ## Current status — Phases 0–3 complete; Phase 4 complete with full node identity (2026-11-17)
 
-Parity status: the search is **node-identical** to the reference at every
-captured depth and position (depths 1-12, 14, 16 and 18, all four bench
-positions): `bench 6` = 14,979, `bench 12` = 416,533, `bench 16` = 3,169,859,
-`bench 18` = 6,925,762. The earlier accepted deviation (ADR-0004) is superseded
-by ADR-0005. `bench 6` is asserted in `tests/search.rs` and the per-position
-counts for depths 1-8 are asserted as well. See `docs/SEARCH-PARITY.md`,
-`docs/audit/migration-audit.md` and `docs-new/new-bugs.md` (B1-B29, Q1-Q4).
-
-> **Stale since 2026-11-18 (ADR-0008):** the pins above describe the predecessor
-> build *before* predecessor bugs 147-149 (the reclassified former quirks Q2-Q4)
-> were fixed in the reference. The fixed reference measures 15,528 / 456,308 /
-> 2,815,799 / 6,892,874. KnightByte still reproduces the old build and stays
-> green against these pins; both are re-captured together at the Phase 1
-> restart.
+Parity status: the search is **node-identical** to the bug-fixed reference
+(2026-11-18, predecessor commits bffe98a and f274b39) at every captured depth
+and position (depths 1-12, 14, 16 and 18, all four bench positions):
+`bench 6` = 15,528, `bench 12` = 456,308, `bench 16` = 2,815,799,
+`bench 18` = 6,892,874. The earlier accepted deviation (ADR-0004) is superseded
+by ADR-0005; ADR-0008 records the adoption of the reference's bug fixes
+(former quirks Q2-Q4 / predecessor bugs 147-149, ported as KnightByte fixes
+B35-B37, plus the UCI position alignment B33/B34). `bench 6` is asserted in
+`tests/search.rs` and the per-position counts for depths 1-8 are asserted as
+well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
+`docs-new/new-bugs.md` (B1-B37).
 
 ### Engine skeleton
 

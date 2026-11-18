@@ -529,7 +529,7 @@ last section lists predecessor quirks that are reproduced on purpose.
 - **Command or FEN:** `position startpos moves e2e4`, then `position fen this-is-not-a-fen`, then `nnueeval`
 - **Expected:** after a rejected `position` command the engine must not search a position the GUI did not set; either the new position is set, or no position is set and `go` says so.
 - **Actual:** `nnueeval` still reports the position after `e2e4` (-45 cp; the start position gives 27). The same happens when `position startpos moves e2e4 e2e4 d7d5` is rejected for an illegal move.
-- **Status:** open. The fix is part of the migration stop: the predecessor's behaviour is the same, and both are to be decided together.
+- **Status:** fixed 2026-11-18 (`07b401c`, Phase 1 restart). KnightByte adopts the predecessor's decided behaviour: the error lines are the reference's exact texts (`Error: invalid position, previous position kept: …` / `Error: illegal move …, position command rejected, previous position kept`), the previous position and its history stay, and the moves of a rejected command are applied to a copy first. Regression test: `tests/uci_smoke.rs::a_rejected_position_command_is_reported_and_keeps_the_previous_one`.
 
 ## B34 — `ucinewgame` does not clear the current position
 
@@ -539,7 +539,7 @@ last section lists predecessor quirks that are reproduced on purpose.
 - **Command or FEN:** `position startpos moves e2e4`, `ucinewgame`, `go depth 1`
 - **Expected:** a new game starts without a position, so `go` must not search the previous game's position (the reference answers nothing here; see B32 for KnightByte's answer when no position is set).
 - **Actual:** the search runs on the old position and answers `bestmove e7e5`.
-- **Status:** open. Differs from the predecessor; to be aligned with the decision on predecessor bug 143.
+- **Status:** fixed 2026-11-18 (`07b401c`, Phase 1 restart). KnightByte adopts the predecessor's bug-143 behaviour: the engine starts on the start position and `ucinewgame` resets to it, so a `go` after `ucinewgame` searches the start position. Regression test: `tests/uci_smoke.rs::ucinewgame_resets_to_the_start_position`; the bare-`go` test now asserts the start position is searched.
 
 ## B35 — Inherited reference bug 147: castle and en-passant table moves are stripped of their marker
 
@@ -550,7 +550,7 @@ last section lists predecessor quirks that are reproduced on purpose.
 - **Expected (post-fix reference):** a stored castling or en-passant best move comes back from the table with its marker and compares equal to the generated move — it is tried first, excluded in the singular-verification search and can earn a singular extension.
 - **Actual:** `without_special_flags` (`src/search/negamax.rs`) strips the `CASTLE`/`EN_PASSANT` flag from every table move at the probe site, reproducing the reference's lossy 16-bit packing. The stripped move never matches its generated move: not tried first, not excluded in verification, no singular extension — while still counting as "a table move exists".
 - **Reproduction:** `cargo test castle_and_en_passant_markers_are_dropped_from_a_table_move` pins the strip; the pre-fix reference behaviour is documented in the predecessor bug log, Bug 147.
-- **Status:** open — **deliberately inherited** from the reference. The reference is fixed (predecessor commit `f274b39`, which re-stamps the flags from board context at probe time); KnightByte keeps the old behaviour until the Phase 1 restart so the current binary stays green against its pinned node counts. The reproduction is removed together with the re-pin (ADR-0008). Note: KnightByte's own table packing (`pack`/`unpack` in `src/search/tt.rs`) stores the full move including flags — only the probe-site strip has to go.
+- **Status:** fixed 2026-11-18 (`07b401c`, Phase 1 restart). The probe-site strip is deleted: the table move is used as stored, markers included (KnightByte's own packing always preserved them). The strip's unit test is replaced by `a_table_move_keeps_its_castle_and_en_passant_markers`. Node identity with the fixed reference holds at every captured depth (`tools/capture_bench.py compare`, all deltas zero).
 
 ## B36 — Inherited reference bug 148: quiescence never searches an en-passant capture
 
@@ -561,7 +561,7 @@ last section lists predecessor quirks that are reproduced on purpose.
 - **Expected (post-fix reference):** an en-passant capture is a capture in quiescence: it takes the capture path (SEE prefilter, `see_ge`, MVV-LVA ordering) and is searched.
 - **Actual:** the quiescence quiet test is `position.piece_at(mv.to()) == EMPTY && !mv.is_promotion()` (`src/search/quiescence.rs`). An en-passant capture lands on an empty square, so it is classified quiet and skipped when quiet checks are off — quiescence never searches it.
 - **Reproduction:** quiescence on the fixture above returns the stand-pat score although the en-passant capture improves on it.
-- **Status:** open — **deliberately inherited** from the reference. The reference is fixed (predecessor commit `f274b39`); KnightByte keeps the old behaviour until the Phase 1 restart re-pin (ADR-0008). Fix: add `&& !mv.is_en_passant()` to the quiet test at `src/search/quiescence.rs`.
+- **Status:** fixed 2026-11-18 (`07b401c`, Phase 1 restart). The quiet test is `position.piece_at(mv.to()) == EMPTY && !mv.is_promotion() && mv.flag() != EN_PASSANT`. Node identity with the fixed reference holds at every captured depth.
 
 ## B37 — Inherited reference bug 149: the correction-history quiet gate omits the capture disjunct
 
@@ -572,7 +572,7 @@ last section lists predecessor quirks that are reproduced on purpose.
 - **Expected (post-fix reference):** the quiet gate treats "destination occupied by the opponent" as a capture, so ordinary captures do NOT update the correction tables (only en passant and promotions were excluded before the fix — and captures, wrongly, passed as quiet).
 - **Actual:** KnightByte's gate omits the reference's own-occupancy disjunct entirely (`src/search/searcher.rs`): `best_move.flag() != EN_PASSANT && !best_move.is_promotion()`. Because the reference's own-occupancy test could never fire (a mover never lands on its own piece), the omission reproduces the reference's effective behaviour exactly — capture cutoffs DO update the tables.
 - **Reproduction:** search any position to an Exact node with a capture best move under `UseCorrectionHistory=true` and `UseRefCorrectionHistory=true`; the correction tables receive the capture's eval-error diff.
-- **Status:** open — **deliberately inherited** from the reference. The reference is fixed (predecessor commit `f274b39`: the gate now tests the opponent occupancy, so ordinary captures no longer count as quiet); KnightByte keeps the old behaviour until the Phase 1 restart re-pin (ADR-0008).
+- **Status:** fixed 2026-11-18 (`07b401c`, Phase 1 restart). The gate classifies through the new `is_quiet_store_move` helper (`src/search/searcher.rs`): quiet means the destination is not occupied by the opponent and the move is neither en passant nor a promotion — the fixed reference's semantics. Unit-tested in `searcher.rs::the_correction_quiet_gate_accepts_quiet_moves_and_rejects_captures`.
 
 ## Predecessor behaviour
 
@@ -603,13 +603,11 @@ Consequences for KnightByte:
 
 ## Open
 
-- **B33-B37 are open by decision.** B33/B34 await the alignment with the
-  predecessor's UCI fixes, and B35/B36/B37 are the defects KnightByte
-  deliberately inherited from the reference (predecessor bugs 147-149, fixed
-  there at `f274b39`); KnightByte keeps reproducing them until the Phase 1
-  restart re-pins the node identity, so the current binary stays green against
-  its goldens. No *porting* defect is open: the search-parity gate is closed by
-  node identity (ADR-0005), which supersedes the accepted deviation of ADR-0004.
+- No open defects. B33-B37 were fixed at the Phase 1 restart (`07b401c`,
+  2026-11-18): the UCI position handling follows the predecessor's decided
+  behaviour, and KnightByte adopts the reference's fixes for the former quirks
+  Q2-Q4 (predecessor bugs 147-149). Node identity with the bug-fixed reference
+  holds at every captured depth and position.
 
 ## Verified platforms
 
