@@ -637,6 +637,83 @@ mod tests {
         assert!(manager.should_continue(u64::MAX >> 2, 0, 0));
     }
 
+    // ------------------------------------------------------------------
+    // Step 11: the four time-management levers change the manager's
+    // decisions. A fixed-depth search never consults them, so node counts
+    // cannot be the discriminator; the decisions are.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn the_clock_imbalance_lever_changes_the_allocation() {
+        // Behind on the clock (ratio 0.1): with the lever off the allocation
+        // is the plain share; with it on, the behind scale shrinks it.
+        let mut off = TimeManager::new();
+        off.set_levers(true, false, 50, 50);
+        let mut behind = control(10_000, 0, None);
+        behind.opponent_time_ms = 90_000;
+        off.init(&behind, 0, 0);
+        assert_eq!(off.soft_limit(), 10_000 / 30);
+
+        let mut on = TimeManager::new();
+        on.set_levers(true, true, 50, 50);
+        on.init(&behind, 0, 0);
+        assert_ne!(
+            on.soft_limit(),
+            off.soft_limit(),
+            "UseClockImbalance did not change the allocation"
+        );
+    }
+
+    #[test]
+    fn the_imbalance_scale_levers_change_the_allocation() {
+        // Behind on the clock: a larger behind scale shrinks the allocation
+        // further (the existing ratio test: 50 → 0.6x, 80 → 0.36x).
+        let mut small = TimeManager::new();
+        small.set_levers(true, true, 50, 20);
+        let mut behind = control(10_000, 0, None);
+        behind.opponent_time_ms = 90_000;
+        small.init(&behind, 0, 0);
+
+        let mut large = TimeManager::new();
+        large.set_levers(true, true, 50, 80);
+        large.init(&behind, 0, 0);
+
+        assert_ne!(
+            large.soft_limit(),
+            small.soft_limit(),
+            "ClockImbalanceBehindScale did not change the allocation"
+        );
+    }
+
+    #[test]
+    fn the_stable_tm_lever_changes_the_soft_limit_under_instability() {
+        // An unstable search (the best move changes, the score swings)
+        // scales the soft limit down through the stable-TM ladders; the
+        // legacy path (the lever off) uses the panic/stability multipliers.
+        // The same schedule must produce different soft limits.
+        let run = |use_stable: bool| -> u64 {
+            let mut manager = TimeManager::new();
+            manager.set_levers(use_stable, false, 50, 50);
+            manager.init(&control(60_000, 0, None), 0, 0);
+            let mut now = 0u64;
+            for depth in 1..MIN_ITERATION_DEPTH {
+                manager.set_completed_depth(depth);
+                // An unstable search: the best move alternates, the score
+                // swings, the node fraction is large.
+                manager.set_node_stats(3_000, 12_000);
+                manager.update_pv_stability(if depth % 2 == 0 { 7 } else { 42 }, false);
+                manager.should_continue(now, if depth % 2 == 0 { 7 } else { 42 }, 90);
+                now += 1_500;
+            }
+            manager.effective_soft_limit()
+        };
+        assert_ne!(
+            run(true),
+            run(false),
+            "UseStableTimeManagement did not change the soft limit"
+        );
+    }
+
     #[test]
     fn movetime_continue_runs_to_95_percent() {
         let mut manager = TimeManager::new();

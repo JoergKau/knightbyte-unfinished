@@ -75,10 +75,10 @@ capture found **predecessor
 bug 150** (`setoption Hash` above the declared maximum crashed the reference
 via an overflowing `TTable.Resize` allocation); it was fixed in the
 predecessor the same day (commit `acaff1f`, full suite 745/745). KnightByte
-was not affected (spin clamping). Next: Phase 5 step 11 (lever
-independence).
+was not affected (spin clamping). Next: Phase 5 step 12 (UCI transcript
+tests) — step 11 was dropped (see §2.3).
 
-Verification status on the last run: all 247 tests pass locally on Windows
+Verification status on the last run: all 252 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
 fmt/clippy clean; all four bench pins exact and `capture_bench.py compare`
 shows every per-position delta at +0. Node identity is verified on this
@@ -211,8 +211,11 @@ book, tablebases). A golden-file test pins the whole catalogue against
 `tests/golden/levers.json` and allows no name outside the 83 plus the marked
 KnightByte-only three.
 
-Next action: still open is a test that setting each *wired* lever changes the
-search on a probe position (the C# suite has this pattern).
+Next action: none for now. The planned node-count lever test was dropped by
+decision of the project owner (step 11, 2026-11-18): a lever that does not
+move node counts on a probe position is not a defect, and lever strength is
+measured after the migration — a dedicated tuning campaign with SPRT, one
+lever at a time, on the final fast engine.
 
 ### 2.4 Threading, `stop`, `ponder` — the search thread landed; Lazy SMP and ponder are open
 
@@ -321,7 +324,7 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 ## 3. Recommended next steps, in order
 
-**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–10 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag, `go ponder`/`ponderhit`, `go mate`/`searchmoves` (every `go` limiter implemented), the shared-tables refactor with the parallel-zeroing bounded clear (B38 fixed), the persistent Lazy SMP pool behind `Threads`, the 500-cycle multi-thread stress gate (B39 found and fixed), and the output decision ADR-0007 with the `info currmove` line. **Step 11 (lever independence) is next.** Details in `migration-plan.md`, Phase 5.
+**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–10 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag, `go ponder`/`ponderhit`, `go mate`/`searchmoves` (every `go` limiter implemented), the shared-tables refactor with the parallel-zeroing bounded clear (B38 fixed), the persistent Lazy SMP pool behind `Threads`, the 500-cycle multi-thread stress gate (B39 found and fixed), and the output decision ADR-0007 with the `info currmove` line. **Step 11 was dropped by decision of the project owner** (no node-count lever test; strength measurement of all levers happens after the migration as a dedicated SPRT tuning campaign). **Next when we continue: step 12 (UCI transcript tests).** Details in `migration-plan.md`, Phase 5.
 
 ### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–10 done)
 
@@ -382,7 +385,7 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
   <move> currmovenumber 1 nodes 1` is emitted once per search, when
   iteration 1's first root move begins, exactly as the step-0 transcripts
   show it.
-- Steps 11–13: lever independence, UCI transcript tests
+- Steps 11–13: step 11 dropped (the lever strength measurement is a dedicated SPRT campaign after the migration); then UCI transcript tests
   against the step-0 captures, match gates (1,000 games vs the reference).
 
 ### 3.2 Phase 7 — performance, then releases

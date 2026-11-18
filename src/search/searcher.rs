@@ -1083,6 +1083,33 @@ mod tests {
     use crate::board::position::Position;
     use crate::types::r#move::{Move, flags};
 
+    #[test]
+    fn the_eval_cache_lever_gates_the_cache_consult() {
+        // Step 11: `UseEvalCache` is a pure memoisation — identical values,
+        // identical node counts — so the node-count independence test cannot
+        // see it. The behavioural proof: with the lever on, `evaluate`
+        // returns the CACHED value (here a deliberately wrong one); with it
+        // off, the cache is never consulted and the real evaluation comes
+        // back.
+        let mut searcher = Searcher::new(2);
+        let position = Position::from_fen(STARTPOS_FEN).expect("the start FEN must parse");
+        let key = position.key();
+        searcher.tables.eval_cache.store(key, 12_345);
+
+        searcher.params_mut().use_eval_cache = true;
+        assert_eq!(
+            searcher.evaluate(&position),
+            12_345,
+            "with the lever on the cache must be consulted"
+        );
+        searcher.params_mut().use_eval_cache = false;
+        assert_ne!(
+            searcher.evaluate(&position),
+            12_345,
+            "with the lever off the cache must be ignored"
+        );
+    }
+
     /// Plays the UCI moves in order and returns every position reached,
     /// starting with the given one.
     fn play(start: &Position, moves: &[&str]) -> Vec<Position> {

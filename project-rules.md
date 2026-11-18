@@ -14,7 +14,11 @@ add all bugs to "C:\dev\Migration-Project\PawnForgeCS-Files\new-bugs.md" and tho
 
 ## KnightByte at the end should be 100% feature compliant but the rust implementation should be highly optimized in key features like "time to depth" and must use any language feature which may help here
 
-Read:  "C:\dev\knightbyte-unfinished\docs-new\maximizing_performance_nps_in_a_rust_uci_chess_engine.md" was created. 
+use:  "C:\dev\knightbyte-unfinished\docs-new\maximizing_performance_nps_in_a_rust_uci_chess_engine.md" as a template hwo it could be achieved
+
+## the code for the intel arm must be optimzed for the CCRL
+
+The engine will apply for playing to be listed in the CCRL. "C:\dev\Migration-Project\PawnForgeCS-Files\CCRL-chess-engine.md"
 
 ## when adding or changing any code it is mandatory to add inline code documentation
 
