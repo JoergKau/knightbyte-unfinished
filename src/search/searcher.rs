@@ -26,6 +26,7 @@ use crate::search::time_manager::{TimeControl, TimeManager};
 use crate::search::tt::{Bound, TranspositionTable, TtEntry, score_from_tt, score_to_tt};
 use crate::types::color::{BLACK, Color, WHITE};
 use crate::types::r#move::Move;
+use crate::types::piece::{self, EMPTY};
 use crate::types::piece::{BISHOP, KNIGHT, PAWN, QUEEN, ROOK};
 
 /// Score of a forced mate at the root.
@@ -686,11 +687,15 @@ impl Searcher {
             result.best_move,
         ));
 
-        // Reference update conditions: no mate score, not in check, and a
-        // best move that is neither en passant nor a promotion. (The
-        // reference's own-capture test can never fire — the mover's target
-        // is never own-occupied — so its quiet gate reduces to exactly this;
-        // capture cutoffs DO update the tables.)
+        // Reference update conditions: no mate score, not in check, and a quiet
+        // best move — quiet in the correction-history sense: the destination is
+        // not occupied by the opponent (no ordinary capture), and the move is
+        // neither en passant nor a promotion. Bug B37 fix (reference bug 149):
+        // the fixed reference tests the OPPONENT occupancy at the destination
+        // (its pre-fix code tested the mover's own occupancy, which can never
+        // fire, so ordinary captures wrongly passed as quiet and polluted the
+        // correction tables); KnightByte's gate now classifies through
+        // [`is_quiet_store_move`], which implements the corrected semantics.
         const TB_WIN_SCORE: i32 = 29_900;
         let trusted = match result.bound {
             Bound::Lower => result.raw_eval >= result.score,
@@ -703,8 +708,7 @@ impl Searcher {
             && result.score.abs() < MATE_LIMIT
             && result.score.abs() < TB_WIN_SCORE
             && (result.best_move.is_none()
-                || (result.best_move.flag() != crate::types::r#move::flags::EN_PASSANT
-                    && !result.best_move.is_promotion()))
+                || is_quiet_store_move(result.position, result.best_move))
             && !trusted
         {
             self.correction.update(
@@ -789,12 +793,34 @@ pub(crate) const fn mated_in(ply: i32) -> i32 {
     -MATE_SCORE + ply
 }
 
+/// Returns `true` when `mv` counts as quiet in the correction-history update
+/// gate.
+///
+/// Bug B37 fix (reference bug 149): quiet means the destination is NOT occupied
+/// by the opponent (no ordinary capture) and the move is neither an en-passant
+/// capture nor a promotion — the fixed reference's `isQuiet` semantics,
+/// evaluated on the node position (`position.side()` is the mover at the store
+/// site). Extracted from the gate so the classification is directly unit-
+/// testable: the pre-fix gate omitted the capture disjunct, so ordinary
+/// captures folded their eval-error diff into the correction tables.
+///
+/// `Move::NONE` counts as quiet (the gate's "no best move" branch).
+pub(crate) fn is_quiet_store_move(position: &Position, mv: Move) -> bool {
+    if mv.is_none() {
+        return true;
+    }
+    let target = position.piece_at(mv.to());
+    let capture = target != EMPTY && piece::color_of(target) != position.side();
+    !capture && mv.flag() != crate::types::r#move::flags::EN_PASSANT && !mv.is_promotion()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Searcher;
+    use super::{Searcher, is_quiet_store_move};
     use crate::board::fen::STARTPOS_FEN;
     use crate::board::movegen::legal;
     use crate::board::position::Position;
+    use crate::types::r#move::{Move, flags};
 
     /// Plays the UCI moves in order and returns every position reached,
     /// starting with the given one.
@@ -863,5 +889,52 @@ mod tests {
         assert_eq!(searcher.game_keys[99], 249);
         searcher.set_game_history(&[]);
         assert!(searcher.game_keys.is_empty());
+    }
+
+    #[test]
+    fn the_correction_quiet_gate_accepts_quiet_moves_and_rejects_captures() {
+        // Bug B37 fix (reference bug 149): an ordinary capture must not count
+        // as quiet, so its eval-error diff no longer reaches the correction
+        // tables. Built from the start position by play, so no new FEN
+        // constant is introduced.
+        let start = Position::from_fen(STARTPOS_FEN).unwrap();
+
+        let quiet = legal(&start)
+            .as_slice()
+            .iter()
+            .copied()
+            .find(|mv| mv.to_uci() == "e2e3")
+            .expect("e2e3 is legal in the start position");
+        assert!(is_quiet_store_move(&start, quiet));
+        assert!(is_quiet_store_move(&start, Move::NONE));
+
+        // After 1.e4 d5 white's e4 pawn can capture the d5 pawn: a capture
+        // must be rejected (the pre-fix gate accepted it).
+        let after_e4_d5 = play(&start, &["e2e4", "d7d5"])[2];
+        let capture = legal(&after_e4_d5)
+            .as_slice()
+            .iter()
+            .copied()
+            .find(|mv| mv.to_uci() == "e4d5")
+            .expect("e4d5 is legal after 1.e4 d5");
+        assert!(!is_quiet_store_move(&after_e4_d5, capture));
+
+        // After 1.e4 a6 2.e5 d5 white's e5 pawn can capture en passant on d6:
+        // also rejected, via the flag.
+        let ep_position = play(&start, &["e2e4", "a7a6", "e4e5", "d7d5"])[4];
+        let en_passant = legal(&ep_position)
+            .as_slice()
+            .iter()
+            .copied()
+            .find(|mv| mv.to_uci() == "e5d6")
+            .expect("e5d6 en passant is legal after 1.e4 a6 2.e5 d5");
+        assert_eq!(en_passant.flag(), flags::EN_PASSANT);
+        assert!(!is_quiet_store_move(&ep_position, en_passant));
+
+        // Promotion: classification only — the helper reads occupancy and
+        // flags, not geometry, so the squares are arbitrary as long as the
+        // target is empty (f6 here) and the flag says promotion.
+        let promotion = Move::new(36, 53, flags::PROMO_QUEEN);
+        assert!(!is_quiet_store_move(&ep_position, promotion));
     }
 }

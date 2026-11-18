@@ -180,12 +180,16 @@ impl Searcher {
                 }
             }
 
-            // Quiet = the target square is empty and the move is not a
-            // promotion — the reference's classification, which counts an
-            // en-passant capture as QUIET (its target is empty): the quirk
-            // means the reference's quiescence never searches an en-passant
-            // capture, and the in-check narrowing can break after one.
-            let quiet = position.piece_at(mv.to()) == EMPTY && !mv.is_promotion();
+            // Quiet = the target square is empty, the move is not a promotion
+            // and it is not an en-passant capture. Bug B36 fix (reference bug
+            // 148): an en-passant capture lands on an EMPTY square, so the
+            // mailbox test alone classified it quiet and quiescence never
+            // searched it — although the move generator emits it as a capture.
+            // The flag is the authoritative marker; with the fix an
+            // en-passant capture takes the capture path below like any other.
+            let quiet = position.piece_at(mv.to()) == EMPTY
+                && !mv.is_promotion()
+                && mv.flag() != crate::types::r#move::flags::EN_PASSANT;
             if !in_check {
                 if quiet {
                     continue;

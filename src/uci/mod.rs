@@ -38,7 +38,11 @@ const DEFAULT_TT_MEGABYTES: usize = 256;
 pub fn run() -> io::Result<()> {
     let stdin = io::stdin();
     let mut output = Output::new();
-    let mut position: Option<Position> = None;
+    // Reference parity (the predecessor's bug-143 fix): the engine starts on
+    // the start position, so a `go` before any `position` command searches
+    // something sensible instead of answering a null bestmove. The option
+    // stays in the type because the answer path below remains as robustness.
+    let mut position: Option<Position> = Some(start_position());
     let mut searcher = Searcher::new(DEFAULT_TT_MEGABYTES);
 
     for line in stdin.lock().lines() {
@@ -51,7 +55,15 @@ pub fn run() -> io::Result<()> {
         match parser::parse(command) {
             parser::Command::Uci => handshake(&mut output)?,
             parser::Command::IsReady => output.line("readyok")?,
-            parser::Command::UciNewGame => searcher.clear(),
+            // Reference parity (the predecessor's bug-143 fix): a new game
+            // resets to the start position, so `go` after `ucinewgame` never
+            // searches the previous game's position. The game history is
+            // reset with it: the start position has no earlier positions.
+            parser::Command::UciNewGame => {
+                searcher.clear();
+                position = Some(start_position());
+                searcher.set_game_history(&[]);
+            }
             parser::Command::Bench => bench::run(command, &mut output)?,
             parser::Command::SetOption => handle_set_option(command, &mut searcher, &mut output)?,
             parser::Command::Position => match parse_position(command) {
@@ -59,7 +71,11 @@ pub fn run() -> io::Result<()> {
                     searcher.set_game_history(&earlier_keys);
                     position = Some(next);
                 }
-                Err(error) => output.line(&format!("info string {error}"))?,
+                // Reference parity (the predecessor's bug-144/145 decision): a
+                // rejected `position` command is reported loudly and keeps the
+                // previous position, so the engine never searches a position
+                // the GUI did not ask for.
+                Err(error) => output.line(&format!("info string {}", error.message()))?,
             },
             parser::Command::Go => {
                 handle_go(command, position.as_ref(), &mut searcher, &mut output)?
@@ -76,27 +92,56 @@ pub fn run() -> io::Result<()> {
     Ok(())
 }
 
+/// Why a `position` command was rejected.
+///
+/// The message texts mirror the fixed reference exactly (the predecessor's
+/// bug-144/145 decision, commit bffe98a): a rejected command is reported
+/// loudly and the previous position stays, so the engine never silently
+/// searches a position the GUI did not ask for.
+enum PositionError {
+    /// The FEN or the command shape is unusable.
+    InvalidPosition(String),
+    /// A move in the `moves` tail is not legal.
+    IllegalMove(String),
+}
+
+impl PositionError {
+    /// Returns the `info string` text the engine reports for this rejection.
+    fn message(&self) -> String {
+        match self {
+            Self::InvalidPosition(detail) => {
+                format!("Error: invalid position, previous position kept: {detail}")
+            }
+            Self::IllegalMove(mv) => format!(
+                "Error: illegal move {mv}, position command rejected, previous position kept"
+            ),
+        }
+    }
+}
+
 /// Parses `position startpos|fen <fields>` with an optional `moves` tail.
 ///
 /// Returns the final position and the keys of every position that preceded it
 /// in the game (the starting position and each intermediate one, oldest
 /// first), which the search needs to recognise repetitions of earlier game
 /// positions.
-fn parse_position(line: &str) -> Result<(Position, Vec<u64>), String> {
+fn parse_position(line: &str) -> Result<(Position, Vec<u64>), PositionError> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
     let (mut position, next) = match tokens.get(1).copied() {
-        Some("startpos") => (
-            Position::from_fen(STARTPOS_FEN).map_err(|error| error.to_string())?,
-            2,
-        ),
+        Some("startpos") => (start_position(), 2),
         Some("fen") if tokens.len() >= 8 => {
             let fen = tokens[2..8].join(" ");
             (
-                Position::from_fen(&fen).map_err(|error| error.to_string())?,
+                Position::from_fen(&fen)
+                    .map_err(|error| PositionError::InvalidPosition(error.to_string()))?,
                 8,
             )
         }
-        _ => return Err("position command expects 'startpos' or 'fen <six fields>'".to_owned()),
+        _ => {
+            return Err(PositionError::InvalidPosition(
+                "command expects 'startpos' or 'fen <six fields>'".to_owned(),
+            ));
+        }
     };
 
     let mut earlier_keys = Vec::new();
@@ -108,24 +153,32 @@ fn parse_position(line: &str) -> Result<(Position, Vec<u64>), String> {
             }
         }
         Some(unexpected) => {
-            return Err(format!(
+            return Err(PositionError::InvalidPosition(format!(
                 "unexpected token '{unexpected}' in position command"
-            ));
+            )));
         }
         None => {}
     }
     Ok((position, earlier_keys))
 }
 
+/// Returns a fresh start position.
+///
+/// A `position startpos` command and the `ucinewgame` reset both build the
+/// position from the built-in constant, which always parses.
+fn start_position() -> Position {
+    Position::from_fen(STARTPOS_FEN).expect("the built-in start position must parse")
+}
+
 /// Applies one UCI move string to `position`.
-fn apply_uci_move(position: &Position, text: &str) -> Result<Position, String> {
+fn apply_uci_move(position: &Position, text: &str) -> Result<Position, PositionError> {
     let moves = legal(position);
     for &mv in moves.as_slice() {
         if mv.to_uci() == text {
             return Ok(position.make_move(mv));
         }
     }
-    Err(format!("illegal move '{text}' in position"))
+    Err(PositionError::IllegalMove(text.to_owned()))
 }
 
 /// Parses the limiters of a `go` command.

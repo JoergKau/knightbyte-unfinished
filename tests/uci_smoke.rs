@@ -182,9 +182,70 @@ fn an_unsupported_go_limiter_still_gets_a_bestmove() {
 }
 
 #[test]
-fn go_without_a_position_still_gets_a_bestmove() {
+fn go_without_a_position_searches_the_start_position() {
+    // Reference parity (the predecessor's bug-143 fix): the engine starts on
+    // the start position and `ucinewgame` resets to it, so a bare `go` never
+    // runs without a position — it searches the start position and answers a
+    // real bestmove. The null-bestmove answer path stays as robustness for a
+    // state that can no longer be reached through the protocol.
     let stdout = run_engine(b"go depth 3\nquit\n");
-    assert!(stdout.contains("bestmove 0000"), "missing null bestmove");
+    assert!(stdout.contains("info depth 1 "), "no search happened");
+    let bestmove = stdout
+        .lines()
+        .find(|line| line.starts_with("bestmove "))
+        .expect("missing bestmove after a bare go");
+    assert_ne!(bestmove, "bestmove 0000", "the start position was searched");
+}
+
+#[test]
+fn a_rejected_position_command_is_reported_and_keeps_the_previous_one() {
+    // Reference parity (the predecessor's bug-144/145 decision): a rejected
+    // `position` command prints the loud error line and changes nothing, so
+    // the next `go` still searches the previous position. The moves of a
+    // rejected command are applied to a copy — nothing is committed.
+    let stdout = run_engine(
+        b"position startpos moves e2e4\n\
+          position fen this-is-not-a-fen\n\
+          nnueeval\n\
+          position startpos moves e2e4 e2e4 d7d5\n\
+          nnueeval\n\
+          go depth 1\nquit\n",
+    );
+    assert!(
+        stdout.contains("info string Error: invalid position, previous position kept"),
+        "missing the invalid-position error line"
+    );
+    assert!(
+        stdout.contains(
+            "info string Error: illegal move e2e4, position command rejected, previous position kept"
+        ),
+        "missing the illegal-move error line"
+    );
+    // The position after e2e4 is kept through both rejections: the start
+    // position evaluates 27, the position after e2e4 evaluates -45.
+    assert!(
+        stdout.contains("nnueeval -45"),
+        "the previous position was not kept"
+    );
+}
+
+#[test]
+fn ucinewgame_resets_to_the_start_position() {
+    // Reference parity (the predecessor's bug-143 fix): `ucinewgame` resets
+    // the position to the start, so a `go` afterwards searches the start
+    // position, not the previous game's last position (startpos eval 27,
+    // after e2e4 it is -45).
+    let stdout = run_engine(
+        b"position startpos moves e2e4\n\
+          ucinewgame\n\
+          nnueeval\n\
+          go depth 1\nquit\n",
+    );
+    assert!(
+        stdout.contains("nnueeval 27"),
+        "ucinewgame did not reset to the start position"
+    );
+    assert!(stdout.contains("bestmove "), "missing bestmove");
 }
 
 #[test]

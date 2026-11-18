@@ -13,31 +13,41 @@ These are behavioural gates, not speed measurements. They must match exactly.
 
 | Run | Nodes | Meaning |
 | :--- | ---: | :--- |
-| `bench 12` | 416,533 | Search identity |
-| `bench 16` | 3,169,859 | Search identity |
-| `bench 18` | 6,925,762 | Search identity |
+| `bench 6` | 15,528 | Search identity |
+| `bench 12` | 456,308 | Search identity |
+| `bench 16` | 2,815,799 | Search identity |
+| `bench 18` | 6,892,874 | Search identity |
 
 The `bench` set is four fixed positions (startpos, Kiwipete, an endgame and a
-tactical middlegame), Hash 256 MB, one thread.
+tactical middlegame), Hash 256 MB, one thread. The values are the reference
+totals of the bug-fixed predecessor build (2026-11-18, ADR-0008); the earlier
+totals 416,533 / 3,169,859 / 6,925,762 described the pre-fix build.
 
-### KnightByte current totals (node identity, ADR-0005)
+### KnightByte current totals (node identity, ADR-0005 and ADR-0008)
 
-KnightByte `bench` after the second audit round (2026-11-17),
-Windows 11 / Ryzen 7 260, Rust 1.100.0 release, Hash 256 MB, one thread:
+KnightByte `bench` against the bug-fixed reference build (2026-11-18 restart,
+predecessor commits bffe98a and f274b39; the fixes for the former quirks
+Q2-Q4 / predecessor bugs 147-149 are ported as the B35-B37 fixes),
+Windows 11, Rust 1.100.0 release, Hash 256 MB, one thread:
 
 | Run | Nodes | Reference | Delta |
 | :--- | ---: | ---: | ---: |
-| `bench 6` | 14,979 | 14,979 | 0 |
-| `bench 12` | 416,533 | 416,533 | 0 |
-| `bench 16` | 3,169,859 | 3,169,859 | 0 |
-| `bench 18` | 6,925,762 | 6,925,762 | 0 |
+| `bench 6` | 15,528 | 15,528 | 0 |
+| `bench 12` | 456,308 | 456,308 | 0 |
+| `bench 16` | 2,815,799 | 2,815,799 | 0 |
+| `bench 18` | 6,892,874 | 6,892,874 | 0 |
 
 Every per-position count of the captured depths (1-12, 14, 16, 18) is
-identical to the reference as well. The earlier state (ADR-0004: `bench 6`
-14,963, `bench 12` 356,262, `bench 16` 3,077,942, `bench 18` 6,797,622) was
-traced to concrete porting differences and removed; ADR-0005 supersedes it.
-The audit record is `docs/audit/migration-audit.md`, the defects are
-`docs-new/new-bugs.md` (B18-B28).
+identical to the reference as well (verified with
+`tools/capture_bench.py compare`, all deltas zero). The pre-restart totals
+against the OLD reference build (`bench 6` 14,979, `bench 12` 416,533,
+`bench 16` 3,169,859, `bench 18` 6,925,762) described the quirk build and were
+replaced when KnightByte adopted the reference's bug fixes (ADR-0008). The
+first-round identity state (`bench 6` 14,963, `bench 12` 356,262, `bench 16`
+3,077,942, `bench 18` 6,797,622) was traced to concrete porting differences
+and removed; ADR-0005 supersedes it. The audit record is
+`docs/audit/migration-audit.md`, the defects are `docs-new/new-bugs.md`
+(B18-B28, B35-B37).
 
 The `bench 6` total and the per-position counts of depths 1-8 are asserted in
 `tests/search.rs`, so CI fails if any host or build mode produces a different
@@ -55,7 +65,7 @@ Never compare an `m4` run with a `zen4` run. Compare like with like.
 ### Reproduction
 
 Use the local C# baseline binary for the host (the path is intentionally generic;
-the internal checkout is not published with KnightByte):
+the predecessor checkout lives in the migration folder outside this repository):
 
 ```bash
 # Scaling + quality gates + tactical mini-suite

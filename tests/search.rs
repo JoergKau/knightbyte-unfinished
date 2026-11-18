@@ -129,12 +129,13 @@ fn bench_positions_return_legal_moves() {
 
 /// Recorded depth-6 bench total (Hash 256 MB, one thread).
 ///
-/// This value is the node-identity total of the predecessor engine, and it
-/// must be identical on every host and in debug and release builds. If a
-/// search change alters it, the change is a search change: update this
-/// constant together with `docs/baselines.md` and the golden files, and record
-/// the reason.
-const BENCH_DEPTH_6_NODES: u64 = 14_979;
+/// This value is the node-identity total of the predecessor engine — the
+/// bug-fixed build of 2026-11-18 (predecessor commits bffe98a, f274b39; see
+/// ADR-0008) — and it must be identical on every host and in debug and release
+/// builds. If a search change alters it, the change is a search change: update
+/// this constant together with `docs/baselines.md` and the golden files, and
+/// record the reason.
+const BENCH_DEPTH_6_NODES: u64 = 15_528;
 
 #[test]
 fn bench_node_totals_match_the_recorded_baseline() {
@@ -144,16 +145,18 @@ fn bench_node_totals_match_the_recorded_baseline() {
 /// Per-position node counts of the predecessor engine for depths 1 to 8, in
 /// `bench::BENCH_POSITIONS` order. A fixed-depth search to depth N visits
 /// exactly the nodes of the first N iterations of a deeper search, so one
-/// depth-8 search per position can be checked at every depth.
+/// depth-8 search per position can be checked at every depth. Captured from
+/// the bug-fixed reference build (ADR-0008): the fixes for the former quirks
+/// Q2-Q4 (KnightByte bugs B35-B37) change the tree from depth 2 on.
 const REFERENCE_NODES: [[u64; 4]; 8] = [
     [47, 110, 33, 371],
-    [213, 331, 140, 893],
-    [439, 551, 273, 1_251],
-    [1_204, 965, 1_068, 1_757],
-    [3_947, 1_660, 1_299, 3_025],
-    [5_728, 2_706, 2_011, 4_534],
-    [10_815, 4_277, 2_855, 6_117],
-    [27_811, 7_774, 4_737, 7_881],
+    [213, 331, 140, 911],
+    [439, 551, 272, 1_252],
+    [1_210, 965, 1_078, 1_748],
+    [4_001, 1_660, 1_308, 2_970],
+    [5_741, 2_683, 2_019, 5_085],
+    [12_666, 4_234, 2_978, 7_495],
+    [29_604, 7_832, 4_237, 9_686],
 ];
 
 #[test]
@@ -183,16 +186,16 @@ fn bench_node_counts_are_identical_to_the_reference_per_position_and_depth() {
 #[test]
 fn singular_verification_lever_is_off_by_default_and_changes_the_search_when_on() {
     // Off (the default) reproduces the reference: depth 9 of the start position
-    // is 41,511 nodes there, and singular extensions never fire. The
-    // KnightByte-only lever makes the verification search the alternatives,
-    // which must change the tree.
+    // is 47,178 nodes there (bug-fixed build, ADR-0008), and singular
+    // extensions never fire. The KnightByte-only lever makes the verification
+    // search the alternatives, which must change the tree.
     let position = verified(STARTPOS);
 
     let mut reference = Searcher::new(bench::BENCH_TT_MEGABYTES);
     reference.clear();
     let off = reference.search(&position, Limits::depth(9), &mut |_| {});
     assert_eq!(
-        off.nodes, 41_511,
+        off.nodes, 47_178,
         "default behaviour must match the reference"
     );
 

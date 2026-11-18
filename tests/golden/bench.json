@@ -1,15 +1,15 @@
 {
   "6": {
-    "total_nodes": 14979,
-    "note": "Node identity with the reference engine (ADR-0005). The totals for 12, 16 and 18 are likewise the reference totals; per-position counts for depths 1-18 are in search_parity.json."
+    "total_nodes": 15528,
+    "note": "Node identity with the reference engine, bug-fixed build of 2026-11-18 (predecessor commits bffe98a and f274b39; ADR-0008). The totals for 12, 16 and 18 are likewise the reference totals; per-position counts for depths 1-18 are in search_parity.json. The pre-fix totals 14,979 / 416,533 / 3,169,859 / 6,925,762 described the old build and were replaced together with the B35-B37 fixes."
   },
   "12": {
-    "total_nodes": 416533
+    "total_nodes": 456308
   },
   "16": {
-    "total_nodes": 3169859
+    "total_nodes": 2815799
   },
   "18": {
-    "total_nodes": 6925762
+    "total_nodes": 6892874
   }
 }

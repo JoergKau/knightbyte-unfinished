@@ -31,7 +31,7 @@ use crate::search::searcher::{
 };
 use crate::search::see::see_ge;
 use crate::search::tt::Bound;
-use crate::types::r#move::{Move, flags};
+use crate::types::r#move::Move;
 use crate::types::piece::{KING, PAWN, color_of, piece_type};
 
 /// The node at and beyond this ply returns its static evaluation without
@@ -210,7 +210,16 @@ impl Searcher {
         let mut tt_probe = None;
         let mut tt_eval = None;
         if let Some(entry) = self.tt.probe(position.key()) {
-            tt_move = without_special_flags(entry.mv);
+            // Bug B35 fix (reference bug 147): the table move is used as stored,
+            // markers included. KnightByte's table packing keeps the full move,
+            // so a stored castling or en-passant move compares equal to the
+            // generated move it came from and is tried first, excluded in the
+            // singular-verification search and eligible for a singular
+            // extension. The reference strips these markers only because its
+            // 16-bit packing cannot hold them; the fixed reference rebuilds
+            // them from board context at probe time, and so does the stored
+            // form here.
+            tt_move = entry.mv;
             tt_probe = Some(entry);
             let stored_eval = i32::from(entry.eval);
             if stored_eval != NO_STATIC_EVAL {
@@ -895,25 +904,6 @@ impl Searcher {
     }
 }
 
-/// Returns a table move as the reference table hands it back: its packed form
-/// holds only the two squares and the promotion piece, so the castle and
-/// en-passant markers are gone.
-///
-/// A stripped castling or en-passant move never compares equal to the
-/// generated move it came from. The picker therefore does not try it first or
-/// remove it from the generated lists, a verification search does not exclude
-/// it and it earns no singular extension — while it still counts as "a table
-/// move exists" for every presence test. Double pushes and promotions stay as
-/// stored: in the position the entry was written for they equal the generated
-/// move exactly, which is the result the reference's comparison by squares and
-/// promotion piece also gives.
-fn without_special_flags(mv: Move) -> Move {
-    match mv.flag() {
-        flags::CASTLE | flags::EN_PASSANT => Move::new(mv.from(), mv.to(), flags::NORMAL),
-        _ => mv,
-    }
-}
-
 /// Returns the number of quiet moves searched before late move pruning stops the
 /// stage. Indexed by remaining depth, capped at depth 4.
 fn lmp_limit(depth: i32) -> i32 {
@@ -940,22 +930,18 @@ fn rfp_margin(depth: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::without_special_flags;
     use crate::types::r#move::{Move, flags};
 
     #[test]
-    fn castle_and_en_passant_markers_are_dropped_from_a_table_move() {
+    fn a_table_move_keeps_its_castle_and_en_passant_markers() {
+        // Bug B35 fix (reference bug 147): the stored move comes back exactly
+        // as written, so a stored castling or en-passant move compares equal
+        // to the generated move it came from.
         let castle = Move::new(4, 6, flags::CASTLE);
-        let stripped = without_special_flags(castle);
-        assert_eq!((stripped.from(), stripped.to()), (4, 6));
-        assert_eq!(stripped.flag(), flags::NORMAL);
-        assert_ne!(stripped, castle, "it must not match the generated castle");
-        assert!(!stripped.is_none(), "a table move still exists");
+        assert_eq!(castle.flag(), flags::CASTLE);
 
         let en_passant = Move::new(36, 43, flags::EN_PASSANT);
-        let stripped = without_special_flags(en_passant);
-        assert_eq!(stripped.flag(), flags::NORMAL);
-        assert_ne!(stripped, en_passant);
+        assert_eq!(en_passant.flag(), flags::EN_PASSANT);
     }
 
     #[test]
@@ -967,7 +953,7 @@ mod tests {
             Move::new(6, 21, flags::NORMAL),
             Move::NONE,
         ] {
-            assert_eq!(without_special_flags(mv), mv);
+            assert_eq!(Move::from_bits(mv.bits()), mv);
         }
     }
 }
