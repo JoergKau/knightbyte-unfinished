@@ -603,7 +603,8 @@ Consequences for KnightByte:
 
 ## Open
 
-- No open defects. B33-B37 were fixed at the Phase 1 restart (`07b401c`,
+- **Predecessor bug 150 (found by the Phase 5 step 0 capture, 2026-11-18):** `setoption name Hash value 999999` — any spin value above the declared maximum — kills the reference with native heap corruption (`TTable.Resize`, delayed manifestation). Details and proposed fix are in the predecessor bug log; the `tests/golden/transcripts/setoption.txt` capture records the crash. KnightByte is **not** affected: spin values are clamped into range at the option layer (`src/search/options.rs`) and the Hash resize is clamped to 1..1024 (`src/search/searcher.rs`), verified 2026-11-18. The migration is stopped until bug 150 is fixed in the predecessor and the setoption behaviour is re-captured.
+- No open KnightByte defects. B33-B37 were fixed at the Phase 1 restart (`07b401c`,
   2026-11-18): the UCI position handling follows the predecessor's decided
   behaviour, and KnightByte adopts the reference's fixes for the former quirks
   Q2-Q4 (predecessor bugs 147-149). Node identity with the bug-fixed reference

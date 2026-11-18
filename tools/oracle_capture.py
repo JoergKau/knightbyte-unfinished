@@ -16,11 +16,15 @@ copied into the project.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
+import queue
 import re
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 # Standard perft positions. Depths are chosen to keep the capture quick while
@@ -180,6 +184,463 @@ def capture_uci(engine: Path) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Phase 5 step 0: interactive UCI transcript capture
+#
+# The transcripts freeze the reference engine's protocol behaviour before the
+# protocol code is written (migration plan, Phase 5 step 0). Each scenario runs
+# in a fresh engine session; sent commands are recorded as "> " lines so the
+# file is a readable request/response transcript. Published files contain no
+# engine identity: id lines and the start-up banner become placeholders, and
+# wall-clock-dependent fields ("time", "nps", "hashfull", "tbhits", and where
+# noted "nodes") are masked.
+# ---------------------------------------------------------------------------
+
+# Fields whose values depend on wall-clock timing or host speed; they cannot
+# be compared between runs and are masked in every published transcript.
+_TIMING_MASKS = [
+    (re.compile(r"\btime \d+"), "time <ms>"),
+    (re.compile(r"\bnps \d+"), "nps <nps>"),
+    (re.compile(r"\bhashfull \d+"), "hashfull <permille>"),
+    (re.compile(r"\btbhits \d+"), "tbhits <hits>"),
+]
+
+
+def sanitize(lines: list[str], mask_nodes: bool = False) -> list[str]:
+    """Masks identity and timing fields so a transcript can be published."""
+    out: list[str] = []
+    for raw in lines:
+        line = raw.rstrip("\n")
+        if line.startswith("id name "):
+            line = "id name <engine>"
+        elif line.startswith("id author "):
+            line = "id author <author>"
+        elif "eval-source:" in line:
+            # The eval-source line names the reference's network file; the
+            # net identity is not published, only the line's existence.
+            line = re.sub(r"eval-source: .*", "eval-source: <nnue net>", line)
+        elif line.strip().startswith("*"):
+            # The start-up banner block collapses into one placeholder line.
+            if out and out[-1] == "<start-up banner>":
+                continue
+            line = "<start-up banner>"
+        for pattern, replacement in _TIMING_MASKS:
+            line = pattern.sub(replacement, line)
+        if mask_nodes:
+            line = re.sub(r"\bnodes \d+", "nodes <nodes>", line)
+        out.append(line)
+    return out
+
+
+class EngineSession:
+    """Runs the reference engine and exchanges UCI lines with it.
+
+    A background reader thread feeds stdout lines into a queue so the capture
+    can interleave timed commands (``stop``, ``ponderhit``, ``isready``) with
+    an ongoing search. The engine's working directory is its binary's folder
+    so it finds its network file next to the executable.
+    """
+
+    def __init__(self, engine: Path):
+        self._process = subprocess.Popen(
+            [str(engine)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(engine.parent),
+        )
+        self._lines: queue.Queue[str | None] = queue.Queue()
+        self._reader = threading.Thread(target=self._read_stdout, daemon=True)
+        self._reader.start()
+
+    def _read_stdout(self) -> None:
+        """Pumps engine output into the queue until the stream ends."""
+        assert self._process.stdout is not None
+        for raw in self._process.stdout:
+            self._lines.put(raw.rstrip("\n"))
+        self._lines.put(None)
+
+    def send(self, line: str) -> None:
+        """Sends one command line; records a dead engine instead of raising."""
+        assert self._process.stdin is not None
+        try:
+            self._process.stdin.write(line + "\n")
+            self._process.stdin.flush()
+        except OSError:
+            # The engine's stdin pipe broke (the process died or closed its
+            # input). Record the fact; the transcript stays honest.
+            code = self._process.poll()
+            self.transcript.append(f"# engine stdin broken (process exit code {code})")
+
+    def command(self, line: str) -> None:
+        """Sends one command and records it as a "> " transcript line."""
+        self.transcript.append(f"> {line}")
+        self.send(line)
+
+    def collect(self, seconds: float) -> list[str]:
+        """Records engine output for a fixed wall-clock window."""
+        collected: list[str] = []
+        deadline = time.monotonic() + seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                line = self._lines.get(timeout=min(remaining, 0.05))
+            except queue.Empty:
+                continue
+            if line is None:
+                break
+            collected.append(line)
+        self.transcript.extend(collected)
+        return collected
+
+    def collect_until(self, marker: str, timeout: float = 60.0) -> list[str]:
+        """Records output until a line starts with ``marker`` (e.g. bestmove).
+
+        If the engine process dies first, the death is recorded and the wait
+        ends; a crashed engine will never print its marker.
+        """
+        collected: list[str] = []
+        start = time.monotonic()
+        while True:
+            if time.monotonic() - start > timeout:
+                raise RuntimeError(f"engine never printed {marker!r}")
+            if self._process.poll() is not None:
+                self.transcript.append(
+                    f"# engine exited (code {self._process.returncode:#x}) before {marker!r}"
+                )
+                break
+            try:
+                line = self._lines.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if line is None:
+                break
+            collected.append(line)
+            if line.startswith(marker):
+                break
+        self.transcript.extend(collected)
+        return collected
+
+    def collect_idle(self, quiet: float = 0.35, timeout: float = 30.0) -> list[str]:
+        """Records output until the engine has been silent for ``quiet`` seconds.
+
+        A dead engine is also "silent"; the death is recorded once.
+        """
+        collected: list[str] = []
+        start = time.monotonic()
+        last = time.monotonic()
+        death_noted = False
+        while True:
+            if time.monotonic() - start > timeout:
+                raise RuntimeError("engine did not fall silent")
+            if not death_noted and self._process.poll() is not None:
+                self.transcript.append(
+                    f"# engine exited (code {self._process.returncode:#x})"
+                )
+                death_noted = True
+            try:
+                line = self._lines.get(timeout=0.05)
+            except queue.Empty:
+                if time.monotonic() - last >= quiet:
+                    break
+                continue
+            if line is None:
+                break
+            collected.append(line)
+            last = time.monotonic()
+        self.transcript.extend(collected)
+        return collected
+
+    def note(self, text: str) -> None:
+        """Adds a derived measurement as a comment line to the transcript."""
+        self.transcript.append(f"# {text}")
+
+    def close(self) -> None:
+        """Ends the engine cleanly; falls back to killing it."""
+        try:
+            self.send("quit")
+            self._process.wait(timeout=5)
+        except Exception:
+            self._process.kill()
+
+    def __enter__(self) -> "EngineSession":
+        self.transcript: list[str] = []
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+# Back-rank mate-in-one fixture for the "go mate" probe (the rook mate has no
+# escape square and nothing to block with).
+_MATE_IN_ONE = "6k1/5ppp/8/8/8/8/5PPP/R5K1 w - - 0 1"
+
+
+def _scenario_handshake(engine: Path) -> list[str]:
+    """Handshake: banner, uci, isready, ucinewgame, isready."""
+    with EngineSession(engine) as session:
+        session.collect_idle()  # the start-up banner arrives before any command
+        session.command("uci")
+        session.collect_idle()
+        session.command("isready")
+        session.collect_idle()
+        session.command("ucinewgame")
+        session.collect_idle()
+        session.command("isready")
+        session.collect_idle()
+    return sanitize(session.transcript)
+
+
+def _scenario_go_limiter_depth(engine: Path) -> list[str]:
+    """Deterministic go limiters: node counts are kept unmasked."""
+    with EngineSession(engine) as session:
+        session.collect(0.4)  # swallow the banner
+        session.command("position startpos")
+        session.note("a) bare go (no limiter)")
+        session.command("go")
+        session.collect_until("bestmove")
+        session.note("b) go depth 7")
+        session.command("go depth 7")
+        session.collect_until("bestmove")
+        session.note("c) go nodes 50000")
+        session.command("go nodes 50000")
+        session.collect_until("bestmove")
+        session.note("d) go movestogo 40 alone")
+        session.command("go movestogo 40")
+        session.collect_until("bestmove")
+        session.note("e) go perft 3")
+        session.command("go perft 3")
+        session.collect_idle()
+    return sanitize(session.transcript)
+
+
+def _scenario_go_limiter_time(engine: Path) -> list[str]:
+    """Time-limited go calls; node counts are masked (host-dependent)."""
+    with EngineSession(engine) as session:
+        session.collect(0.4)
+        session.command("position startpos")
+        session.note("a) go movetime 250")
+        session.command("go movetime 250")
+        session.collect_until("bestmove")
+        session.note("b) go wtime/btime with increments")
+        session.command("go wtime 1000 btime 1000 winc 10 binc 10")
+        session.collect_until("bestmove")
+        session.note("c) go wtime/btime with movestogo")
+        session.command("go wtime 1000 btime 1000 winc 10 binc 10 movestogo 20")
+        session.collect_until("bestmove")
+    return sanitize(session.transcript, mask_nodes=True)
+
+
+def _scenario_go_infinite_stop(engine: Path) -> list[str]:
+    """go infinite, stopped while it is running."""
+    with EngineSession(engine) as session:
+        session.collect(0.4)
+        session.command("position startpos")
+        session.command("go infinite")
+        session.collect(0.7)
+        session.command("stop")
+        session.collect_until("bestmove")
+    return sanitize(session.transcript, mask_nodes=True)
+
+
+def _scenario_stop(engine: Path) -> list[str]:
+    """stop in the four situations the plan asks about."""
+    with EngineSession(engine) as session:
+        session.collect(0.4)
+        session.command("position startpos")
+        session.note("a) stop with no search running")
+        session.command("stop")
+        session.collect_idle()
+        session.note("b) stop sent immediately after go depth 1")
+        session.command("go depth 1")
+        session.command("stop")
+        session.collect_until("bestmove")
+        session.note("c) stop during a deep search")
+        session.command("go depth 14")
+        session.collect(0.6)
+        session.command("stop")
+        session.collect_until("bestmove")
+        session.note("d) stop after a search has finished")
+        session.command("go depth 5")
+        session.collect_until("bestmove")
+        session.command("stop")
+        session.collect_idle()
+    return sanitize(session.transcript, mask_nodes=True)
+
+
+def _scenario_ponder(engine: Path) -> list[str]:
+    """go ponder with stop and ponderhit, plus a stray ponderhit."""
+    with EngineSession(engine) as session:
+        session.collect(0.4)
+        session.command("position startpos")
+        session.note("a) go ponder, then stop without ponderhit")
+        session.command("go ponder wtime 5000 btime 5000 winc 100 binc 100")
+        session.collect(0.6)
+        session.command("stop")
+        session.collect_until("bestmove")
+        session.note("b) go ponder, then ponderhit (the clock starts at the ponderhit moment)")
+        session.command("go ponder wtime 5000 btime 5000 winc 100 binc 100")
+        session.collect(0.6)
+        started = time.monotonic()
+        session.command("ponderhit")
+        session.collect_until("bestmove", timeout=120)
+        session.note(f"elapsed ponderhit -> bestmove: {time.monotonic() - started:.2f} s")
+        session.note("c) ponderhit with no ponder search running")
+        session.command("ponderhit")
+        session.collect_idle()
+    return sanitize(session.transcript, mask_nodes=True)
+
+
+def _scenario_mate_searchmoves(engine: Path) -> list[str]:
+    """go mate and go searchmoves behaviour."""
+    with EngineSession(engine) as session:
+        session.collect(0.4)
+        session.command(f"position fen {_MATE_IN_ONE}")
+        session.note("a) go mate 1 on a mate-in-one position")
+        session.command("go mate 1")
+        session.collect_until("bestmove", timeout=60)
+        session.command("position startpos")
+        session.note("b) go mate 3 on the start position (stopped after 2 s if unresolved)")
+        session.command("go mate 3")
+        window = session.collect(2.0)
+        if not any(line.startswith("bestmove") for line in window):
+            session.command("stop")
+            session.collect_until("bestmove")
+        session.command("position startpos")
+        session.note("c) go depth 5 searchmoves e2e4")
+        session.command("go depth 5 searchmoves e2e4")
+        session.collect_until("bestmove")
+        session.note("d) go depth 5 searchmoves e2e4 d2d4")
+        session.command("go depth 5 searchmoves e2e4 d2d4")
+        session.collect_until("bestmove")
+        session.note("e) go depth 5 searchmoves (no moves given)")
+        session.command("go depth 5 searchmoves")
+        session.collect_until("bestmove")
+    return sanitize(session.transcript)
+
+
+def _scenario_ucinewgame(engine: Path) -> list[str]:
+    """ucinewgame must reset to the start position (predecessor bug 143 fix)."""
+    with EngineSession(engine) as session:
+        session.collect(0.4)
+        session.command("position startpos moves e2e4")
+        session.command("ucinewgame")
+        session.collect_idle()
+        session.note("go depth 1 after ucinewgame must search the start position")
+        session.command("go depth 1")
+        session.collect_until("bestmove")
+    return sanitize(session.transcript)
+
+
+def _scenario_setoption(engine: Path) -> list[str]:
+    """setoption validation: valid, out-of-range, unknown, button, check."""
+    with EngineSession(engine) as session:
+        session.collect(0.4)
+        checks = [
+            ("a) valid spin value", "setoption name Hash value 32"),
+            ("b) spin above its maximum", "setoption name Hash value 999999"),
+            ("c) spin below its minimum", "setoption name Hash value 0"),
+            ("d) unknown option name", "setoption name NoSuchOption value 5"),
+            ("e) check option, valid value", "setoption name Own Book value true"),
+            ("f) check option, valid value", "setoption name Own Book value false"),
+            ("g) check option, invalid value", "setoption name Own Book value maybe"),
+            ("h) button option without a value", "setoption name Clear Hash"),
+            ("i) Threads below its minimum", "setoption name Threads value 0"),
+            ("j) Threads above its maximum", "setoption name Threads value 999"),
+        ]
+        for note, command in checks:
+            session.note(note)
+            session.command(command)
+            session.collect_idle()
+    return sanitize(session.transcript)
+
+
+def _scenario_isready(engine: Path) -> list[str]:
+    """isready must be answered at once while a search is running."""
+    with EngineSession(engine) as session:
+        session.collect(0.4)
+        session.command("position startpos")
+        session.command("go depth 16")
+        session.collect(0.4)
+        session.note("isready sent while the search is running")
+        sent = time.monotonic()
+        session.command("isready")
+        session.collect_until("readyok", timeout=10)
+        session.note(f"readyok arrived after {time.monotonic() - sent:.3f} s")
+        session.command("stop")
+        session.collect_until("bestmove")
+    return sanitize(session.transcript, mask_nodes=True)
+
+
+def _scenario_threads(engine: Path) -> list[str]:
+    """Which thread's result does a multi-thread search report?"""
+    with EngineSession(engine) as session:
+        session.collect(0.4)
+        session.command("position startpos")
+        session.note("single-thread reference run: go depth 12")
+        session.command("go depth 12")
+        lines = session.collect_until("bestmove")
+        depth_lines = [l for l in lines if l.startswith("info depth")]
+        match = re.search(r"nodes (\d+)", depth_lines[-1]) if depth_lines else None
+        if match:
+            session.note(f"single-thread nodes at depth 12: {match.group(1)}")
+        session.command("setoption name Threads value 4")
+        session.collect_idle()
+        session.note("four threads: go depth 12")
+        session.command("go depth 12")
+        lines = session.collect_until("bestmove", timeout=120)
+        depth_lines = [l for l in lines if l.startswith("info depth")]
+        match = re.search(r"nodes (\d+)", depth_lines[-1]) if depth_lines else None
+        if match:
+            session.note(f"reported nodes at depth 12 with 4 threads: {match.group(1)}")
+        session.command("setoption name Threads value 1")
+        session.collect_idle()
+    return sanitize(session.transcript, mask_nodes=True)
+
+
+# The published scenario set, in capture order. The title appears in the file
+# header and must not name the reference engine.
+TRANSCRIPT_SCENARIOS = [
+    ("handshake", _scenario_handshake, "UCI handshake, isready and ucinewgame"),
+    ("go_limiter_depth", _scenario_go_limiter_depth,
+     "go with deterministic limiters (none, depth, nodes, movestogo, perft)"),
+    ("go_limiter_time", _scenario_go_limiter_time,
+     "go with time limiters (movetime, clocks, movestogo)"),
+    ("go_infinite_stop", _scenario_go_infinite_stop,
+     "go infinite stopped while running"),
+    ("stop", _scenario_stop, "stop with no search, during depth 1, mid-search, after a search"),
+    ("ponder", _scenario_ponder, "go ponder with stop and ponderhit, stray ponderhit"),
+    ("mate_searchmoves", _scenario_mate_searchmoves, "go mate and go searchmoves"),
+    ("ucinewgame", _scenario_ucinewgame, "ucinewgame resets to the start position"),
+    ("setoption", _scenario_setoption, "setoption validation"),
+    ("isready_during_search", _scenario_isready, "isready answered during a search"),
+    ("threads", _scenario_threads, "which thread reports the result with Threads=4"),
+]
+
+
+def capture_transcripts(engine: Path, out_dir: Path) -> None:
+    """Runs every scenario and writes the sanitized transcript files."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    today = datetime.date.today().isoformat()
+    for name, scenario, title in TRANSCRIPT_SCENARIOS:
+        lines = scenario(engine)
+        path = out_dir / f"{name}.txt"
+        with path.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(f"# UCI transcript: {title}\n")
+            handle.write(f"# Captured {today} (migration plan, Phase 5 step 0). Identity lines are\n")
+            handle.write("# placeholders; time, nps, hashfull, tbhits and (where noted) nodes\n")
+            handle.write("# values are masked. Lines starting with '>' are commands sent to the\n")
+            handle.write("# engine, '#' lines are derived measurements, the rest is engine output.\n")
+            for line in lines:
+                handle.write(line + "\n")
+        print(f"wrote {path}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", required=True, help="reference UCI binary")
@@ -193,6 +654,16 @@ def main() -> int:
         default="12,16,18",
         help="comma-separated benchmark depths (default: 12,16,18)",
     )
+    parser.add_argument(
+        "--transcripts",
+        action="store_true",
+        help="also capture the Phase 5 step 0 UCI transcripts into <out-dir>/transcripts",
+    )
+    parser.add_argument(
+        "--transcripts-only",
+        action="store_true",
+        help="capture only the UCI transcripts, skipping the golden JSON files",
+    )
     args = parser.parse_args()
 
     engine = Path(args.engine).resolve()
@@ -203,6 +674,11 @@ def main() -> int:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     depths = [int(value) for value in args.bench_depths.split(",") if value]
+
+    if args.transcripts or args.transcripts_only:
+        capture_transcripts(engine, out_dir / "transcripts")
+        if args.transcripts_only:
+            return 0
 
     data = {
         "bench": capture_bench(engine, depths),

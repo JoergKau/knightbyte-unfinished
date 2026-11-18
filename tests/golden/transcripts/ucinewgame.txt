@@ -1,0 +1,13 @@
+# UCI transcript: ucinewgame resets to the start position
+# Captured 2026-11-18 (migration plan, Phase 5 step 0). Identity lines are
+# placeholders; time, nps, hashfull, tbhits and (where noted) nodes
+# values are masked. Lines starting with '>' are commands sent to the
+# engine, '#' lines are derived measurements, the rest is engine output.
+<start-up banner>
+> position startpos moves e2e4
+> ucinewgame
+# go depth 1 after ucinewgame must search the start position
+> go depth 1
+info currmove a2a3 currmovenumber 1 nodes 1
+info depth 1 seldepth 1 score cp 45 nodes 47 nps <nps> hashfull <permille> time <ms> pv c2c4
+bestmove c2c4

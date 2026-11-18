@@ -1,0 +1,32 @@
+# UCI transcript: UCI handshake, isready and ucinewgame
+# Captured 2026-11-18 (migration plan, Phase 5 step 0). Identity lines are
+# placeholders; time, nps, hashfull, tbhits and (where noted) nodes
+# values are masked. Lines starting with '>' are commands sent to the
+# engine, '#' lines are derived measurements, the rest is engine output.
+<start-up banner>
+> uci
+id name <engine>
+id author <author>
+option name Hash type spin default 256 min 1 max 1024
+option name Threads type spin default 1 min 1 max 256
+option name Move Overhead type spin default 50 min 0 max 5000
+option name Clear Hash type button
+option name Own Book type check default false
+option name Book File type string default 
+option name Book Depth type spin default 16 min 0 max 100
+option name SyzygyPath type string default 
+option name SyzygyRootProbe type check default false
+option name Syzygy50MoveRule type check default true
+option name EvalFile type string default 
+option name Contempt type spin default 0 min -50 max 50
+info string no opening book loaded
+info string syzygy tablebases: none (set SyzygyPath)
+info string eval-source: <nnue net>
+uciok
+> isready
+info string eval-source: <nnue net>
+readyok
+> ucinewgame
+> isready
+info string eval-source: <nnue net>
+readyok

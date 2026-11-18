@@ -1,0 +1,56 @@
+# UCI transcript: go with deterministic limiters (none, depth, nodes, movestogo, perft)
+# Captured 2026-11-18 (migration plan, Phase 5 step 0). Identity lines are
+# placeholders; time, nps, hashfull, tbhits and (where noted) nodes
+# values are masked. Lines starting with '>' are commands sent to the
+# engine, '#' lines are derived measurements, the rest is engine output.
+<start-up banner>
+> position startpos
+# a) bare go (no limiter)
+> go
+info currmove a2a3 currmovenumber 1 nodes 1
+info depth 1 seldepth 1 score cp 45 nodes 47 nps <nps> hashfull <permille> time <ms> pv c2c4
+info depth 2 seldepth 3 score cp 46 nodes 213 nps <nps> hashfull <permille> time <ms> pv e2e4 c7c5
+info depth 3 seldepth 4 score cp 21 nodes 439 nps <nps> hashfull <permille> time <ms> pv e2e4 c7c5 a2a4
+info depth 4 seldepth 5 score cp 20 nodes 1210 nps <nps> hashfull <permille> time <ms> pv c2c3 c7c6 d2d4
+info depth 5 seldepth 10 score cp 30 nodes 4001 nps <nps> hashfull <permille> time <ms> pv e2e4 c7c6
+info depth 6 seldepth 10 score cp 43 nodes 5741 nps <nps> hashfull <permille> time <ms> pv e2e4 e7e6 b1c3 d7d5 e4d5 e6d5
+bestmove e2e4
+# b) go depth 7
+> go depth 7
+info currmove e2e4 currmovenumber 1 nodes 1
+info depth 1 seldepth 1 score cp 43 nodes 41 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 2 seldepth 1 score cp 43 nodes 62 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 3 seldepth 1 score cp 43 nodes 83 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 4 seldepth 2 score cp 43 nodes 108 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 5 seldepth 2 score cp 43 nodes 135 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 6 seldepth 6 score cp 43 nodes 326 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 7 seldepth 10 score cp 32 nodes 5731 nps <nps> hashfull <permille> time <ms> pv e2e4 c7c6 d2d4 d7d5 e4e5
+bestmove e2e4
+# c) go nodes 50000
+> go nodes 50000
+info currmove e2e4 currmovenumber 1 nodes 1
+info depth 1 seldepth 1 score cp 32 nodes 41 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 2 seldepth 2 score cp 32 nodes 91 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 3 seldepth 3 score cp 32 nodes 129 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 4 seldepth 3 score cp 32 nodes 184 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 5 seldepth 4 score cp 32 nodes 239 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 6 seldepth 5 score cp 32 nodes 376 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 7 seldepth 7 score cp 32 nodes 853 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 8 seldepth 12 score cp 30 nodes 11999 nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 9 seldepth 15 score cp 37 nodes 34979 nps <nps> hashfull <permille> time <ms> pv d2d4 e7e6 c2c4 g8f6 g1f3 f8b4 c1d2 a7a5 e2e3 b4d2 d1d2
+bestmove d2d4
+# d) go movestogo 40 alone
+> go movestogo 40
+info currmove d2d4 currmovenumber 1 nodes 1
+info depth 1 seldepth 1 score cp 37 nodes 41 nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 2 seldepth 1 score cp 37 nodes 62 nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 3 seldepth 1 score cp 37 nodes 83 nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 4 seldepth 2 score cp 37 nodes 106 nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 5 seldepth 2 score cp 37 nodes 131 nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 6 seldepth 3 score cp 37 nodes 169 nps <nps> hashfull <permille> time <ms> pv d2d4
+bestmove d2d4
+# e) go perft 3
+> go perft 3
+Nodes: 8902
+Time: 2ms
+NPS: 3664430
