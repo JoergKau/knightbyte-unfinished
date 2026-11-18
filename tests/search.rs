@@ -166,8 +166,11 @@ fn bench_node_counts_are_identical_to_the_reference_per_position_and_depth() {
         let mut searcher = Searcher::new(bench::BENCH_TT_MEGABYTES);
         searcher.clear();
         let mut seen = Vec::new();
-        searcher.search(&position, Limits::depth(8), &mut |info| {
-            seen.push((info.depth, info.nodes));
+        searcher.search(&position, Limits::depth(8), &mut |event| match event {
+            knightbyte::search::searcher::SearchEvent::Info(info) => {
+                seen.push((info.depth, info.nodes));
+            }
+            knightbyte::search::searcher::SearchEvent::CurrMove { .. } => {}
         });
         assert_eq!(seen.len(), REFERENCE_NODES.len(), "{fen}: iterations");
         for (depth_index, expected) in REFERENCE_NODES.iter().enumerate() {

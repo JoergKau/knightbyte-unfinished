@@ -27,7 +27,8 @@ use crate::search::history::{
     CONTINUATION_DISTANCES, Continuations, Previous, lmr_history_term_1024,
 };
 use crate::search::searcher::{
-    DRAW_SCORE, INFINITE, MATE_LIMIT, MATE_SCORE, NO_STATIC_EVAL, NodeResult, Searcher, mated_in,
+    DRAW_SCORE, INFINITE, MATE_LIMIT, MATE_SCORE, NO_STATIC_EVAL, NodeResult, SearchEvent,
+    Searcher, mated_in,
 };
 use crate::search::see::see_ge;
 use crate::search::tt::Bound;
@@ -69,8 +70,8 @@ fn lmr_base_reduction(depth: i32, move_number: i32) -> i32 {
 /// Returns the depth for the full-depth zero-window re-search after a reduced
 /// search failed high.
 ///
-/// A large original reduction shaves one or two plies off the re-search — a
-/// move that wanted a big reduction rarely needs full re-verification — and
+/// A large original reduction shaves one or two plies off the re-search â€” a
+/// move that wanted a big reduction rarely needs full re-verification â€” and
 /// the result is floored at the reduced depth so the re-search is never
 /// shallower than the search it improves on.
 fn compute_re_search_depth(new_depth: i32, reduction: i32, enabled: bool) -> i32 {
@@ -136,6 +137,7 @@ impl Searcher {
         cut_node: bool,
         excluded_move: Move,
         path_extensions: i32,
+        observer: &mut dyn FnMut(SearchEvent),
     ) -> i32 {
         // The ply guard runs before the node is counted: a node beyond the
         // safety depth returns its static evaluation and costs nothing.
@@ -238,7 +240,7 @@ impl Searcher {
             // cutoff: its entry is the one that triggered the verification, so
             // returning on it makes the verification meaningless. The reference
             // does not skip it (the verification always returns on its own
-            // trigger entry, so a singular extension never fires — quirk Q1,
+            // trigger entry, so a singular extension never fires â€” quirk Q1,
             // reproduced for parity; see ADR-0006), and neither does
             // KnightByte. The former `SingularExcludeTtCutoff` research lever
             // was removed after it measured no gain.
@@ -381,7 +383,7 @@ impl Searcher {
         // Null move: runs at any non-root node that is not in check, including
         // principal-variation nodes and singular-verification nodes (the gate
         // has no node-type or exclusion condition). It carries the cut-node
-        // arm — at a predicted cut node the null search runs even when a
+        // arm â€” at a predicted cut node the null search runs even when a
         // table score exists below beta. A non-mate fail-high cuts fail-hard
         // at beta; a mate line through a null move is not trusted and the node
         // keeps searching.
@@ -414,6 +416,7 @@ impl Searcher {
                 !cut_node,
                 Move::NONE,
                 extensions_used,
+                observer,
             );
             if self.stopped {
                 return 0;
@@ -427,7 +430,7 @@ impl Searcher {
         // very likely the only good move, the node is forcing. The
         // verification search runs the alternatives (excluding the table
         // move) at half depth inside a window below the stored score; a wide
-        // fail-low extends the node by one, two or three plies — and the
+        // fail-low extends the node by one, two or three plies â€” and the
         // extension is applied to the table move only, in the move loop.
         let mut singular_extension = 0;
         if self.params.use_singular_extensions
@@ -453,6 +456,7 @@ impl Searcher {
                 cut_node,
                 tt_move,
                 extensions_used,
+                observer,
             );
             if self.stopped {
                 return 0;
@@ -545,6 +549,19 @@ impl Searcher {
         let mut quiets_count = 0;
 
         while let Some(mv) = self.picker[ply].next(position, &self.history, moves_slice) {
+            // Step 10: the reference's single `info currmove` line of the
+            // search — emitted when iteration 1's first root move begins,
+            // before the depth-1 line, with `currmovenumber 1` and the node
+            // count at that moment (1). No line when the search never
+            // reaches iteration 1's move loop (a stop before it).
+            if ply == 0 && depth == 1 && !self.currmove_reported {
+                self.currmove_reported = true;
+                observer(SearchEvent::CurrMove {
+                    mv,
+                    number: 1,
+                    nodes: self.nodes,
+                });
+            }
             if !excluded_move.is_none() && mv == excluded_move {
                 continue;
             }
@@ -670,7 +687,7 @@ impl Searcher {
             let mut extension = if mv == tt_move { singular_extension } else { 0 };
 
             // Negative extensions: suspicious moves are searched one ply
-            // shallower — a losing capture, or a quiet the history tables
+            // shallower â€” a losing capture, or a quiet the history tables
             // have learned to distrust.
             if self.params.use_negative_extensions
                 && depth >= 3
@@ -762,6 +779,7 @@ impl Searcher {
                     child_cut,
                     Move::NONE,
                     extensions_used,
+                    observer,
                 );
             } else {
                 // Reduced scout of a late move: treated as an expected cut
@@ -776,6 +794,7 @@ impl Searcher {
                     true,
                     Move::NONE,
                     extensions_used,
+                    observer,
                 );
                 if score > alpha && reduction > 0 {
                     let re_search_depth = compute_re_search_depth(
@@ -793,6 +812,7 @@ impl Searcher {
                         !cut_node,
                         Move::NONE,
                         extensions_used,
+                        observer,
                     );
                 }
                 if score > alpha && score < beta {
@@ -808,6 +828,7 @@ impl Searcher {
                         false,
                         Move::NONE,
                         extensions_used,
+                        observer,
                     );
                 }
             }

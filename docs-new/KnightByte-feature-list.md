@@ -158,6 +158,14 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       walk found and fixed B39 (`setoption Hash` after a helper search
       killed the engine via the resize's exclusive borrow; the reference
       cannot have it — its .NET references never constrain a resize).
+- [x] Step 10: the output decision (`docs/decisions/ADR-0007-synchronous-
+      writer-and-currmove.md`) — the synchronous writer stays (a search
+      emits a handful of short lines; the stress walk measured the output
+      side as microseconds per line), and the reference's single
+      `info currmove <move> currmovenumber 1 nodes 1` line of iteration 1
+      is emitted exactly as the step-0 transcripts show it (before the
+      depth-1 line, never when the search stops before iteration 1's move
+      loop). A report only — the node pins are unchanged.
 - [x] Full lever-catalogue surface: all 83 reference levers are advertised
       under their reference names, defaults and ranges (step 2,
       `src/search/lever_table.rs`), plus three KnightByte-only research

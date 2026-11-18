@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-18 (Phase 5 steps 0–9 done — step 9 added the seeded 500-cycle multi-thread stress walk, which found and fixed B39: the resize's exclusive borrow vs the persistent helpers' table clones; the reference cannot have this bug — probed and documented)  
+**Last updated:** 2026-11-18 (Phase 5 steps 0–10 done — step 10 recorded ADR-0007: the synchronous writer stays, and the reference's single `info currmove` line is emitted exactly as the transcripts show it)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
@@ -66,12 +66,17 @@ their `SharedTables` clones; the resize's exclusive borrow failed). Fixed
 in three layers (helper release + pool idle barrier + bounded resize
 wait); the reference cannot have this bug (its .NET references never
 constrain a resize — probed: it survives a mid-search `Hash` resize with
-`Threads 4` attached). The step-0
+`Threads 4` attached). **Step 10** recorded `ADR-0007`: the synchronous
+writer stays (a search emits a handful of short lines; the stress walk
+measured the output side as microseconds per line), and the reference's
+single `info currmove … currmovenumber 1 nodes 1` line of iteration 1 is
+emitted exactly as the step-0 transcripts show it. The step-0
 capture found **predecessor
 bug 150** (`setoption Hash` above the declared maximum crashed the reference
 via an overflowing `TTable.Resize` allocation); it was fixed in the
 predecessor the same day (commit `acaff1f`, full suite 745/745). KnightByte
-was not affected (spin clamping). Next: Phase 5 step 10 (output decision).
+was not affected (spin clamping). Next: Phase 5 step 11 (lever
+independence).
 
 Verification status on the last run: all 247 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
@@ -294,9 +299,9 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 ## 3. Recommended next steps, in order
 
-**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–7 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag, `go ponder`/`ponderhit`, `go mate`/`searchmoves` (every `go` limiter implemented), and the shared-tables refactor with the parallel-zeroing bounded clear (B38 fixed). **Step 8 (persistent workers and `Threads`, the Lazy SMP core) is next.** Details in `migration-plan.md`, Phase 5.
+**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–10 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag, `go ponder`/`ponderhit`, `go mate`/`searchmoves` (every `go` limiter implemented), the shared-tables refactor with the parallel-zeroing bounded clear (B38 fixed), the persistent Lazy SMP pool behind `Threads`, the 500-cycle multi-thread stress gate (B39 found and fixed), and the output decision ADR-0007 with the `info currmove` line. **Step 11 (lever independence) is next.** Details in `migration-plan.md`, Phase 5.
 
-### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–9 done)
+### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–10 done)
 
 - ~~Step 2: option surface and `setoption` validation~~ — done (2026-11-18):
   full lever catalogue advertised and pinned against `levers.json`,
@@ -349,7 +354,13 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
   seeded 500-cycle walk (`tests/thread_stress.rs`) passes; it found and
   fixed B39 (the resize's exclusive borrow vs the helpers' table clones —
   no reference counterpart, probed and documented).
-- Steps 10–13: output decision, lever independence, UCI transcript tests
+- ~~Step 10: output decision~~ — done (2026-11-18): `ADR-0007` — the
+  synchronous writer stays (a search emits a handful of short lines; the
+  stress walk measured microseconds per line); `info currmove
+  <move> currmovenumber 1 nodes 1` is emitted once per search, when
+  iteration 1's first root move begins, exactly as the step-0 transcripts
+  show it.
+- Steps 11–13: lever independence, UCI transcript tests
   against the step-0 captures, match gates (1,000 games vs the reference).
 
 ### 3.2 Phase 7 — performance, then releases

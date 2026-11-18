@@ -53,6 +53,30 @@ pub const INFINITE: i32 = 32_000;
 /// Score of a drawn position.
 pub const DRAW_SCORE: i32 = 0;
 
+/// What the search reports to its observer.
+///
+/// Two kinds exist, matching the reference's output exactly: a completed
+/// iteration (one `info depth …` line) and the single `info currmove` report
+/// of iteration 1's first root move (the step-0 transcripts show one such
+/// line per search, before the depth-1 line — and none when the search never
+/// reached iteration 1).
+#[derive(Clone, Debug)]
+pub enum SearchEvent<'a> {
+    /// A completed iteration.
+    Info(&'a SearchInfo),
+    /// The first root move of iteration 1 is about to be searched: the move
+    /// as the picker yields it, its move number, and the node count at that
+    /// moment (1).
+    CurrMove {
+        /// The move the root's picker yields first.
+        mv: Move,
+        /// The move's index in the root move loop, counting from one.
+        number: u64,
+        /// The node count when the move begins.
+        nodes: u64,
+    },
+}
+
 /// Per-depth report emitted after every completed iteration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SearchInfo {
@@ -152,6 +176,9 @@ pub struct Searcher {
     /// This searcher's node count already published to the shared counter
     /// (the block frontier; only helpers publish).
     pub(crate) published_nodes: u64,
+    /// Whether iteration 1's `info currmove` report was emitted (step 10:
+    /// exactly one per search).
+    pub(crate) currmove_reported: bool,
     /// Number of completed iterations; the first one always runs to the end.
     pub(crate) completed_depth: i32,
     /// When the trace flag is on, every search node writes one ledger line to
@@ -193,6 +220,7 @@ impl Searcher {
             root_filter: Vec::new(),
             helper_nodes: None,
             published_nodes: 0,
+            currmove_reported: false,
             completed_depth: 0,
             trace: std::env::var_os("KNIGHTBYTE_TRACE").is_some(),
         }
@@ -340,7 +368,7 @@ impl Searcher {
         &mut self,
         position: &Position,
         limits: Limits,
-        observer: &mut dyn FnMut(&SearchInfo),
+        observer: &mut dyn FnMut(SearchEvent),
     ) -> SearchResult {
         // The search clock is started by the `init_*` call that configured the
         // time manager; it is deliberately not restarted here.
@@ -350,6 +378,7 @@ impl Searcher {
         self.published_nodes = 0;
         self.seldepth = 0;
         self.stopped = false;
+        self.currmove_reported = false;
         self.pv.reset();
         self.killers.clear();
         self.reset_stacks();
@@ -417,7 +446,7 @@ impl Searcher {
             if self.stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            let Some((score, pv)) = self.search_root(position, depth, last_score) else {
+            let Some((score, pv)) = self.search_root(position, depth, last_score, observer) else {
                 break;
             };
             last_score = score;
@@ -431,7 +460,7 @@ impl Searcher {
                 best.best_move = first;
             }
             let time_ms = started.elapsed().as_millis() as u64;
-            observer(&SearchInfo {
+            observer(SearchEvent::Info(&SearchInfo {
                 depth: best.depth,
                 seldepth: best.seldepth,
                 score: best.score,
@@ -442,7 +471,7 @@ impl Searcher {
                 // occupancy is only published on the `info` line.
                 hashfull: self.tables.tt.hashfull(),
                 pv: best.pv.clone(),
-            });
+            }));
 
             // Time management: record the completed depth, feed the node
             // statistics and the best-move stability, then decide whether
@@ -501,6 +530,7 @@ impl Searcher {
         position: &Position,
         depth: i32,
         previous_score: i32,
+        observer: &mut dyn FnMut(SearchEvent),
     ) -> Option<(i32, Vec<Move>)> {
         let params = self.params;
         let mut delta = params.aspiration_base;
@@ -516,7 +546,18 @@ impl Searcher {
 
         let mut cycles = 0;
         loop {
-            let score = self.negamax(position, alpha, beta, depth, 0, None, false, Move::NONE, 0);
+            let score = self.negamax(
+                position,
+                alpha,
+                beta,
+                depth,
+                0,
+                None,
+                false,
+                Move::NONE,
+                0,
+                observer,
+            );
             if self.stopped {
                 return None;
             }

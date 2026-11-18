@@ -21,7 +21,9 @@ use crate::search::lever_table::{LEVERS, LeverSpec};
 use crate::search::limits::Limits;
 use crate::search::options::{OptionKind, PUBLIC_OPTIONS, UciOption, lever, public, set};
 use crate::search::pool::{SearchJob, StopFlag, WorkerPool};
-use crate::search::searcher::{MATE_LIMIT, MATE_SCORE, SearchInfo, SearchResult, Searcher};
+use crate::search::searcher::{
+    MATE_LIMIT, MATE_SCORE, SearchEvent, SearchInfo, SearchResult, Searcher,
+};
 use crate::search::time_manager::TimeControl;
 use crate::tools::bench;
 use crate::tools::net::NET_SOURCE_NAME;
@@ -746,11 +748,20 @@ fn spawn_search_worker(
         .spawn(move || {
             let mut output = Output::new();
             let mut write_failed = false;
-            let result = searcher.search(&position, search_limits, &mut |info| {
+            let result = searcher.search(&position, search_limits, &mut |event| {
                 if write_failed {
                     return;
                 }
-                let line_text = format_info(info);
+                let line_text = match event {
+                    SearchEvent::Info(info) => format_info(info),
+                    // Step 10: the reference's single `info currmove` line of
+                    // iteration 1 (the step-0 transcripts: one per search,
+                    // before the depth-1 line).
+                    SearchEvent::CurrMove { mv, number, nodes } => format!(
+                        "info currmove {} currmovenumber {number} nodes {nodes}",
+                        mv.to_uci()
+                    ),
+                };
                 if output.line(&line_text).is_err() {
                     write_failed = true;
                     worker_stop.store(true, std::sync::atomic::Ordering::Relaxed);
