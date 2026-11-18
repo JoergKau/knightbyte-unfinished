@@ -3,33 +3,33 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-18 (migration stopped on predecessor bugs; Phase 4 complete with exact node identity; the ADR-0004 deviation is gone)  
+**Last updated:** 2026-11-18 (Phase 1 restart complete; Phase 5 started — steps 0 and 1 done; predecessor bug 150 found and fixed on the way)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
 
-Phases 0–3 are complete and verified. Phase 4 (search) is **complete,
-including 4d**, and the search is now **node-identical to the reference**:
-`bench 6` = 14,979, `bench 12` = 416,533, `bench 16` = 3,169,859 and
-`bench 18` = 6,925,762, plus every captured per-position count at depths
-1–12, 14, 16 and 18. The earlier "accepted deviation" (ADR-0004) was wrong
-about its cause: it was not learned-state drift but eleven concrete porting
-differences (`docs-new/new-bugs.md` B18–B28) and one predecessor quirk (Q2),
-found with per-node ledgers of both engines (ADR-0005 supersedes ADR-0004;
-audit record `docs/audit/migration-audit.md`, first round B1–B17). The full
-time-management port is in (allocation
-with the tournament cap, sudden-death increment, tactical floor and safety
-buffer; panic mode; the legacy PV-stability multipliers; the stable-TM
-three-signal scaler with the five-iteration minimum-depth guard; one-sided
-time advantage; two-sided clock imbalance; per-move node attribution), and
-36 of the 83 reference levers are wired and advertised under their reference names, plus three KnightByte-only research levers. **The migration is stopped** (see `migration-plan.md`): predecessor bugs 143 to 145 must be decided and fixed before Phase 5 starts (bug 146 is unverified)
-(threading, `stop`/`ponderhit`, Lazy SMP).
+Phases 0–4 are complete and verified, and the search is **node-identical to the
+bug-fixed reference**: `bench 6/12/16/18` = 15,528 / 456,308 / 2,815,799 /
+6,892,874 (the pins 14,979 / 416,533 / 3,169,859 / 6,925,762 described the
+pre-fix build). The Phase 1 restart adopted the predecessor's bug fixes 143–149
+(KnightByte side: B33–B37, all fixed) and re-captured the oracle. Phase 5 (UCI
+robustness and threading) has started: **step 0** (oracle transcripts in
+`tests/golden/transcripts/`, all five exit questions answered) and **step 1**
+(full command surface, case-insensitive parser, `GoLimits` structure with the
+reference's parsing rules, diagnostics `d`/`eval`/`checkmoves`/`debug`, argv
+with `param:Name=Value` overrides and one-shot command lines) are done. The
+step-0 capture found **predecessor bug 150** (`setoption Hash` above the
+declared maximum crashed the reference via an overflowing `TTable.Resize`
+allocation); it was fixed in the predecessor the same day (commit `acaff1f`,
+full suite 745/745). KnightByte was not affected (spin clamping). 36 of the 83
+reference levers are wired and advertised under their reference names, plus
+three KnightByte-only research levers. Next: Phase 5 step 2 (option surface and
+`setoption` validation).
 
-Verification status on the last run: all 172 tests pass locally on Windows
+Verification status on the last run: all 199 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
-fmt/clippy clean; `bench 6` pin = 14,979 (the reference total). Node
-identity is verified on this Windows host only; macOS and Linux still have
-to confirm it (migration-plan G6).
+fmt/clippy clean; all four bench pins exact. Node identity is verified on this
+Windows host only; macOS and Linux still have to confirm it (migration-plan G6).
 
 ---
 
@@ -119,8 +119,10 @@ Each item states the symptom, the evidence and the concrete next action.
 
 ### 2.1 Search-parity gate — passed with exact node identity (ADR-0005)
 
-`bench 6/12/16/18` = 14,979 / 416,533 / 3,169,859 / 6,925,762, identical to
-the reference, and every captured per-position count matches. ADR-0004 (the
+`bench 6/12/16/18` = 15,528 / 456,308 / 2,815,799 / 6,892,874, identical to
+the bug-fixed reference (the Phase 1 restart pins; the pre-fix totals
+14,979 / 416,533 / 3,169,859 / 6,925,762 described the old build), and every
+captured per-position count matches. ADR-0004 (the
 accepted deviation) is superseded: its "learned-state drift" explanation
 was wrong. If a node count ever moves again, treat it as a search change
 (update the pins and say why) and use the ledger method in
@@ -236,15 +238,19 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 ## 3. Recommended next steps, in order
 
-**Stop state (2026-11-18):** the migration is halted by the project rules until the predecessor bugs 143 to 145 are decided and fixed in the predecessor (details in the local, unpublished predecessor bug log). The list below is the plan for after that; nothing in it has started.
+**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0 (oracle transcripts) and 1 (command surface and parser) are complete; **step 2 (option surface and `setoption` validation) is next**, then step 3 (`info` line completeness), then the search-thread core in step 4. Details in `migration-plan.md`, Phase 5.
 
-### 3.1 Phase 5 — UCI robustness and threading (next)
+### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–1 done)
 
-- Search thread with `stop`/`ponderhit`; `go ponder`.
-- Lazy SMP workers sharing the TT, `setoption Threads`.
-- UCI transcript tests, `info` fields (nps, time, hashfull).
-- Optional follow-up from 4d: a probe-position test that every lever
-  measurably changes the search.
+- Step 2: option surface and `setoption` validation (catalogue checks, button/
+  check/spin rules, remove `SingularExcludeTtCutoff`, handshake `info string`
+  lines, `Clear Hash` timing measurement).
+- Step 3: complete `info` lines (nps, time, hashfull, tbhits).
+- Step 4: search thread with `stop`; step 5: `go ponder`/`ponderhit`;
+  step 6: `go mate`/`searchmoves`.
+- Steps 7–9: shared tables, Lazy SMP workers, multi-thread stress gates.
+- Steps 10–13: output decision, lever independence, UCI transcript tests
+  against the step-0 captures, match gates (1,000 games vs the reference).
 
 ### 3.2 Phase 7 — performance, then releases
 
