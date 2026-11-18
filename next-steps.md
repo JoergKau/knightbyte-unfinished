@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-18 (Phase 5 steps 0–4 done — step 4 moved the search onto a 16 MB worker thread with a shared stop flag, per-1024-node stop polling, the join-first fallback and the Q8/stop-before-depth-1 depth-0 answers; the burst go+quit semantics were verified against the reference binary itself)  
+**Last updated:** 2026-11-18 (Phase 5 steps 0–5 done — step 5 implemented `go ponder`/`ponderhit`: unbounded ponder search, the Q5 null-move answer on stop, and the ponderhit promotion that applies the ponder move and starts the clock fresh; the zero-iteration ponderhit case verified against the reference binary)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
@@ -33,17 +33,22 @@ omitted the same way until Syzygy lands. **Step 4** moved the search onto a
 before depth 1 finishes answers `info depth 0 score cp <eval> pv <first
 legal move>` and exactly one `bestmove` per `go` comes from the worker. The
 burst go+quit and one-shot argv semantics were verified against the
-reference binary itself (both engines answer the depth-0 line). The step-0
+reference binary itself (both engines answer the depth-0 line). **Step 5**
+implemented `go ponder`/`ponderhit`: the ponder search runs unbounded, a
+`stop` without `ponderhit` answers `bestmove 0000` (Q5), and a
+`ponderhit` applies the ponder move and starts a fresh search with the
+clock beginning at the ponderhit moment; the zero-iteration and burst
+cases were verified byte-for-byte against the reference binary. The step-0
 capture found **predecessor
 bug 150** (`setoption Hash` above the declared maximum crashed the reference
 via an overflowing `TTable.Resize` allocation); it was fixed in the
 predecessor the same day (commit `acaff1f`, full suite 745/745). KnightByte
 was not affected (spin clamping). The step-2 measurement found **B38**: the
 first table clear after a fresh 1 GB `Hash` resize pays the OS page commit
-(~190–275 ms); step 7's bounded `ucinewgame` fixes it. Next: Phase 5 step 5
-(`go ponder`/`ponderhit`).
+(~190–275 ms); step 7's bounded `ucinewgame` fixes it. Next: Phase 5 step 6
+(`go mate`/`searchmoves`).
 
-Verification status on the last run: all 228 tests pass locally on Windows
+Verification status on the last run: all 233 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
 fmt/clippy clean; all four bench pins exact and `capture_bench.py compare`
 shows every per-position delta at +0. Node identity is verified on this
@@ -264,9 +269,9 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 ## 3. Recommended next steps, in order
 
-**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–4 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, and the search thread with the shared stop flag (per-1024-node polling, join-first fallback, the Q8 and stop-before-depth-1 depth-0 answers verified against the reference binary). **Step 5 (`go ponder`/`ponderhit`) is next**, then step 6 (`go mate`/`searchmoves`). Details in `migration-plan.md`, Phase 5.
+**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–5 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag (per-1024-node polling, join-first fallback, the Q8 and stop-before-depth-1 depth-0 answers verified against the reference binary), and `go ponder`/`ponderhit` (unbounded ponder search, the Q5 null-move answer, the ponderhit promotion with the clock starting at the hit — burst and zero-iteration cases verified byte-for-byte against the reference binary). **Step 6 (`go mate`/`searchmoves`) is next.** Details in `migration-plan.md`, Phase 5.
 
-### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–4 done)
+### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–5 done)
 
 - ~~Step 2: option surface and `setoption` validation~~ — done (2026-11-18):
   full lever catalogue advertised and pinned against `levers.json`,
@@ -290,7 +295,14 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
   the burst go+quit and one-shot argv semantics verified against the
   reference binary. The former burst-style smoke tests now use the
   interactive pattern (wait for `bestmove`, then `quit`).
-- Step 5: `go ponder`/`ponderhit`; step 6: `go mate`/`searchmoves`.
+- ~~Step 5: `go ponder`/`ponderhit`~~ — done (2026-11-18): unbounded ponder
+  search printing its iterations, `stop`/burst-`quit` answer `bestmove 0000`
+  (Q5, plus the interrupted-search depth-0 line — byte-identical to the
+  reference binary), `ponderhit` applies the ponder move and starts the
+  fresh search with the clock at the hit; with zero completed ponder
+  iterations the reference re-searches the unchanged position (verified
+  against it), and so does KnightByte.
+- Step 6: `go mate`/`searchmoves`.
 - Steps 7–9: shared tables, Lazy SMP workers, multi-thread stress gates.
 - Steps 10–13: output decision, lever independence, UCI transcript tests
   against the step-0 captures, match gates (1,000 games vs the reference).

@@ -236,12 +236,21 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       the reference binary, whose `quit` during a search behaves the same).
       A single legal move is answered at once with the depth-0 line (quirk
       Q8, not while pondering).
+- [x] Step 5: `go ponder` runs unbounded (the stored clock limiters start
+      only at `ponderhit`, whose fresh search restarts at depth 1 with the
+      ponder move applied; the pondered time is not deducted). A `stop`
+      without `ponderhit` answers `bestmove 0000` (quirk Q5) after the
+      interrupted-search depth-0 line; a stray `ponderhit` — and one during
+      a normal search — is ignored. The `Ponder` option stays unadvertised
+      (CCRL requires ponder off). The burst and zero-iteration ponderhit
+      cases are byte-identical to the reference binary.
 - [ ] `nnueregions` / `searchstats` full instrumentation (the commands are
       recognised and answer honestly; the king-region histogram and the search
       instrumentation land with their features).
 - [x] Real `stop` behaviour and the worker-thread search (step 4, above).
-- [ ] Real `ponder`, `mate`, `searchmoves` behaviour (steps 5-6; the fallback
-      answers a legal move and an `info string`).
+- [x] Real `go ponder`/`ponderhit` behaviour (step 5, above).
+- [ ] Real `mate`, `searchmoves` behaviour (step 6; the
+      fallback answers a legal move and an `info string`).
 
 ### Endgame and book
 

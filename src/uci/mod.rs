@@ -130,18 +130,18 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             // searches the previous game's position. The game history is
             // reset with it: the start position has no earlier positions.
             parser::Command::UciNewGame => {
-                stop_search(&mut active, &mut searcher);
+                stop_search(&mut active, &mut searcher, &mut output);
                 let state = searcher.as_mut().expect("restored by the join");
                 state.clear();
                 position = Some(start_position());
                 state.set_game_history(&[]);
             }
             parser::Command::Bench => {
-                stop_search(&mut active, &mut searcher);
+                stop_search(&mut active, &mut searcher, &mut output);
                 bench::run(command, &mut output)?
             }
             parser::Command::SetOption => {
-                stop_search(&mut active, &mut searcher);
+                stop_search(&mut active, &mut searcher, &mut output);
                 handle_set_option(
                     command,
                     searcher.as_mut().expect("restored by the join"),
@@ -149,7 +149,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                 )?
             }
             parser::Command::Position => {
-                stop_search(&mut active, &mut searcher);
+                stop_search(&mut active, &mut searcher, &mut output);
                 let state = searcher.as_mut().expect("restored by the join");
                 match parse_position(command) {
                     Ok((next, earlier_keys)) => {
@@ -165,16 +165,21 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                 }
             }
             parser::Command::Go => {
-                stop_search(&mut active, &mut searcher);
+                stop_search(&mut active, &mut searcher, &mut output);
                 handle_go(command, position, &mut searcher, &mut active, &mut output)?
             }
             // The flag is set and the worker joined: its one `bestmove` is
-            // already on the wire. With no search running a `stop` is a
-            // no-op, exactly like the reference.
-            parser::Command::Stop => stop_search(&mut active, &mut searcher),
-            // Ponder support arrives in step 5; without a ponder search a
-            // `ponderhit` is ignored, as the step-0 transcript shows.
-            parser::Command::PonderHit => {}
+            // already on the wire (or, for a ponder search, the Q5 null
+            // move is printed by the join). With no search running a `stop`
+            // is a no-op, exactly like the reference.
+            parser::Command::Stop => stop_search(&mut active, &mut searcher, &mut output),
+            // The ponder promotion: the ponder search's best move is applied
+            // to the position and a fresh search starts with the clock
+            // beginning at this moment (the step-0 capture, scenario b). A
+            // `ponderhit` with no ponder search running is ignored.
+            parser::Command::PonderHit => {
+                handle_ponder_hit(&mut active, &mut searcher, &mut position, &mut output)?
+            }
             parser::Command::Debug => {
                 // The flag exists for reference parity; its consumers arrive
                 // with the search instrumentation.
@@ -184,7 +189,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                     .is_some_and(|value| value.eq_ignore_ascii_case("on"));
             }
             parser::Command::Perft => {
-                stop_search(&mut active, &mut searcher);
+                stop_search(&mut active, &mut searcher, &mut output);
                 handle_perft(command, position.as_ref(), &mut output)?
             }
             parser::Command::NnueEval => handle_nnue_eval(position.as_ref(), &mut output)?,
@@ -199,7 +204,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             // `quit` stops and joins first: the worker finishes its
             // `bestmove` and the process exits cleanly.
             parser::Command::Quit => {
-                stop_search(&mut active, &mut searcher);
+                stop_search(&mut active, &mut searcher, &mut output);
                 break;
             }
             parser::Command::Unknown => {
@@ -216,35 +221,59 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
     let _ = debug_mode;
     // End of input behaves like `quit`: a still-running search is stopped,
     // joined and answers its `bestmove` before the process exits.
-    stop_search(&mut active, &mut searcher);
+    stop_search(&mut active, &mut searcher, &mut output);
 
     Ok(())
 }
+
+/// A search worker's join handle: the searcher comes back with the finished
+/// search result.
+type WorkerHandle = std::thread::JoinHandle<(Searcher, SearchResult)>;
+
+/// The stop-flag handle shared between the UCI loop and the search worker.
+type StopFlag = std::sync::Arc<std::sync::atomic::AtomicBool>;
 
 /// A search running on the worker thread.
 struct ActiveSearch {
     /// The flag the UCI loop sets on `stop`; the search polls it every 1024
     /// nodes and before every iteration.
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// The worker. It prints exactly one `bestmove` and hands the searcher
-    /// back through its return value.
-    worker: std::thread::JoinHandle<Searcher>,
+    stop: StopFlag,
+    /// The worker. It prints exactly one `bestmove` (unless pondering) and
+    /// hands the searcher and the search result back through its return
+    /// value.
+    worker: WorkerHandle,
+    /// True while this is a ponder search: it answers nothing itself; the
+    /// UCI loop decides between `bestmove 0000` (quirk Q5) and the fresh
+    /// post-ponder search.
+    ponder: bool,
+    /// The limiters the `go` carried. A ponder search stores them until the
+    /// `ponderhit` starts the clock.
+    limits: GoLimits,
 }
 
 /// Stops a running search and takes the searcher back.
 ///
 /// Setting the flag ends the search at the next 1024-node poll; the worker
-/// prints its one `bestmove` and returns the searcher. With no search
-/// running this is a no-op.
-fn stop_search(active: &mut Option<ActiveSearch>, searcher: &mut Option<Searcher>) {
+/// prints its one `bestmove` and returns the searcher — except for a ponder
+/// search, which answers nothing itself: a `stop` (or a protocol-breaking
+/// command) without `ponderhit` ends it with the null move, exactly like
+/// the reference (quirk Q5). With no search running this is a no-op.
+fn stop_search(
+    active: &mut Option<ActiveSearch>,
+    searcher: &mut Option<Searcher>,
+    output: &mut Output,
+) {
     if let Some(job) = active.take() {
         use std::sync::atomic::Ordering;
         job.stop.store(true, Ordering::Relaxed);
-        *searcher = Some(
-            job.worker
-                .join()
-                .expect("the search worker must return the searcher"),
-        );
+        let (state, _result) = job
+            .worker
+            .join()
+            .expect("the search worker must return the searcher");
+        *searcher = Some(state);
+        if job.ponder {
+            let _ = output.line("bestmove 0000");
+        }
     }
 }
 
@@ -393,7 +422,7 @@ fn apply_uci_move(position: &Position, text: &str) -> Result<Position, PositionE
 /// the default-depth rule then reads like the reference's, and unknown tokens
 /// are silently ignored, so a GUI that sends an extra keyword never loses its
 /// search.
-#[derive(Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct GoLimits {
     /// `go depth N` (0 = not given).
     depth: u32,
@@ -577,12 +606,12 @@ fn handle_go(
         return handle_perft_depth(limits.perft_depth, position.as_ref(), output);
     }
 
-    // Steps 5 and 6 bring the real implementations; until then the fallback
-    // answers a legal move so a GUI never waits on a clock (the B32 decision).
-    if limits.ponder || limits.mate > 0 || !limits.search_moves.is_empty() {
-        output.line(
-            "info string go ponder/mate/searchmoves: not supported yet, answering a legal move",
-        )?;
+    // Steps 6's limiters keep the fallback; until then they answer a legal
+    // move so a GUI never waits on a clock (the B32 decision). `go ponder`
+    // is implemented below (step 5).
+    if limits.mate > 0 || !limits.search_moves.is_empty() {
+        output
+            .line("info string go mate/searchmoves: not supported yet, answering a legal move")?;
         return answer_without_search(position.as_ref(), output);
     }
 
@@ -595,22 +624,189 @@ fn handle_go(
     // legal move there is nothing to consider — the move is answered at once
     // with a depth-0 info line carrying the static evaluation, and no search
     // runs.
-    let root_moves = legal(&position);
-    if root_moves.len() == 1 {
-        let only = root_moves.as_slice()[0];
-        output.line(&format!(
-            "info depth 0 score cp {} pv {}",
-            evaluate_position(&position),
-            only.to_uci()
-        ))?;
-        return output.line(&format!("bestmove {}", only.to_uci()));
+    if !limits.ponder {
+        let root_moves = legal(&position);
+        if root_moves.len() == 1 {
+            let only = root_moves.as_slice()[0];
+            output.line(&format!(
+                "info depth 0 score cp {} pv {}",
+                evaluate_position(&position),
+                only.to_uci()
+            ))?;
+            return output.line(&format!("bestmove {}", only.to_uci()));
+        }
     }
 
     // The worker owns the searcher for the duration of the search; it comes
     // back through the join handle.
     let mut searcher = state.take().expect("a finished search restored the state");
 
-    if limits.movetime > 0 {
+    // While pondering the search has NO time limit: the clock limiters are
+    // stored with the job and only start when the `ponderhit` arrives (the
+    // step-0 capture, scenario b). Depth and node limiters still apply.
+    let search_limits = init_search_limits(&mut searcher, &limits, &position, limits.ponder);
+
+    // A fresh flag per `go`: the UCI loop keeps the handle for `stop` and
+    // the join-first fallback, the search polls it every 1024 nodes. A
+    // ponder search answers no bestmove itself; the loop decides its ending.
+    let (stop, worker) = spawn_search_worker(searcher, position, search_limits, limits.ponder)?;
+    // A spawn failure loses the moved searcher, so it is fatal: the engine
+    // exits with the error instead of continuing without its search state.
+    *active = Some(ActiveSearch {
+        stop,
+        worker,
+        ponder: limits.ponder,
+        limits,
+    });
+    Ok(())
+}
+
+/// Spawns the search worker for one search and returns its stop-flag handle.
+///
+/// The worker owns its output writer (both writers lock standard output per
+/// line, so replies never interleave mid-line); the first failed write sets
+/// the stop flag, so a GUI that walks away cannot leave the search spinning.
+/// When the search ends without a completed iteration, the worker prints the
+/// interrupted-search depth-0 line (static evaluation and first legal move —
+/// the step-0 capture, scenario b; the reference prints it for ponder
+/// searches too, and only the bestmove line differs). The final `bestmove`
+/// is printed by the worker unless `ponder` is set: a ponder search's ending
+/// belongs to the UCI loop (`bestmove 0000` on `stop`, the fresh
+/// post-ponder search on `ponderhit`).
+fn spawn_search_worker(
+    mut searcher: Searcher,
+    position: Position,
+    search_limits: Limits,
+    ponder: bool,
+) -> io::Result<(StopFlag, WorkerHandle)> {
+    let stop = searcher.arm_stop_flag();
+    let worker_stop = std::sync::Arc::clone(&stop);
+    let worker = std::thread::Builder::new()
+        .name("search".to_owned())
+        .stack_size(SEARCH_STACK_BYTES)
+        .spawn(move || {
+            let mut output = Output::new();
+            let mut write_failed = false;
+            let result = searcher.search(&position, search_limits, &mut |info| {
+                if write_failed {
+                    return;
+                }
+                let line_text = format_info(info);
+                if output.line(&line_text).is_err() {
+                    write_failed = true;
+                    worker_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+            if result.depth == 0 {
+                // The interrupted-search answer (also for a ponder search):
+                // the depth-0 line reports the static evaluation and the
+                // first legal move.
+                if let Some(first) = legal(&position).as_slice().first().copied() {
+                    let _ = output.line(&format!(
+                        "info depth 0 score cp {} pv {}",
+                        evaluate_position(&position),
+                        first.to_uci()
+                    ));
+                }
+            }
+            if !ponder {
+                if result.depth == 0 {
+                    let first = legal(&position).as_slice().first().copied();
+                    let _ = output.line(&format!(
+                        "bestmove {}",
+                        first.map_or_else(|| "0000".to_owned(), |mv| mv.to_uci())
+                    ));
+                } else {
+                    let _ = output.line(&format!("bestmove {}", result.best_move.to_uci()));
+                }
+            }
+            (searcher, result)
+        })?;
+    Ok((stop, worker))
+}
+
+/// Promotes a ponder search to a normal one.
+///
+/// The ponder worker is joined silently (it answers no bestmove itself); its
+/// best move — the ponder move — is applied to the position, the game
+/// history grows by one position, and a fresh normal search starts with the
+/// clock beginning at this moment (the step-0 capture, scenario b: the time
+/// spent pondering is not deducted). A `ponderhit` with no ponder search
+/// running is ignored (scenario c), and so is one arriving during a normal
+/// search.
+///
+/// When the ponder search completed no iteration it has no best move to
+/// apply (verified against the reference binary, 2026-11-18: a burst
+/// `go ponder` + `ponderhit` re-searches the same position and answers its
+/// first legal move); the fresh search then runs on the unchanged position.
+fn handle_ponder_hit(
+    active: &mut Option<ActiveSearch>,
+    state: &mut Option<Searcher>,
+    position: &mut Option<Position>,
+    output: &mut Output,
+) -> io::Result<()> {
+    use std::sync::atomic::Ordering;
+    if !active.as_ref().is_some_and(|job| job.ponder) {
+        return Ok(());
+    }
+    let job = active.take().expect("checked above");
+    job.stop.store(true, Ordering::Relaxed);
+    let (mut searcher, result) = job
+        .worker
+        .join()
+        .expect("the search worker must return the searcher");
+
+    let Some(position) = position.as_ref().copied() else {
+        // No position: the null move is the protocol's only answer.
+        *state = Some(searcher);
+        return output.line("bestmove 0000");
+    };
+    // The ponder move is the ponder search's best move — its last completed
+    // iteration's first PV move. With no completed iteration there is
+    // nothing to apply: the fresh search runs on the unchanged position.
+    let ponder_move = (result.depth > 0).then_some(result.best_move);
+    let pondered = match ponder_move {
+        Some(ponder_move) => {
+            // The game history grows by the position the ponder move was
+            // applied to, so repetitions across the promotion are seen.
+            let mut game = searcher.game_history().to_vec();
+            game.push(position.key());
+            searcher.set_game_history(&game);
+            position.make_move(ponder_move)
+        }
+        None => position,
+    };
+
+    // The clock starts at the ponderhit moment; the depth and node limiters
+    // carry over.
+    let search_limits = init_search_limits(&mut searcher, &job.limits, &pondered, false);
+    let (stop, worker) = spawn_search_worker(searcher, pondered, search_limits, false)?;
+    *active = Some(ActiveSearch {
+        stop,
+        worker,
+        ponder: false,
+        limits: job.limits,
+    });
+    Ok(())
+}
+
+/// Initialises the time manager from the parsed `go` limiters and returns
+/// the search limits.
+///
+/// While `ponder` is set the clock limiters are deliberately not started:
+/// the ponder search runs unbounded until `ponderhit` or `stop`, and the
+/// clock begins only when the fresh post-ponder search is started (which
+/// calls this helper again with `ponder == false` — its `init_clock` starts
+/// the clock at that moment, as the step-0 capture shows).
+fn init_search_limits(
+    searcher: &mut Searcher,
+    limits: &GoLimits,
+    position: &Position,
+    ponder: bool,
+) -> Limits {
+    if ponder {
+        searcher.init_infinite();
+    } else if limits.movetime > 0 {
         searcher.init_movetime(limits.movetime);
     } else if limits.has_time_control() {
         let white_to_move = position.side_to_move_is_white();
@@ -643,66 +839,7 @@ fn handle_go(
     if limits.nodes > 0 {
         search_limits.nodes = Some(limits.nodes);
     }
-
-    // A fresh flag per `go`: the UCI loop keeps the handle for `stop` and
-    // the join-first fallback, the search polls it every 1024 nodes.
-    let stop = searcher.arm_stop_flag();
-    let worker_stop = std::sync::Arc::clone(&stop);
-    let worker = std::thread::Builder::new()
-        .name("search".to_owned())
-        .stack_size(SEARCH_STACK_BYTES)
-        .spawn(move || {
-            // The worker owns its output writer; both writers lock standard
-            // output per line, so replies never interleave mid-line. When
-            // the reader is gone (a broken pipe), the first failed write
-            // sets the stop flag so the search drains instead of spinning.
-            let mut output = Output::new();
-            let mut write_failed = false;
-            let result = searcher.search(&position, search_limits, &mut |info| {
-                if write_failed {
-                    return;
-                }
-                let line_text = format_info(info);
-                if output.line(&line_text).is_err() {
-                    write_failed = true;
-                    worker_stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
-            });
-            answer_search_result(&position, &result, &mut output);
-            searcher
-        })?;
-    // A spawn failure loses the moved searcher, so it is fatal: the engine
-    // exits with the error instead of continuing without its search state.
-    *active = Some(ActiveSearch { stop, worker });
-    Ok(())
-}
-
-/// Prints the answer every `go` ends with: exactly one `bestmove`.
-///
-/// When no iteration completed (a `stop` before depth 1 finished, or a
-/// position without legal moves) the reference answers the static
-/// evaluation with the first legal move on a depth-0 line (the step-0
-/// capture, scenario b) — unless there is no legal move at all, where the
-/// null move is the protocol's only answer.
-fn answer_search_result(position: &Position, result: &SearchResult, output: &mut Output) {
-    if result.depth == 0 {
-        let first = legal(position).as_slice().first().copied();
-        match first {
-            Some(first) => {
-                let _ = output.line(&format!(
-                    "info depth 0 score cp {} pv {}",
-                    evaluate_position(position),
-                    first.to_uci()
-                ));
-                let _ = output.line(&format!("bestmove {}", first.to_uci()));
-            }
-            None => {
-                let _ = output.line("bestmove 0000");
-            }
-        }
-        return;
-    }
-    let _ = output.line(&format!("bestmove {}", result.best_move.to_uci()));
+    search_limits
 }
 
 /// Answers a `go` that cannot be searched (an unsupported limiter, a missing

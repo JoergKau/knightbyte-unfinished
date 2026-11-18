@@ -227,6 +227,15 @@ impl Searcher {
         self.game_keys.extend_from_slice(&keys[keys.len() - keep..]);
     }
 
+    /// Returns the keys of the positions that preceded the last search's
+    /// root, oldest first (see [`Self::set_game_history`]).
+    ///
+    /// The ponder path reads them to extend the history by one position
+    /// when the ponder move is applied.
+    pub fn game_history(&self) -> &[u64] {
+        &self.game_keys
+    }
+
     /// Returns the current search parameters.
     pub fn params(&self) -> &SearchParams {
         &self.params
