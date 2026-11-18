@@ -63,6 +63,13 @@ pub struct SearchInfo {
     pub score: i32,
     /// Nodes visited so far.
     pub nodes: u64,
+    /// Milliseconds elapsed since the search started.
+    pub time_ms: u64,
+    /// Nodes per second, derived from `nodes` and `time_ms` (guarded against
+    /// a zero elapsed time).
+    pub nps: u64,
+    /// Table occupancy in permill, read once per iteration.
+    pub hashfull: u16,
     /// Principal variation of the completed iteration.
     pub pv: Vec<Move>,
 }
@@ -332,6 +339,10 @@ impl Searcher {
         }
 
         let max_depth = limits.depth_limit();
+        // Reporting clock for the `info` lines: it starts with the search,
+        // so every iteration publishes the elapsed time from the `go` (the
+        // time manager keeps its own clock, started by the `init_*` call).
+        let started = std::time::Instant::now();
         let mut best = SearchResult {
             best_move: root_moves.as_slice()[0],
             score: 0,
@@ -356,11 +367,17 @@ impl Searcher {
             if let Some(&first) = best.pv.first() {
                 best.best_move = first;
             }
+            let time_ms = started.elapsed().as_millis() as u64;
             observer(&SearchInfo {
                 depth: best.depth,
                 seldepth: best.seldepth,
                 score: best.score,
                 nodes: best.nodes,
+                time_ms,
+                nps: nps_of(best.nodes, time_ms),
+                // Read once per completed iteration, not per node: the
+                // occupancy is only published on the `info` line.
+                hashfull: self.tt.hashfull(),
                 pv: best.pv.clone(),
             });
 
@@ -791,6 +808,16 @@ pub(crate) fn tt_entry(
 #[inline]
 pub(crate) const fn mated_in(ply: i32) -> i32 {
     -MATE_SCORE + ply
+}
+
+/// Derives nodes-per-second from a node count and an elapsed time.
+///
+/// An elapsed time of zero (an iteration that finished inside the clock
+/// resolution) counts as one millisecond, so the division can never divide by
+/// zero and a completed iteration is never reported as zero nps.
+#[inline]
+pub(crate) fn nps_of(nodes: u64, time_ms: u64) -> u64 {
+    nodes * 1000 / time_ms.max(1)
 }
 
 /// Returns `true` when `mv` counts as quiet in the correction-history update

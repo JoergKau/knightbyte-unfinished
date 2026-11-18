@@ -213,6 +213,13 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       `SingularExcludeTtCutoff`. The step-2 `Clear Hash`/`ucinewgame`
       measurement at `Hash 1024` found B38 (first-clear page commit,
       ~190–275 ms); the bounded clear belongs to step 7.
+- [x] Step 3: complete `info` lines — every iteration reports
+      `depth seldepth score nodes nps hashfull time pv` in the captured
+      order; `nps` guards the zero elapsed time (counts as one millisecond);
+      `hashfull` is read once per iteration. `tbhits` is omitted like the
+      reference (the capture masks `tbhits <n>` when present and no captured
+      line carries one) until the Syzygy phase. Format tests cover cp/mate
+      scores, nps arithmetic, the zero-time guard and the exact field order.
 - [ ] `nnueregions` / `searchstats` full instrumentation (the commands are
       recognised and answer honestly; the king-region histogram and the search
       instrumentation land with their features).

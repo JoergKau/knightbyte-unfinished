@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-18 (Phase 5 steps 0–2 done — step 2 completed the option surface and `setoption` validation, removed `SingularExcludeTtCutoff`, and logged the clear-hash page-commit note B38)  
+**Last updated:** 2026-11-18 (Phase 5 steps 0–3 done — step 3 completed the `info` lines: nps/time/hashfull per iteration with the captured field order; the plan's `tbhits 0` turned out to be absent from the captured reference lines and is omitted the same way)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
@@ -22,16 +22,19 @@ with `param:Name=Value` overrides and one-shot command lines) and **step 2**
 `wired: false` rows in `src/search/lever_table.rs` — full `setoption`
 validation with one test per rule, the handshake's book/tablebase/eval-source
 `info string` lines plus the `isready` eval-source line, and the removal of
-`SingularExcludeTtCutoff`) are done. The step-0 capture found **predecessor
+`SingularExcludeTtCutoff`) are done. **Step 3** completed the `info` lines:
+every iteration now reports `depth seldepth score nodes nps hashfull time pv`
+in the captured order, with the nps zero-time guard and the occupancy read
+once per iteration. The step-0 capture found **predecessor
 bug 150** (`setoption Hash` above the declared maximum crashed the reference
 via an overflowing `TTable.Resize` allocation); it was fixed in the
 predecessor the same day (commit `acaff1f`, full suite 745/745). KnightByte
 was not affected (spin clamping). The step-2 measurement found **B38**: the
 first table clear after a fresh 1 GB `Hash` resize pays the OS page commit
-(~190–275 ms); step 7's bounded `ucinewgame` fixes it. Next: Phase 5 step 3
-(`info` line completeness).
+(~190–275 ms); step 7's bounded `ucinewgame` fixes it. Next: Phase 5 step 4
+(search thread, stop flag, removal of the per-node clock read).
 
-Verification status on the last run: all 218 tests pass locally on Windows
+Verification status on the last run: all 221 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
 fmt/clippy clean; all four bench pins exact. Node identity is verified on this
 Windows host only; macOS and Linux still have to confirm it (migration-plan G6).
@@ -248,7 +251,7 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 ## 3. Recommended next steps, in order
 
-**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0 (oracle transcripts), 1 (command surface and parser) and 2 (option surface and `setoption` validation) are complete; **step 3 (`info` line completeness) is next**, then the search-thread core in step 4. Details in `migration-plan.md`, Phase 5.
+**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0 (oracle transcripts), 1 (command surface and parser), 2 (option surface and `setoption` validation) and 3 (`info` line completeness) are complete; **step 4 (search thread, stop flag, removal of the per-node clock read) is next**, the core change of the phase. Details in `migration-plan.md`, Phase 5.
 
 ### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–2 done)
 
@@ -258,7 +261,15 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
   `info string` lines and the `isready` eval-source line,
   `SingularExcludeTtCutoff` removed, `Clear Hash`/`ucinewgame` measured at
   `Hash 1024` (B38 logged; fix belongs to step 7).
-- Step 3: complete `info` lines (nps, time, hashfull, tbhits).
+- ~~Step 3: complete `info` lines~~ — done (2026-11-18): every iteration
+  reports `depth seldepth score nodes nps hashfull time pv` in the captured
+  order; `nps` guards the zero time; `hashfull` is read once per iteration.
+  The plan's `tbhits 0` is absent from the captured reference lines and is
+  omitted the same way until Syzygy lands. Recorded for step 12: with
+  identical score/nodes, the reference's PV *tail* can differ from
+  KnightByte's (startpos depth 2: `e2e4 c7c5` vs `e2e4 c7c6`) — derived
+  reporting the reference refreshes between iterations; the search is
+  node-identical.
 - Step 4: search thread with `stop`; step 5: `go ponder`/`ponderhit`;
   step 6: `go mate`/`searchmoves`.
 - Steps 7–9: shared tables, Lazy SMP workers, multi-thread stress gates.

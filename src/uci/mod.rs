@@ -571,6 +571,12 @@ fn answer_without_search(position: Option<&Position>, output: &mut Output) -> io
 }
 
 /// Formats one `info` line for a completed iteration.
+///
+/// Field order and set mirror the captured reference lines exactly:
+/// `depth`, `seldepth`, `score`, `nodes`, `nps`, `hashfull`, `time`, `pv`.
+/// The reference omits `tbhits` while no tablebases are configured (the
+/// capture masks `tbhits <n>` when present, and no captured line carries
+/// one); the token joins the line when the Syzygy phase lands.
 fn format_info(info: &SearchInfo) -> String {
     let pv = info
         .pv
@@ -579,11 +585,14 @@ fn format_info(info: &SearchInfo) -> String {
         .collect::<Vec<String>>()
         .join(" ");
     format!(
-        "info depth {} seldepth {} score {} nodes {} pv {}",
+        "info depth {} seldepth {} score {} nodes {} nps {} hashfull {} time {} pv {}",
         info.depth,
         info.seldepth,
         format_score(info.score),
         info.nodes,
+        info.nps,
+        info.hashfull,
+        info.time_ms,
         pv
     )
 }
@@ -1213,6 +1222,69 @@ mod tests {
                 assert!(min <= max, "{}: inverted range", spec.name);
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 5 step 3: `info` line completeness — format tests for the cp
+    // and mate scores, the nps arithmetic and the zero-time guard.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn scores_format_as_cp_and_mate_distances() {
+        use crate::search::searcher::{MATE_LIMIT, MATE_SCORE};
+        // Centipawn scores, both signs.
+        assert_eq!(super::format_score(45), "cp 45");
+        assert_eq!(super::format_score(-123), "cp -123");
+        // Mate distances round up to whole moves: two plies are mate in one.
+        assert_eq!(super::format_score(MATE_SCORE - 2), "mate 1");
+        assert_eq!(super::format_score(-(MATE_SCORE - 2)), "mate -1");
+        // An odd ply count still rounds up (three plies are mate in two).
+        assert_eq!(super::format_score(MATE_SCORE - 3), "mate 2");
+        // Just below the mate limit is still a centipawn score.
+        assert_eq!(super::format_score(MATE_LIMIT - 1), "cp 29999");
+    }
+
+    #[test]
+    fn nps_arithmetic_and_the_zero_time_guard() {
+        use crate::search::searcher::nps_of;
+        // Ordinary arithmetic: nodes per second, rounded down.
+        assert_eq!(nps_of(1_500, 10), 150_000);
+        assert_eq!(nps_of(47, 1), 47_000);
+        // The guard: a zero elapsed time counts as one millisecond, so a
+        // completed iteration is never reported as zero nps and nothing
+        // divides by zero.
+        assert_eq!(nps_of(47, 0), 47_000);
+        assert_eq!(nps_of(0, 0), 0);
+    }
+
+    #[test]
+    fn the_info_line_carries_every_reference_field_in_order() {
+        use crate::search::searcher::{MATE_SCORE, SearchInfo};
+        // A captured-shaped iteration: the line must read exactly like the
+        // reference's `depth seldepth score nodes nps hashfull time pv`.
+        let info = SearchInfo {
+            depth: 2,
+            seldepth: 3,
+            score: 46,
+            nodes: 213,
+            time_ms: 2,
+            nps: 106_500,
+            hashfull: 4,
+            pv: vec![],
+        };
+        assert_eq!(
+            super::format_info(&info),
+            "info depth 2 seldepth 3 score cp 46 nodes 213 nps 106500 hashfull 4 time 2 pv "
+        );
+        // A mate score keeps the same field set.
+        let mate = SearchInfo {
+            score: MATE_SCORE - 2,
+            ..info.clone()
+        };
+        let line = super::format_info(&mate);
+        assert!(line.contains("score mate 1"), "mate score format: {line}");
+        assert!(line.contains("hashfull 4"), "hashfull missing: {line}");
+        assert!(line.contains("time 2"), "time missing: {line}");
     }
 
     /// Applies a sequence of `setoption name <name> value <value>` commands to
