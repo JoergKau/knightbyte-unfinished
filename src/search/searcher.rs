@@ -139,6 +139,10 @@ pub struct Searcher {
     /// 1024 nodes and before every iteration. A searcher created without the
     /// UCI layer owns a flag that is never set.
     pub(crate) stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Step 6 (`go searchmoves`): the legal subset of the listed root moves
+    /// for the current search. Empty means no restriction. Set once per
+    /// search in [`Searcher::search`], read at every root node.
+    pub(crate) root_filter: Vec<Move>,
     /// Number of completed iterations; the first one always runs to the end.
     pub(crate) completed_depth: i32,
     /// When the trace flag is on, every search node writes one ledger line to
@@ -178,6 +182,7 @@ impl Searcher {
             move_overhead_ms: crate::search::time_manager::DEFAULT_MOVE_OVERHEAD_MS,
             start: std::time::Instant::now(),
             stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            root_filter: Vec::new(),
             completed_depth: 0,
             trace: std::env::var_os("KNIGHTBYTE_TRACE").is_some(),
         }
@@ -353,13 +358,34 @@ impl Searcher {
             };
         }
 
-        let max_depth = limits.depth_limit();
+        // Step 6 (`go searchmoves`): the root is restricted to the listed
+        // moves. The filter holds the listed moves that are legal here; an
+        // empty list — none given, or every entry illegal — searches
+        // everything (the reference ignores an illegal-only list, verified
+        // 2026-11-18).
+        self.root_filter = self
+            .limits
+            .root_moves
+            .iter()
+            .filter(|mv| root_moves.as_slice().contains(mv))
+            .copied()
+            .collect();
+        // The no-search fallback best move comes from the effective root
+        // list: the first restricted move when the filter is active, the
+        // first legal move otherwise.
+        let fallback_move = if self.root_filter.is_empty() {
+            root_moves.as_slice()[0]
+        } else {
+            self.root_filter[0]
+        };
+
+        let max_depth = self.limits.depth_limit();
         // Reporting clock for the `info` lines: it starts with the search,
         // so every iteration publishes the elapsed time from the `go` (the
         // time manager keeps its own clock, started by the `init_*` call).
         let started = std::time::Instant::now();
         let mut best = SearchResult {
-            best_move: root_moves.as_slice()[0],
+            best_move: fallback_move,
             score: 0,
             depth: 0,
             seldepth: 0,
@@ -405,9 +431,18 @@ impl Searcher {
 
             // Time management: record the completed depth, feed the node
             // statistics and the best-move stability, then decide whether
-            // the next iteration starts. The mate score breaks first — a
-            // proven mate needs no more depth.
-            if score.abs() >= MATE_LIMIT {
+            // the next iteration starts. A proven mate breaks first — a
+            // proven mate needs no more depth. With a `go mate N` limiter the
+            // break waits for a mate within N moves (a slower proven mate
+            // keeps searching, per the step-0 capture); being mated always
+            // ends it.
+            let mated = score <= -MATE_LIMIT;
+            let our_mate_moves = (MATE_SCORE - score + 1) / 2;
+            let within_mate_bound = self
+                .limits
+                .mate
+                .is_none_or(|bound| our_mate_moves <= bound as i32);
+            if score >= MATE_LIMIT && within_mate_bound || mated {
                 break;
             }
             self.time_manager.set_completed_depth(depth);

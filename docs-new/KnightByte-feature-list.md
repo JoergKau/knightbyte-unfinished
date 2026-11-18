@@ -249,8 +249,15 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       instrumentation land with their features).
 - [x] Real `stop` behaviour and the worker-thread search (step 4, above).
 - [x] Real `go ponder`/`ponderhit` behaviour (step 5, above).
-- [ ] Real `mate`, `searchmoves` behaviour (step 6; the
-      fallback answers a legal move and an `info string`).
+- [x] Step 6: `go mate N` stops at the first completed iteration proving a
+      mate within N moves (a slower proven mate keeps searching; being
+      mated always ends it; other limiters still apply), and
+      `go searchmoves` restricts the root to the listed legal moves (an
+      empty list and an illegal-only list are ignored — the unrestricted
+      search runs). The restricted cold run is node- and score-identical to
+      the reference binary. Every `go` limiter is now implemented; the
+      step-1 fallback (answering a legal move for unsupported limiters) is
+      gone.
 
 ### Endgame and book
 

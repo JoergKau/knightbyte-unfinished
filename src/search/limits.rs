@@ -11,8 +11,10 @@
 //!
 //! Every limit is optional: an unset limit never stops the search.
 
+use crate::types::r#move::Move;
+
 /// Stop conditions for one search.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Limits {
     /// Maximum nominal depth in plies.
     pub depth: Option<u32>,
@@ -22,6 +24,15 @@ pub struct Limits {
     pub soft_time_ms: Option<u64>,
     /// Hard time budget in milliseconds; aborts the current iteration.
     pub hard_time_ms: Option<u64>,
+    /// `go mate N`: stop at the first completed iteration that proves a mate
+    /// in at most N moves. A slower proven mate keeps searching; other
+    /// limits still apply. Being mated always ends the search.
+    pub mate: Option<u32>,
+    /// `go searchmoves`: only these root moves are searched (empty = no
+    /// restriction). The UCI layer fills this with the listed moves that are
+    /// legal in the root position; a list whose every entry is illegal is
+    /// ignored, exactly like the reference (verified 2026-11-18).
+    pub root_moves: Vec<Move>,
 }
 
 impl Limits {

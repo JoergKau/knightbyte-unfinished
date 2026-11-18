@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-18 (Phase 5 steps 0–5 done — step 5 implemented `go ponder`/`ponderhit`: unbounded ponder search, the Q5 null-move answer on stop, and the ponderhit promotion that applies the ponder move and starts the clock fresh; the zero-iteration ponderhit case verified against the reference binary)  
+**Last updated:** 2026-11-18 (Phase 5 steps 0–6 done — step 6 implemented `go mate N` (first iteration proving a mate within N; unbounded otherwise) and `go searchmoves` (root restriction; empty/illegal-only lists ignored — the restricted cold run is node-identical to the reference binary); every `go` limiter is now implemented)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
@@ -38,17 +38,22 @@ implemented `go ponder`/`ponderhit`: the ponder search runs unbounded, a
 `stop` without `ponderhit` answers `bestmove 0000` (Q5), and a
 `ponderhit` applies the ponder move and starts a fresh search with the
 clock beginning at the ponderhit moment; the zero-iteration and burst
-cases were verified byte-for-byte against the reference binary. The step-0
+cases were verified byte-for-byte against the reference binary. **Step 6**
+implemented `go mate N` (stops at the first iteration proving a mate within
+N moves, unbounded otherwise) and `go searchmoves` (root restriction; empty
+and illegal-only lists are ignored; the restricted cold run is
+node-identical to the reference binary). Every `go` limiter is now
+implemented. The step-0
 capture found **predecessor
 bug 150** (`setoption Hash` above the declared maximum crashed the reference
 via an overflowing `TTable.Resize` allocation); it was fixed in the
 predecessor the same day (commit `acaff1f`, full suite 745/745). KnightByte
 was not affected (spin clamping). The step-2 measurement found **B38**: the
 first table clear after a fresh 1 GB `Hash` resize pays the OS page commit
-(~190–275 ms); step 7's bounded `ucinewgame` fixes it. Next: Phase 5 step 6
-(`go mate`/`searchmoves`).
+(~190–275 ms); step 7's bounded `ucinewgame` fixes it. Next: Phase 5 step 7
+(shared tables refactor).
 
-Verification status on the last run: all 233 tests pass locally on Windows
+Verification status on the last run: all 239 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
 fmt/clippy clean; all four bench pins exact and `capture_bench.py compare`
 shows every per-position delta at +0. Node identity is verified on this
@@ -242,7 +247,7 @@ Syzygy optional.
 
 | Item | KnightByte today |
 | :--- | :--- |
-| UCI handshake, `position`, `go` limiters (`depth`, `nodes`, `movetime`, clocks, `movestogo`, `infinite`) | done; `ponder`, `mate`, `searchmoves` are unsupported but now answered with a legal `bestmove` (B32) |
+| UCI handshake, `position`, `go` limiters (`depth`, `nodes`, `movetime`, clocks, `movestogo`, `infinite`, `ponder`, `mate`, `searchmoves`) | all done (Phase 5 steps 1–6; the ponder/mate/searchmoves behaviours verified against the reference binary) |
 | No time losses | two real causes fixed (B30 clock restarted late; B32 silent `go`); a 216-search compliance grid (clocks 40 ms-10 s, increments 0/100/1000, `movestogo` none/1/3/40) shows no overrun. **Still open:** a 40/15 and a 40/4 run with zero timeouts on record |
 | No illegal moves | `fastchess` flags them; all 904 finished games of the singular-extension experiment (8+0.08, ADR-0006) had no illegal move, time loss or crash. A dedicated self-play legality check of every PV and bestmove is not written yet |
 | Repetitions of earlier game positions | fixed (B31); bench could never have shown it |
@@ -269,9 +274,9 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 ## 3. Recommended next steps, in order
 
-**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–5 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag (per-1024-node polling, join-first fallback, the Q8 and stop-before-depth-1 depth-0 answers verified against the reference binary), and `go ponder`/`ponderhit` (unbounded ponder search, the Q5 null-move answer, the ponderhit promotion with the clock starting at the hit — burst and zero-iteration cases verified byte-for-byte against the reference binary). **Step 6 (`go mate`/`searchmoves`) is next.** Details in `migration-plan.md`, Phase 5.
+**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–6 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag, `go ponder`/`ponderhit`, and `go mate`/`searchmoves` — every `go` limiter is now implemented, and the ponder/mate/searchmoves behaviours were verified against the reference binary itself. **Step 7 (shared tables refactor) is next.** Details in `migration-plan.md`, Phase 5.
 
-### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–5 done)
+### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–6 done)
 
 - ~~Step 2: option surface and `setoption` validation~~ — done (2026-11-18):
   full lever catalogue advertised and pinned against `levers.json`,
@@ -302,7 +307,12 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
   fresh search with the clock at the hit; with zero completed ponder
   iterations the reference re-searches the unchanged position (verified
   against it), and so does KnightByte.
-- Step 6: `go mate`/`searchmoves`.
+- ~~Step 6: `go mate`/`searchmoves`~~ — done (2026-11-18): the mate limiter
+  stops at the first iteration proving a mate within N (unbounded
+  otherwise, other limits still apply); `searchmoves` restricts the root
+  (empty and illegal-only lists are ignored, restricted cold run
+  node-identical to the reference binary). Every `go` limiter is
+  implemented; the step-1 fallback is gone.
 - Steps 7–9: shared tables, Lazy SMP workers, multi-thread stress gates.
 - Steps 10–13: output decision, lever independence, UCI transcript tests
   against the step-0 captures, match gates (1,000 games vs the reference).

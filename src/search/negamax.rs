@@ -499,6 +499,26 @@ impl Searcher {
             };
         }
 
+        // Step 6 (`go searchmoves`): at the root, only the listed moves are
+        // searched. An empty filter means no restriction; a filter whose
+        // every entry misses the legal list is ignored (the reference runs
+        // the unrestricted search there). The clone is fine: the root node
+        // is visited a handful of times per search, and holding the borrow
+        // across the picker loop would fight the mutable searcher state.
+        let mut restricted: Vec<Move> = Vec::new();
+        if ply == 0 && !self.root_filter.is_empty() {
+            for mv in moves.as_slice() {
+                if self.root_filter.contains(mv) {
+                    restricted.push(*mv);
+                }
+            }
+        }
+        let moves_slice: &[Move] = if restricted.is_empty() {
+            moves.as_slice()
+        } else {
+            &restricted
+        };
+
         let cont = self.continuations(ply);
         self.picker[ply].reset(
             tt_move,
@@ -524,7 +544,7 @@ impl Searcher {
         let mut quiets_searched = [Move::NONE; 64];
         let mut quiets_count = 0;
 
-        while let Some(mv) = self.picker[ply].next(position, &self.history, moves.as_slice()) {
+        while let Some(mv) = self.picker[ply].next(position, &self.history, moves_slice) {
             if !excluded_move.is_none() && mv == excluded_move {
                 continue;
             }

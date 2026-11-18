@@ -606,15 +606,6 @@ fn handle_go(
         return handle_perft_depth(limits.perft_depth, position.as_ref(), output);
     }
 
-    // Steps 6's limiters keep the fallback; until then they answer a legal
-    // move so a GUI never waits on a clock (the B32 decision). `go ponder`
-    // is implemented below (step 5).
-    if limits.mate > 0 || !limits.search_moves.is_empty() {
-        output
-            .line("info string go mate/searchmoves: not supported yet, answering a legal move")?;
-        return answer_without_search(position.as_ref(), output);
-    }
-
     let Some(position) = position else {
         output.line("info string no position set")?;
         return answer_without_search(None, output);
@@ -838,6 +829,26 @@ fn init_search_limits(
     }
     if limits.nodes > 0 {
         search_limits.nodes = Some(limits.nodes);
+    }
+    // Step 6: `go mate N` stops at the first completed iteration proving a
+    // mate within N moves; `go searchmoves` restricts the root to the listed
+    // moves that are legal here (an illegal-only list is ignored, verified
+    // against the reference).
+    if limits.mate > 0 {
+        search_limits.mate = Some(limits.mate);
+    }
+    if !limits.search_moves.is_empty() {
+        let all = legal(position);
+        search_limits.root_moves = limits
+            .search_moves
+            .iter()
+            .filter_map(|text| {
+                all.as_slice()
+                    .iter()
+                    .find(|mv| mv.to_uci() == text.as_str())
+                    .copied()
+            })
+            .collect();
     }
     search_limits
 }
@@ -1541,6 +1552,69 @@ mod tests {
         // divides by zero.
         assert_eq!(nps_of(47, 0), 47_000);
         assert_eq!(nps_of(0, 0), 0);
+    }
+
+    #[test]
+    fn a_mate_limiter_has_no_depth_cap() {
+        use super::start_position;
+        // Step 6: `go mate N` without another limiter searches without a
+        // depth cap until a mate within N is proven or a `stop` arrives
+        // (the step-0 capture, scenario b). Other limits still apply.
+        let mut searcher = Searcher::new(2);
+        let position = start_position();
+        let limits = super::init_search_limits(
+            &mut searcher,
+            &super::parse_go("go mate 3"),
+            &position,
+            false,
+        );
+        assert_eq!(limits.mate, Some(3));
+        assert_eq!(limits.depth, None);
+        assert_eq!(
+            limits.depth_limit(),
+            crate::search::MAX_PLY as i32,
+            "a mate limiter must not cap the depth"
+        );
+        // A depth limiter given alongside the mate limiter still applies.
+        let limits = super::init_search_limits(
+            &mut searcher,
+            &super::parse_go("go mate 3 depth 5"),
+            &position,
+            false,
+        );
+        assert_eq!(limits.mate, Some(3));
+        assert_eq!(limits.depth, Some(5));
+        assert_eq!(limits.depth_limit(), 5);
+    }
+
+    #[test]
+    fn searchmoves_resolves_legal_moves_into_the_root_filter() {
+        use super::start_position;
+        // Step 6: the UCI layer resolves the listed moves against the root
+        // position's legal moves; an illegal-only list resolves to an empty
+        // filter, which the searcher treats as no restriction.
+        let mut searcher = Searcher::new(2);
+        let position = start_position();
+        let limits = super::init_search_limits(
+            &mut searcher,
+            &super::parse_go("go depth 3 searchmoves e2e4 a1a1 e7e5"),
+            &position,
+            false,
+        );
+        // e2e4 is legal; a1a1 is move-shaped but not legal; e7e5 is not a
+        // White move. Only the legal ones enter the filter.
+        assert_eq!(limits.root_moves.len(), 1);
+        assert_eq!(limits.root_moves[0].to_uci(), "e2e4");
+        let limits = super::init_search_limits(
+            &mut searcher,
+            &super::parse_go("go depth 3 searchmoves e7e5"),
+            &position,
+            false,
+        );
+        assert!(
+            limits.root_moves.is_empty(),
+            "an illegal-only list must resolve to no restriction"
+        );
     }
 
     #[test]

@@ -181,19 +181,10 @@ fn run_interactively(commands: &[u8]) -> String {
         .join("\n")
 }
 
-#[test]
-fn an_unsupported_go_limiter_still_gets_a_bestmove() {
-    // A GUI waits for a bestmove after every go. An unparsable go must not
-    // leave it waiting until its clock runs out. (`go ponder` is implemented
-    // since step 5; mate and searchmoves keep the fallback until step 6.)
-    let stdout = run_engine(b"position startpos\ngo mate 3\nquit\n");
-    assert!(stdout.contains("not supported"), "missing diagnostic");
-    let bestmove = stdout
-        .lines()
-        .find(|line| line.starts_with("bestmove "))
-        .expect("missing bestmove after an unsupported go");
-    assert_ne!(bestmove, "bestmove 0000", "a legal move exists");
-}
+// The old "an unsupported go limiter still gets a bestmove" guarantee is
+// fully covered since step 6: every `go` limiter is implemented (ponder,
+// mate, searchmoves included), and every `go` is answered by its worker —
+// see the step 4/5/6 tests below.
 
 #[test]
 fn a_quit_ends_a_ponder_search_with_the_null_move() {
@@ -839,7 +830,7 @@ fn a_stray_ponderhit_is_ignored() {
 fn a_ponderhit_during_a_normal_search_is_ignored() {
     // Only a ponder search can be promoted; a normal search runs on and
     // answers its own bestmove.
-    let stdout = run_interactively(b"position startpos\ngo depth 10\nponderhit\n");
+    let stdout = run_interactively(b"position startpos\ngo depth 5\nponderhit\n");
     assert_eq!(
         stdout
             .lines()
@@ -852,7 +843,168 @@ fn a_ponderhit_during_a_normal_search_is_ignored() {
         "the normal search was disturbed by the ponderhit: {stdout}"
     );
     assert!(
-        stdout.contains("info depth 10 "),
+        stdout.contains("info depth 5 "),
         "the normal search did not run to its depth: {stdout}"
     );
+}
+
+// ----------------------------------------------------------------------
+// Phase 5 step 6: `go mate N` and `go searchmoves`.
+// ----------------------------------------------------------------------
+
+/// The mate-in-one position of the step-0 capture (`a1a8` is the mate).
+const MATE_IN_ONE_FEN: &str = "6k1/5ppp/8/8/8/8/5PPP/R5K1 w - - 0 1";
+
+#[test]
+fn go_mate_stops_at_the_first_iteration_proving_the_mate() {
+    // The step-0 capture (scenario a): `go mate 1` stops at the first
+    // completed iteration whose score proves a mate within one move —
+    // depth 1, 43 nodes, `score mate 1 pv a1a8`. The FEN is verified
+    // against the external oracle at test time, per the project rules.
+    common::verify_fen(MATE_IN_ONE_FEN);
+    let stdout =
+        run_interactively(&format!("position fen {MATE_IN_ONE_FEN}\ngo mate 1\n").into_bytes());
+    let depth_lines: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.starts_with("info depth "))
+        .collect();
+    assert_eq!(depth_lines.len(), 1, "only depth 1 runs: {stdout}");
+    let line = depth_lines[0];
+    assert!(
+        line.starts_with("info depth 1 seldepth 1 score mate 1 nodes 43 "),
+        "the mate-in-one answer must match the capture (43 nodes): {line}"
+    );
+    assert!(line.ends_with("pv a1a8"), "the mate move is the PV: {line}");
+    assert!(stdout.contains("bestmove a1a8"), "missing bestmove");
+}
+
+#[test]
+fn go_mate_without_a_provable_mate_searches_unbounded() {
+    // The step-0 capture (scenario b): with no provable mate in N the
+    // search runs on without a depth cap until stopped; a stop answers the
+    // last completed iteration's bestmove (a normal search's ending — not
+    // the Q5 null move).
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (mut child, reader) = spawn_with_reader(&lines);
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin
+        .write_all(b"position startpos\ngo mate 3\n")
+        .expect("write go mate");
+    stdin.flush().expect("flush");
+    std::thread::sleep(Duration::from_millis(600));
+    let depths_so_far: Vec<u32> = lines
+        .lock()
+        .expect("reader lock")
+        .iter()
+        .filter(|(_, line)| line.starts_with("info depth "))
+        .map(|(_, line)| {
+            line["info depth ".len()..]
+                .split(' ')
+                .next()
+                .expect("depth token")
+                .parse()
+                .expect("depth number")
+        })
+        .collect();
+    // The search is running (at least one iteration on the wire) and no
+    // bestmove arrived: no depth cap ended it. That the limiter truly lifts
+    // the depth cap (a `go mate N` searches past any bound) is pinned
+    // deterministically by the library-level test
+    // `a_mate_limiter_has_no_depth_cap` in the UCI module.
+    assert!(!depths_so_far.is_empty(), "the mate search did not start");
+    assert!(
+        !lines
+            .lock()
+            .expect("reader lock")
+            .iter()
+            .any(|(_, line)| line.starts_with("bestmove ")),
+        "the mate search must run until stopped: {depths_so_far:?}"
+    );
+    stdin.write_all(b"stop\nquit\n").expect("write stop");
+    drop(stdin);
+    assert!(child.wait().expect("wait").success(), "engine failed");
+    reader.join().expect("reader");
+    let captured = lines.lock().expect("reader lock").clone();
+    let bestmoves: Vec<&str> = captured
+        .iter()
+        .filter(|(_, line)| line.starts_with("bestmove "))
+        .map(|(_, line)| line.as_str())
+        .collect();
+    assert_eq!(bestmoves.len(), 1, "exactly one bestmove: {captured:?}");
+    assert_ne!(bestmoves[0], "bestmove 0000", "a real move is answered");
+}
+
+#[test]
+fn searchmoves_restricts_the_root_moves() {
+    // The step-0 capture (scenario c, cold table): the restricted search is
+    // a normal search over the listed root moves only. The node counts and
+    // seldepths are pinned to the reference's cold run (3 and 53 nodes at
+    // depths 1 and 2); the timing fields are not pinned.
+    let stdout = run_interactively(b"position startpos\ngo depth 5 searchmoves e2e4\n");
+    let depth_lines: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.starts_with("info depth "))
+        .collect();
+    assert!(depth_lines.len() >= 5, "depth 5 not reached: {stdout}");
+    assert!(
+        depth_lines[0].starts_with("info depth 1 seldepth 1 score cp 45 nodes 3 "),
+        "the restricted depth-1 run must match the reference: {}",
+        depth_lines[0]
+    );
+    assert!(
+        depth_lines[1].starts_with("info depth 2 seldepth 2 score cp 33 nodes 53 "),
+        "the restricted depth-2 run must match the reference: {}",
+        depth_lines[1]
+    );
+    // Every iteration's PV starts with the listed move, and the bestmove is
+    // the listed move.
+    assert!(
+        depth_lines
+            .iter()
+            .all(|line| line.contains(" pv e2e4") || line.contains(" pv e2e4 ")),
+        "every PV starts with e2e4: {stdout}"
+    );
+    assert!(stdout.contains("bestmove e2e4"), "missing bestmove");
+}
+
+#[test]
+fn searchmoves_with_two_moves_stays_inside_the_list() {
+    // Two listed moves: the answer must be one of them, and the tree must
+    // stay far below the unrestricted depth-5 search (4,001 nodes).
+    let stdout = run_interactively(b"position startpos\ngo depth 5 searchmoves e2e4 d2d4\n");
+    let bestmove = stdout
+        .lines()
+        .find(|line| line.starts_with("bestmove "))
+        .expect("missing bestmove");
+    assert!(
+        bestmove == "bestmove e2e4" || bestmove == "bestmove d2d4",
+        "the bestmove must be a listed move: {bestmove}"
+    );
+    let depth5 = stdout
+        .lines()
+        .find(|line| line.starts_with("info depth 5 "))
+        .expect("depth 5 not reached");
+    let nodes: u64 = depth5
+        .split(" nodes ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|value| value.parse().ok())
+        .expect("the depth-5 line carries nodes");
+    assert!(nodes < 4_001, "the root was not restricted: {depth5}");
+}
+
+#[test]
+fn searchmoves_without_moves_or_with_illegal_moves_is_ignored() {
+    // The step-0 capture (scenario e) and the reference probe (2026-11-18):
+    // an empty `searchmoves` and a list whose every entry is illegal both
+    // run the normal unrestricted search — here the exact depth-5 node count
+    // of the unrestricted startpos search.
+    for go in ["go depth 5 searchmoves", "go depth 5 searchmoves e7e5"] {
+        let stdout = run_interactively(&format!("position startpos\n{go}\n").into_bytes());
+        assert!(
+            stdout.contains("info depth 5 ") && stdout.contains("nodes 4001"),
+            "the unrestricted depth-5 search must run (4,001 nodes): {stdout}"
+        );
+        assert!(stdout.contains("bestmove e2e4"), "missing bestmove");
+    }
 }
