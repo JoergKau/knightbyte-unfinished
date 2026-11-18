@@ -1,15 +1,17 @@
 //! UCI command loop.
 //!
 //! The loop owns the board and the search state. It handles the handshake, the
-//! diagnostic commands (`position`, `perft`, `nnueeval`, `bench`) and a minimal
-//! `go` that honours the `depth` and `nodes` limiters. Clock limiters, `stop`
-//! and threading arrive with the UCI phase; an unsupported limiter is reported
-//! instead of silently searching forever.
+//! protocol commands and the diagnostic surface (`position`, `perft`,
+//! `nnueeval`, `d`, `eval`, `debug`, `checkmoves`), and parses every `go`
+//! limiter the reference knows. Commands whose features arrive with later
+//! steps (`stop`, `ponderhit`, `go ponder/mate/searchmoves`) are recognised and
+//! answered so a GUI never waits, and their real behaviour lands with steps 4
+//! to 6.
 
 use std::io::{self, BufRead};
 
 use crate::board::fen::STARTPOS_FEN;
-use crate::board::movegen::legal;
+use crate::board::movegen::{gives_check, legal};
 use crate::board::perft::perft;
 use crate::board::position::Position;
 use crate::eval::nnue::evaluate_position;
@@ -19,16 +21,18 @@ use crate::search::options::{LEVERS, OptionKind, PUBLIC_OPTIONS};
 use crate::search::searcher::{MATE_LIMIT, MATE_SCORE, SearchInfo, Searcher};
 use crate::search::time_manager::TimeControl;
 use crate::tools::bench;
+use crate::tools::net::NET_SOURCE_NAME;
 
 pub mod parser;
 
-/// Depth used when `go` names no limiter.
-const DEFAULT_GO_DEPTH: u32 = 8;
+/// Depth used when `go` names no limiter (reference parity: a bare `go`
+/// searches depth 6; the old KnightByte default of 8 was a recorded deviation).
+const DEFAULT_GO_DEPTH: u32 = 6;
 
 /// Transposition-table size for the command loop, in megabytes.
 const DEFAULT_TT_MEGABYTES: usize = 256;
 
-/// Runs the UCI event loop until `quit` or end of input.
+/// Runs the UCI event loop over standard input without arguments.
 ///
 /// # Errors
 ///
@@ -36,7 +40,48 @@ const DEFAULT_TT_MEGABYTES: usize = 256;
 /// fails. A disconnected GUI is treated as end of input, which lets the
 /// process exit cleanly.
 pub fn run() -> io::Result<()> {
-    let stdin = io::stdin();
+    run_with_argv(&[])
+}
+
+/// Runs the UCI event loop with the process arguments applied.
+///
+/// The reference's argv surface is reproduced: `param:Name=Value` entries
+/// preload validated search-parameter overrides before the first command, and
+/// every other argument is joined into a one-shot UCI command line that runs
+/// once and exits (a `quit` is appended). With no arguments the loop reads
+/// standard input.
+///
+/// # Errors
+///
+/// Returns an I/O error when reading or writing fails, and a fail-fast error
+/// for a malformed or unknown `param:` override — the reference aborts the
+/// process on those rather than silently searching with default parameters.
+pub fn run_with_argv(argv: &[String]) -> io::Result<()> {
+    // The `param:` prefix is matched case-insensitively, like the reference.
+    let is_param = |argument: &String| argument.to_ascii_lowercase().starts_with("param:");
+    let params: Vec<String> = argv
+        .iter()
+        .filter(|argument| is_param(argument))
+        .map(|argument| argument["param:".len()..].to_owned())
+        .collect();
+    let rest: Vec<&String> = argv.iter().filter(|argument| !is_param(argument)).collect();
+
+    if rest.is_empty() {
+        run_from(&mut io::stdin().lock(), &params)
+    } else {
+        // One-shot mode: the arguments are one UCI line, then the engine exits.
+        let command_line = rest
+            .iter()
+            .map(|argument| argument.as_str())
+            .collect::<Vec<&str>>()
+            .join(" ");
+        let script = format!("{command_line}\nquit\n");
+        run_from(&mut script.as_bytes(), &params)
+    }
+}
+
+/// Runs the UCI event loop over `reader` with preset parameter overrides.
+fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
     let mut output = Output::new();
     // Reference parity (the predecessor's bug-143 fix): the engine starts on
     // the start position, so a `go` before any `position` command searches
@@ -44,8 +89,10 @@ pub fn run() -> io::Result<()> {
     // stays in the type because the answer path below remains as robustness.
     let mut position: Option<Position> = Some(start_position());
     let mut searcher = Searcher::new(DEFAULT_TT_MEGABYTES);
+    apply_preset_params(params, &mut searcher, &mut output)?;
 
-    for line in stdin.lock().lines() {
+    let mut debug_mode = false;
+    for line in reader.lines() {
         let line = line?;
         let command = line.trim();
         if command.is_empty() {
@@ -73,22 +120,102 @@ pub fn run() -> io::Result<()> {
                 }
                 // Reference parity (the predecessor's bug-144/145 decision): a
                 // rejected `position` command is reported loudly and keeps the
-                // previous position, so the engine never searches a position
-                // the GUI did not ask for.
+                // previous position, so the engine never silently searches a
+                // position the GUI did not ask for.
                 Err(error) => output.line(&format!("info string {}", error.message()))?,
             },
             parser::Command::Go => {
                 handle_go(command, position.as_ref(), &mut searcher, &mut output)?
             }
+            // The search runs synchronously until the worker thread lands in
+            // step 4; with no search running a `stop` is a no-op, exactly like
+            // the reference.
+            parser::Command::Stop => {}
+            // Ponder support arrives in step 5; without a ponder search a
+            // `ponderhit` is ignored, as the step-0 transcript shows.
+            parser::Command::PonderHit => {}
+            parser::Command::Debug => {
+                // The flag exists for reference parity; its consumers arrive
+                // with the search instrumentation.
+                debug_mode = command
+                    .split_whitespace()
+                    .nth(1)
+                    .is_some_and(|value| value.eq_ignore_ascii_case("on"));
+            }
             parser::Command::Perft => handle_perft(command, position.as_ref(), &mut output)?,
             parser::Command::NnueEval => handle_nnue_eval(position.as_ref(), &mut output)?,
+            parser::Command::Display => handle_display(position.as_ref(), &mut output)?,
+            parser::Command::Eval => handle_eval(position.as_ref(), &mut output)?,
+            parser::Command::CheckMoves => handle_check_moves(position.as_ref(), &mut output)?,
+            parser::Command::NnueRegions => output.line(
+                "info string nnueregions: the king-region instrumentation is not ported yet",
+            )?,
+            parser::Command::SearchStats => output
+                .line("info string searchstats: the search instrumentation is not ported yet")?,
             parser::Command::Quit => break,
             parser::Command::Unknown => {
-                output.line(&format!("info string unknown command: {command}"))?;
+                // Reference parity: the report names the lowercased command
+                // word, not the whole line.
+                let word = command.split_whitespace().next().unwrap_or_default();
+                output.line(&format!(
+                    "info string Unknown command: {}",
+                    word.to_ascii_lowercase()
+                ))?;
             }
         }
     }
+    let _ = debug_mode;
 
+    Ok(())
+}
+
+/// Applies `param:Name=Value` startup overrides to the searcher.
+///
+/// The store and the validation mirror the reference: the name must be a known
+/// search lever, a check lever accepts only `true`/`false`, a spin lever only
+/// an integer, and a malformed or unknown spec is a fail-fast error (the
+/// reference aborts the process rather than searching with default parameters).
+/// Every accepted override is announced, because it changes the search.
+fn apply_preset_params(
+    specs: &[String],
+    searcher: &mut Searcher,
+    output: &mut Output,
+) -> io::Result<()> {
+    for spec in specs {
+        let Some((name, raw)) = spec.split_once('=') else {
+            return Err(io::Error::other(format!(
+                "param override '{spec}' is not Name=Value"
+            )));
+        };
+        let Some(lever_spec) = crate::search::options::lever(name) else {
+            return Err(io::Error::other(format!(
+                "param override: unknown search option '{name}'"
+            )));
+        };
+        let parsed = match lever_spec.kind {
+            OptionKind::Check => {
+                if raw != "true" && raw != "false" {
+                    return Err(io::Error::other(format!(
+                        "param override: '{raw}' is not true/false for {name}"
+                    )));
+                }
+                i64::from(raw == "true")
+            }
+            _ => match raw.parse::<i64>() {
+                Ok(value) => value,
+                Err(_) => {
+                    return Err(io::Error::other(format!(
+                        "param override: '{raw}' is not an integer for {name}"
+                    )));
+                }
+            },
+        };
+        crate::search::options::set(searcher.params_mut(), lever_spec.name, parsed);
+        output.line(&format!(
+            "info string param-override: {}={raw} (applies to every go)",
+            lever_spec.name
+        ))?;
+    }
     Ok(())
 }
 
@@ -181,116 +308,166 @@ fn apply_uci_move(position: &Position, text: &str) -> Result<Position, PositionE
     Err(PositionError::IllegalMove(text.to_owned()))
 }
 
-/// Parses the limiters of a `go` command.
+/// Every limiter a `go` command can carry.
 ///
-/// Clock limiters are read as absolute white/black values and then selected for
-/// the side to move. Returns the search limits (depth/nodes) and the
-/// time-manager setup.
-fn parse_go(
-    line: &str,
-    position: Option<&Position>,
-) -> Result<(Limits, Option<TimeSetup>), String> {
-    let mut limits = Limits::default();
-    let mut limited = false;
-    let mut fixed_time = None;
-    let mut white_time = 0_u64;
-    let mut black_time = 0_u64;
-    let mut white_inc = 0_u64;
-    let mut black_inc = 0_u64;
-    let mut moves_to_go = None;
-    let mut clock_seen = false;
-    let time_setup: Option<TimeSetup>;
-    let mut tokens = line.split_whitespace().skip(1);
-
-    while let Some(token) = tokens.next() {
-        match token {
-            "depth" => {
-                let value = tokens
-                    .next()
-                    .and_then(|value| value.parse::<u32>().ok())
-                    .ok_or_else(|| "go depth needs a number".to_owned())?;
-                limits.depth = Some(value);
-                limited = true;
-            }
-            "nodes" => {
-                limits.nodes = Some(
-                    tokens
-                        .next()
-                        .and_then(|value| value.parse::<u64>().ok())
-                        .ok_or_else(|| "go nodes needs a number".to_owned())?,
-                );
-                limited = true;
-            }
-            "movetime" => {
-                fixed_time = Some(
-                    tokens
-                        .next()
-                        .and_then(|value| value.parse::<u64>().ok())
-                        .ok_or_else(|| "go movetime needs a number".to_owned())?,
-                );
-                limited = true;
-            }
-            "wtime" | "btime" | "winc" | "binc" | "movestogo" => {
-                let value = tokens
-                    .next()
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .ok_or_else(|| format!("go {token} needs a number"))?;
-                clock_seen = true;
-                limited = true;
-                match token {
-                    "wtime" => white_time = value,
-                    "btime" => black_time = value,
-                    "winc" => white_inc = value,
-                    "binc" => black_inc = value,
-                    _ => moves_to_go = Some(value as u32),
-                }
-            }
-            "infinite" => {
-                limited = true;
-            }
-            other => {
-                return Err(format!("go limiter '{other}' is not supported yet"));
-            }
-        }
-    }
-
-    if let Some(move_time) = fixed_time {
-        time_setup = Some(TimeSetup::Fixed(move_time));
-    } else if clock_seen {
-        let white_to_move = position.is_none_or(|position| position.side_to_move_is_white());
-        time_setup = Some(TimeSetup::Clock(TimeControl {
-            time_left_ms: if white_to_move {
-                white_time
-            } else {
-                black_time
-            },
-            opponent_time_ms: if white_to_move {
-                black_time
-            } else {
-                white_time
-            },
-            increment_ms: if white_to_move { white_inc } else { black_inc },
-            moves_to_go,
-        }));
-    } else {
-        time_setup = Some(TimeSetup::Infinite);
-    }
-
-    if !limited {
-        limits.depth = Some(DEFAULT_GO_DEPTH);
-    }
-    Ok((limits, time_setup))
+/// Unset counters are zero, mirroring the reference's "0 = off" convention:
+/// the default-depth rule then reads like the reference's, and unknown tokens
+/// are silently ignored, so a GUI that sends an extra keyword never loses its
+/// search.
+#[derive(Debug, Default, Eq, PartialEq)]
+struct GoLimits {
+    /// `go depth N` (0 = not given).
+    depth: u32,
+    /// `go nodes N`.
+    nodes: u64,
+    /// `go movetime N`.
+    movetime: u64,
+    /// `go wtime N`.
+    white_time: u64,
+    /// `go btime N`.
+    black_time: u64,
+    /// `go winc N`.
+    white_inc: u64,
+    /// `go binc N`.
+    black_inc: u64,
+    /// `go movestogo N` (0 = not given).
+    moves_to_go: u32,
+    /// `go mate N` (0 = not given).
+    mate: u32,
+    /// `go infinite`.
+    infinite: bool,
+    /// `go ponder`.
+    ponder: bool,
+    /// `go perft N` (0 = not given): run perft instead of a search.
+    perft_depth: u32,
+    /// `go searchmoves` root-move restriction.
+    search_moves: Vec<String>,
 }
 
-/// The time-manager setup extracted from a `go` command.
-#[derive(Debug)]
-enum TimeSetup {
-    /// A fixed `movetime` budget.
-    Fixed(u64),
-    /// Clock-controlled search.
-    Clock(TimeControl),
-    /// No time limit.
-    Infinite,
+impl GoLimits {
+    /// True when a clock limiter (not `movestogo` alone) is present.
+    ///
+    /// The reference's `HasTimeControl` counts only `movetime` and the two
+    /// clocks: `go movestogo 40` alone carries no clock, so it falls through
+    /// to the default-depth rule.
+    fn has_time_control(&self) -> bool {
+        self.movetime > 0 || self.white_time > 0 || self.black_time > 0
+    }
+
+    /// Applies the reference's default: a `go` with no limiter at all searches
+    /// depth 6.
+    fn apply_default_depth(&mut self) {
+        if self.depth == 0
+            && !self.has_time_control()
+            && !self.infinite
+            && self.nodes == 0
+            && self.perft_depth == 0
+            && self.mate == 0
+        {
+            self.depth = DEFAULT_GO_DEPTH;
+        }
+    }
+}
+
+/// True when `token` looks like a UCI move (4-5 characters, board squares).
+///
+/// `go searchmoves` consumes exactly these tokens, so a following limiter ends
+/// the list. The fifth character (a promotion piece) is not validated, like the
+/// reference.
+fn is_move_token(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    let is_square =
+        |file: u8, rank: u8| (b'a'..=b'h').contains(&file) && (b'1'..=b'8').contains(&rank);
+    (bytes.len() == 4 || bytes.len() == 5)
+        && is_square(bytes[0], bytes[1])
+        && is_square(bytes[2], bytes[3])
+}
+
+/// Parses the limiters of a `go` command into a [`GoLimits`].
+///
+/// Token matching is case-insensitive and unknown tokens are ignored, exactly
+/// like the reference: accepting more input never rejects a valid search. A
+/// limiter's value token is consumed even when it does not parse, and the
+/// limiter is then simply not set.
+fn parse_go(line: &str) -> GoLimits {
+    let mut limits = GoLimits::default();
+    let mut tokens = line
+        .split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .peekable();
+    tokens.next(); // the "go" word
+
+    while let Some(token) = tokens.next() {
+        match token.as_str() {
+            "depth" => {
+                if let Some(value) = tokens.next() {
+                    limits.depth = value.parse().unwrap_or(0);
+                }
+            }
+            "nodes" => {
+                if let Some(value) = tokens.next() {
+                    limits.nodes = value.parse().unwrap_or(0);
+                }
+            }
+            "movetime" => {
+                if let Some(value) = tokens.next() {
+                    limits.movetime = value.parse().unwrap_or(0);
+                }
+            }
+            "wtime" => {
+                if let Some(value) = tokens.next() {
+                    limits.white_time = value.parse().unwrap_or(0);
+                }
+            }
+            "btime" => {
+                if let Some(value) = tokens.next() {
+                    limits.black_time = value.parse().unwrap_or(0);
+                }
+            }
+            "winc" => {
+                if let Some(value) = tokens.next() {
+                    limits.white_inc = value.parse().unwrap_or(0);
+                }
+            }
+            "binc" => {
+                if let Some(value) = tokens.next() {
+                    limits.black_inc = value.parse().unwrap_or(0);
+                }
+            }
+            "movestogo" => {
+                if let Some(value) = tokens.next() {
+                    limits.moves_to_go = value.parse().unwrap_or(0);
+                }
+            }
+            "mate" => {
+                if let Some(value) = tokens.next() {
+                    limits.mate = value.parse().unwrap_or(0);
+                }
+            }
+            "perft" => {
+                if let Some(value) = tokens.next() {
+                    limits.perft_depth = value.parse().unwrap_or(0);
+                }
+            }
+            "infinite" => limits.infinite = true,
+            "ponder" => limits.ponder = true,
+            "searchmoves" => {
+                // Consume exactly the move-shaped tokens that follow; the first
+                // non-move token stays for the main loop, so `go searchmoves
+                // e2e4 depth 3` parses both limiters.
+                while let Some(next) = tokens.peek() {
+                    if !is_move_token(next) {
+                        break;
+                    }
+                    limits.search_moves.push(tokens.next().expect("peeked"));
+                }
+            }
+            // Unknown tokens are ignored (reference parity).
+            _ => {}
+        }
+    }
+    limits.apply_default_depth();
+    limits
 }
 
 /// Searches the current position and prints the UCI transcript.
@@ -300,25 +477,63 @@ fn handle_go(
     searcher: &mut Searcher,
     output: &mut Output,
 ) -> io::Result<()> {
-    let (limits, time_setup) = match parse_go(line, position) {
-        Ok((limits, time_setup)) => (limits, time_setup),
-        Err(message) => {
-            output.line(&format!("info string {message}"))?;
-            return answer_without_search(position, output);
-        }
-    };
+    let limits = parse_go(line);
+
+    // `go perft N` runs the node counter instead of a search and prints no
+    // `bestmove`, exactly like the reference's HandleGo branch.
+    if limits.perft_depth > 0 {
+        return handle_perft_depth(limits.perft_depth, position, output);
+    }
+
+    // Steps 5 and 6 bring the real implementations; until then the fallback
+    // answers a legal move so a GUI never waits on a clock (the B32 decision).
+    if limits.ponder || limits.mate > 0 || !limits.search_moves.is_empty() {
+        output.line(
+            "info string go ponder/mate/searchmoves: not supported yet, answering a legal move",
+        )?;
+        return answer_without_search(position, output);
+    }
+
     let Some(position) = position else {
         output.line("info string no position set")?;
         return answer_without_search(None, output);
     };
-    match time_setup {
-        Some(TimeSetup::Fixed(move_time)) => searcher.init_movetime(move_time),
-        Some(TimeSetup::Clock(control)) => searcher.init_clock(&control),
-        _ => searcher.init_infinite(),
+    if limits.movetime > 0 {
+        searcher.init_movetime(limits.movetime);
+    } else if limits.has_time_control() {
+        let white_to_move = position.side_to_move_is_white();
+        searcher.init_clock(&TimeControl {
+            time_left_ms: if white_to_move {
+                limits.white_time
+            } else {
+                limits.black_time
+            },
+            opponent_time_ms: if white_to_move {
+                limits.black_time
+            } else {
+                limits.white_time
+            },
+            increment_ms: if white_to_move {
+                limits.white_inc
+            } else {
+                limits.black_inc
+            },
+            moves_to_go: (limits.moves_to_go > 0).then_some(limits.moves_to_go),
+        });
+    } else if limits.infinite || limits.depth == 0 && limits.nodes == 0 {
+        searcher.init_infinite();
+    }
+
+    let mut search_limits = Limits::default();
+    if limits.depth > 0 {
+        search_limits.depth = Some(limits.depth);
+    }
+    if limits.nodes > 0 {
+        search_limits.nodes = Some(limits.nodes);
     }
 
     let mut write_error: Option<io::Error> = None;
-    let result = searcher.search(position, limits, &mut |info| {
+    let result = searcher.search(position, search_limits, &mut |info| {
         if write_error.is_some() {
             return;
         }
@@ -388,6 +603,15 @@ fn handle_perft(line: &str, position: Option<&Position>, output: &mut Output) ->
         .nth(1)
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(1);
+    handle_perft_depth(depth, position, output)
+}
+
+/// Counts perft nodes for the current position at `depth`.
+fn handle_perft_depth(
+    depth: u32,
+    position: Option<&Position>,
+    output: &mut Output,
+) -> io::Result<()> {
     match position {
         Some(position) => output.line(&format!("Nodes: {}", perft(position, depth))),
         None => output.line("info string no position set"),
@@ -400,6 +624,49 @@ fn handle_nnue_eval(position: Option<&Position>, output: &mut Output) -> io::Res
         Some(position) => output.line(&format!("nnueeval {}", evaluate_position(position))),
         None => output.line("nnueeval none"),
     }
+}
+
+/// Handles the diagnostic `d` command: position, FEN and zobrist key.
+fn handle_display(position: Option<&Position>, output: &mut Output) -> io::Result<()> {
+    match position {
+        Some(position) => {
+            output.line("info string")?;
+            output.line(&format!("info string FEN: {}", position.to_fen()))?;
+            output.line(&format!("info string Zobrist: 0x{:016X}", position.key()))
+        }
+        None => output.line("info string No position set"),
+    }
+}
+
+/// Handles the diagnostic `eval` command: the static evaluation in centipawns.
+fn handle_eval(position: Option<&Position>, output: &mut Output) -> io::Result<()> {
+    match position {
+        Some(position) => output.line(&format!(
+            "info string Evaluation: {} cp (source: nnue net {NET_SOURCE_NAME})",
+            evaluate_position(position)
+        )),
+        None => output.line("info string No position set"),
+    }
+}
+
+/// Handles the diagnostic `checkmoves` command.
+///
+/// Every legal move is printed with its gives-check verdict, one line each,
+/// terminated by `checkmoves done` — the shape the reference's external
+/// validation against an authoritative oracle expects.
+fn handle_check_moves(position: Option<&Position>, output: &mut Output) -> io::Result<()> {
+    let Some(position) = position else {
+        output.line("info string No position set")?;
+        return output.line("checkmoves done");
+    };
+    for &mv in legal(position).as_slice() {
+        output.line(&format!(
+            "checkmove {} givescheck={}",
+            mv.to_uci(),
+            gives_check(position, mv)
+        ))?;
+    }
+    output.line("checkmoves done")
 }
 
 /// Sends the UCI identity block, the option catalogue and `uciok`.
@@ -500,68 +767,131 @@ fn handle_set_option(line: &str, searcher: &mut Searcher, output: &mut Output) -
 
 #[cfg(test)]
 mod tests {
-    use super::{TimeSetup, parse_go};
-    use crate::board::fen::STARTPOS_FEN;
-    use crate::board::position::Position;
-
-    fn startpos() -> Position {
-        Position::from_fen(STARTPOS_FEN).unwrap()
-    }
+    use super::{GoLimits, parse_go};
 
     #[test]
     fn depth_and_nodes_limiters_parse() {
-        let (by_depth, setup) = parse_go("go depth 5", None).unwrap();
-        assert_eq!(by_depth.depth, Some(5));
-        assert!(matches!(setup, Some(TimeSetup::Infinite)));
-        let (by_nodes, _) = parse_go("go nodes 1234", None).unwrap();
-        assert_eq!(by_nodes.nodes, Some(1_234));
+        let limits = parse_go("go depth 5");
+        assert_eq!(limits.depth, 5);
+        let limits = parse_go("go nodes 1234");
+        assert_eq!(limits.nodes, 1_234);
     }
 
     #[test]
     fn movetime_becomes_a_fixed_budget() {
-        let (_, setup) = parse_go("go movetime 100", None).unwrap();
-        match setup {
-            Some(TimeSetup::Fixed(milliseconds)) => assert_eq!(milliseconds, 100),
-            other => panic!("expected a fixed movetime setup, got {other:?}"),
-        }
+        let limits = parse_go("go movetime 100");
+        assert_eq!(limits.movetime, 100);
     }
 
     #[test]
-    fn clocks_are_selected_for_the_side_to_move() {
-        let white = startpos();
-        let (_, white_setup) =
-            parse_go("go wtime 1000 btime 2000 winc 0 binc 0", Some(&white)).unwrap();
-        match white_setup {
-            Some(TimeSetup::Clock(control)) => {
-                assert_eq!(control.time_left_ms, 1_000);
-                assert_eq!(control.opponent_time_ms, 2_000);
-            }
-            other => panic!("expected a clock setup, got {other:?}"),
-        }
-
-        let black =
-            Position::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1").unwrap();
-        let (_, black_setup) =
-            parse_go("go wtime 1000 btime 2000 winc 0 binc 0", Some(&black)).unwrap();
-        match black_setup {
-            Some(TimeSetup::Clock(control)) => {
-                assert_eq!(control.time_left_ms, 2_000);
-                assert_eq!(control.opponent_time_ms, 1_000);
-            }
-            other => panic!("expected a clock setup, got {other:?}"),
-        }
+    fn clocks_parse_into_their_fields() {
+        let limits = parse_go("go wtime 1000 btime 2000 winc 10 binc 20 movestogo 30");
+        assert_eq!(limits.white_time, 1_000);
+        assert_eq!(limits.black_time, 2_000);
+        assert_eq!(limits.white_inc, 10);
+        assert_eq!(limits.black_inc, 20);
+        assert_eq!(limits.moves_to_go, 30);
+        assert!(limits.has_time_control());
     }
 
     #[test]
-    fn unsupported_limiters_are_reported() {
-        assert!(parse_go("go ponder", None).is_err());
-        assert!(parse_go("go nonsense", None).is_err());
+    fn movestogo_alone_is_no_clock_and_defaults_to_depth_six() {
+        // Reference parity: `HasTimeControl` does not count `movestogo`, so the
+        // default-depth rule fires.
+        let limits = parse_go("go movestogo 40");
+        assert_eq!(limits.moves_to_go, 40);
+        assert!(!limits.has_time_control());
+        assert_eq!(limits.depth, 6);
     }
 
     #[test]
-    fn infinite_is_supported() {
-        let (limits, setup) = parse_go("go infinite", None).unwrap();
-        assert_eq!(limits.depth, None);
-        assert!(matches!(setup, Some(TimeSetup::Infinite)));
+    fn bare_go_defaults_to_depth_six() {
+        let limits = parse_go("go");
+        assert_eq!(limits.depth, 6);
+    }
+
+    #[test]
+    fn unknown_tokens_are_ignored() {
+        // The reference silently skips what it does not know; a GUI that sends
+        // an extra keyword never loses its search.
+        let limits = parse_go("go nonsense depth 4 more-nonsense");
+        assert_eq!(limits.depth, 4);
+    }
+
+    #[test]
+    fn limiter_values_are_consumed_even_when_unparsable() {
+        // `go depth` with an unparsable value: the value token is consumed and
+        // the limiter stays unset, so the default-depth rule fires.
+        let limits = parse_go("go depth notanumber");
+        assert_eq!(limits.depth, 6);
+        let limits = parse_go("go depth");
+        assert_eq!(limits.depth, 6);
+    }
+
+    #[test]
+    fn tokens_are_case_insensitive() {
+        let limits = parse_go("GO DEPTH 5 NODES 100 INFINITE");
+        assert_eq!(limits.depth, 5);
+        assert_eq!(limits.nodes, 100);
+        assert!(limits.infinite);
+    }
+
+    #[test]
+    fn mate_and_ponder_parse() {
+        let limits = parse_go("go mate 3");
+        assert_eq!(limits.mate, 3);
+        assert_eq!(
+            limits.depth, 0,
+            "a mate limiter suppresses the default depth"
+        );
+        let limits = parse_go("go ponder");
+        assert!(limits.ponder);
+        assert_eq!(
+            limits.depth, 6,
+            "ponder alone does not suppress the default depth"
+        );
+    }
+
+    #[test]
+    fn searchmoves_consumes_move_tokens_until_a_limiter_follows() {
+        let limits = parse_go("go searchmoves e2e4 d2d4 depth 3");
+        assert_eq!(limits.search_moves, ["e2e4", "d2d4"]);
+        assert_eq!(limits.depth, 3);
+        // A promotion move is move-shaped; a token that is not a move ends the
+        // list and is parsed as a limiter again.
+        let limits = parse_go("go searchmoves a7a8q depth 2");
+        assert_eq!(limits.search_moves, ["a7a8q"]);
+        assert_eq!(limits.depth, 2);
+        let limits = parse_go("go searchmoves");
+        assert!(limits.search_moves.is_empty());
+    }
+
+    #[test]
+    fn perft_is_a_go_limiter() {
+        let limits = parse_go("go perft 3");
+        assert_eq!(limits.perft_depth, 3);
+        assert_eq!(limits.depth, 0);
+    }
+
+    #[test]
+    fn infinite_and_explicit_limiters_suppress_the_default() {
+        let limits = parse_go("go infinite");
+        assert!(limits.infinite);
+        assert_eq!(limits.depth, 0);
+        let limits = parse_go("go nodes 1000");
+        assert_eq!(limits.depth, 0);
+        let limits = parse_go("go movetime 500");
+        assert_eq!(limits.depth, 0);
+    }
+
+    #[test]
+    fn default_construction_matches_the_reference_convention() {
+        // Zero means "off" everywhere, which is what makes the default-depth
+        // rule read like the reference's.
+        let limits = GoLimits::default();
+        assert_eq!(limits.depth, 0);
+        assert_eq!(limits.nodes, 0);
+        assert!(!limits.infinite);
+        assert!(!limits.ponder);
     }
 }

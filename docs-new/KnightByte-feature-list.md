@@ -164,6 +164,39 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).
 
+### Phase 5 — UCI robustness and threading (in progress)
+
+- [x] Step 0: oracle transcripts captured in `tests/golden/transcripts/` (11
+      scenarios; identity lines and timing fields masked). The five exit
+      questions answered: `stop` during depth 1 prints a depth-0 info line and
+      a `bestmove`; `ponderhit` restarts the clock from itself and re-searches
+      the ponder position from depth 1; `mate` and `searchmoves` are
+      implemented in the reference; the reported result with `Threads > 1` is
+      the reporting thread's own search; `isready` is answered during a search.
+      The capture found predecessor bug 150 (`setoption Hash` above the
+      declared maximum crashed the reference), fixed at predecessor commit
+      `acaff1f`; KnightByte was not affected (spin clamping).
+- [x] Step 1: full command surface — every UCI command word recognised
+      case-insensitively (`stop`, `ponderhit`, `debug`, `d`, `eval`,
+      `nnueregions`, `searchstats`, `checkmoves` included).
+- [x] Step 1: `go` parses into one limiter structure (depth, nodes, movetime,
+      clocks, movestogo, mate, infinite, ponder, perft, searchmoves) with
+      reference parsing: case-insensitive tokens, unknown tokens ignored,
+      values consumed even when unparsable, bare `go` and `movestogo` alone
+      search depth 6, `go perft N` runs the counter (no bestmove, as the
+      reference).
+- [x] Step 1: reference diagnostic formats — `d` (FEN and zobrist line), `eval`
+      (evaluation with the net source name), `checkmoves` (per-move
+      gives-check verdicts), `debug on/off`.
+- [x] Step 1: argv surface — `param:Name=Value` overrides validated against the
+      lever catalogue and announced (fail-fast on unknown names), other
+      arguments joined into a one-shot command line.
+- [ ] `nnueregions` / `searchstats` full instrumentation (the commands are
+      recognised and answer honestly; the king-region histogram and the search
+      instrumentation land with their features).
+- [ ] Real `stop`, `ponder`, `mate`, `searchmoves` behaviour (steps 4-6; the
+      fallback answers a legal move and an `info string`).
+
 ### Endgame and book
 
 - [ ] Syzygy WDL/DTZ probing and root ranking.

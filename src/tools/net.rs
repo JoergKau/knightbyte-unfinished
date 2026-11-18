@@ -7,6 +7,10 @@
 /// Size of the embedded network file in bytes.
 pub const NET_SIZE: usize = 6_294_672;
 
+/// Name under which the embedded network announces itself in UCI output
+/// (`eval` and the eval-source line): the file it was built from.
+pub const NET_SOURCE_NAME: &str = "jokausch.nnue";
+
 /// SHA-256 digest of the embedded network file.
 pub const NET_SHA256: &str = "0a70169ce7d75a9a5a392cd293746fc1f5191a75dc183b5b45fb69d869ce2968";
 

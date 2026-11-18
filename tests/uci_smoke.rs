@@ -82,8 +82,9 @@ fn unknown_command_is_reported_without_crashing() {
     let output = child.wait_with_output().expect("wait for knightbyte");
     assert!(output.status.success(), "engine exited with failure");
     let stdout = String::from_utf8_lossy(&output.stdout);
+    // Reference parity: the report names the lowercased command word.
     assert!(
-        stdout.contains("unknown command: this-command-does-not-exist"),
+        stdout.contains("Unknown command: this-command-does-not-exist"),
         "missing unknown-command diagnostic"
     );
 }
@@ -258,4 +259,116 @@ fn a_clocked_search_after_a_game_with_moves_returns_in_time() {
     );
     assert!(stdout.contains("info depth 1 "), "no search happened");
     assert!(stdout.contains("bestmove "), "missing bestmove");
+}
+
+/// Runs the engine on `input` with `args` and returns (stdout, success).
+fn run_engine_with_args(args: &[&str], input: &[u8]) -> (String, bool) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_knightbyte"))
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn knightbyte");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(input)
+        .expect("write UCI commands");
+    let output = child.wait_with_output().expect("wait for knightbyte");
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        output.status.success(),
+    )
+}
+
+#[test]
+fn the_step_zero_diagnostics_are_recognised() {
+    // Phase 5 step 1: the reference's diagnostic surface is recognised. The
+    // outputs mirror the reference's formats; stop and ponderhit are accepted
+    // no-ops until their steps land.
+    let stdout =
+        run_engine(b"position startpos\nd\neval\ncheckmoves\ndebug on\nstop\nponderhit\nquit\n");
+    assert!(
+        stdout.contains("info string FEN: rnbqkbnr/"),
+        "missing FEN line"
+    );
+    assert!(
+        stdout.contains("info string Zobrist: 0x"),
+        "missing zobrist line"
+    );
+    assert!(
+        stdout.contains("info string Evaluation: 27 cp (source: nnue net jokausch.nnue)"),
+        "missing evaluation line"
+    );
+    assert!(
+        stdout.contains("checkmove e2e4 givescheck="),
+        "missing checkmove lines"
+    );
+    assert!(stdout.contains("checkmoves done"), "missing the terminator");
+}
+
+#[test]
+fn go_perft_runs_the_counter_instead_of_a_search() {
+    // Reference parity: `go perft N` prints the node count and no bestmove.
+    let stdout = run_engine(b"position startpos\ngo perft 2\nquit\n");
+    assert!(stdout.contains("Nodes: 400"), "missing perft output");
+    assert!(
+        !stdout.lines().any(|line| line.starts_with("bestmove ")),
+        "go perft must not answer a bestmove"
+    );
+}
+
+#[test]
+fn a_bare_go_searches_depth_six() {
+    // Reference parity: a `go` with no limiter searches depth 6 (the old
+    // KnightByte default of 8 was a recorded deviation).
+    let stdout = run_engine(b"position startpos\ngo\nquit\n");
+    assert!(stdout.contains("info depth 6 "), "depth 6 was not reached");
+    assert!(stdout.contains("bestmove "), "missing bestmove");
+}
+
+#[test]
+fn unknown_go_tokens_are_ignored_not_rejected() {
+    // Reference parity: a `go` with an unknown token still searches instead of
+    // reporting an unsupported limiter, so a GUI never loses its move.
+    let stdout = run_engine(b"position startpos\ngo depth 2 nonsense\nquit\n");
+    assert!(
+        !stdout.contains("not supported"),
+        "the unknown token was reported as an error"
+    );
+    assert!(stdout.contains("info depth 2 "), "no search happened");
+    assert!(stdout.contains("bestmove "), "missing bestmove");
+}
+
+#[test]
+fn argv_runs_a_one_shot_command_line() {
+    // The reference's argv surface: all non-param arguments are joined into ONE
+    // UCI command line, run once, and the engine exits afterwards. A bare
+    // `go depth 1` searches the start position (the predecessor's bug-143 fix).
+    let (stdout, success) = run_engine_with_args(&["go depth 1"], b"");
+    assert!(success, "one-shot run failed");
+    assert!(stdout.contains("info depth 1 "), "no search happened");
+    assert!(stdout.contains("bestmove "), "missing bestmove");
+}
+
+#[test]
+fn argv_param_overrides_are_announced_and_applied() {
+    // `param:Name=Value` preloads a search-parameter override and announces it.
+    let (stdout, success) = run_engine_with_args(&["param:AspirationBase=33", "uci"], b"");
+    assert!(success, "param run failed");
+    assert!(
+        stdout.contains("info string param-override: AspirationBase=33 (applies to every go)"),
+        "missing the param-override announcement"
+    );
+    assert!(stdout.contains("uciok"), "missing handshake");
+}
+
+#[test]
+fn argv_param_overrides_fail_fast_on_unknown_names() {
+    // The reference aborts on an unknown override rather than silently
+    // searching with default parameters.
+    let (_stdout, success) = run_engine_with_args(&["param:NoSuchLever=5", "uci"], b"");
+    assert!(!success, "an unknown param override must fail fast");
 }
