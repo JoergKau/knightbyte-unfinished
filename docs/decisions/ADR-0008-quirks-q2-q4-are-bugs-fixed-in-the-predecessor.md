@@ -50,7 +50,12 @@ silent strength defects with no wrong result, and were fixed, not reproduced.
    `PredecessorBugs147to149Tests`; the full predecessor suite is 734/734.
 2. **KnightByte stops reproducing them** when the migration restarts. The fixed
    predecessor is the specification from Phase 1 onward; the Q2/Q3/Q4
-   reproduction is removed together with the re-pin.
+   reproduction is removed together with the re-pin. On the KnightByte side the
+   three defects are tracked as bugs **B35** (TT move marker strip,
+   `src/search/negamax.rs` `without_special_flags`), **B36** (quiescence quiet
+   test without the en-passant check, `src/search/quiescence.rs`) and **B37**
+   (correction-history quiet gate without the capture disjunct,
+   `src/search/searcher.rs`).
 3. **The Phase 4 node-identity pins are stale by decision, not by drift.** They
    describe the quirk build (14,979 / 416,533 / 3,169,859 / 6,925,762 for
    `bench 6/12/16/18`). The fixed reference measures 15,528 / 456,308 /

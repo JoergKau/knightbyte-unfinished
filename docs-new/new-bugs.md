@@ -5,8 +5,11 @@ Bugs found during the search-parity work and the migration audit rounds of
 implementation at the pinned commit); all are fixed unless marked open. B1-B17
 come from the first audit round, B18-B29 from the second round (the one that
 reached full node identity), B30-B32 from the CCRL-readiness audit that
-followed (time compliance and protocol robustness). The last section lists
-predecessor quirks that are reproduced on purpose.
+followed (time compliance and protocol robustness). B33-B34 record the
+predecessor's UCI input-handling bugs on the KnightByte side; B35-B37 record
+the defects KnightByte deliberately inherited from the reference (the former
+quirks Q2-Q4, reclassified as predecessor bugs 147-149 and fixed there). The
+last section lists predecessor quirks that are reproduced on purpose.
 
 ## B1 — Missing insufficient-material draw detection
 
@@ -538,6 +541,39 @@ predecessor quirks that are reproduced on purpose.
 - **Actual:** the search runs on the old position and answers `bestmove e7e5`.
 - **Status:** open. Differs from the predecessor; to be aligned with the decision on predecessor bug 143.
 
+## B35 — Inherited reference bug 147: castle and en-passant table moves are stripped of their marker
+
+- **Date:** 2026-11-18
+- **Build / commit:** `fdff189` (search node identity) — the strip is deliberate parity, not a port slip
+- **Platform / CPU:** all
+- **Command or FEN:** any search node whose table move is a castling or en-passant move (e.g. Kiwipete, `bench 6` position 2)
+- **Expected (post-fix reference):** a stored castling or en-passant best move comes back from the table with its marker and compares equal to the generated move — it is tried first, excluded in the singular-verification search and can earn a singular extension.
+- **Actual:** `without_special_flags` (`src/search/negamax.rs`) strips the `CASTLE`/`EN_PASSANT` flag from every table move at the probe site, reproducing the reference's lossy 16-bit packing. The stripped move never matches its generated move: not tried first, not excluded in verification, no singular extension — while still counting as "a table move exists".
+- **Reproduction:** `cargo test castle_and_en_passant_markers_are_dropped_from_a_table_move` pins the strip; the pre-fix reference behaviour is documented in the predecessor bug log, Bug 147.
+- **Status:** open — **deliberately inherited** from the reference. The reference is fixed (predecessor commit `f274b39`, which re-stamps the flags from board context at probe time); KnightByte keeps the old behaviour until the Phase 1 restart so the current binary stays green against its pinned node counts. The reproduction is removed together with the re-pin (ADR-0008). Note: KnightByte's own table packing (`pack`/`unpack` in `src/search/tt.rs`) stores the full move including flags — only the probe-site strip has to go.
+
+## B36 — Inherited reference bug 148: quiescence never searches an en-passant capture
+
+- **Date:** 2026-11-18
+- **Build / commit:** `fdff189` (search node identity) — the omission is deliberate parity, not a port slip
+- **Platform / CPU:** all
+- **Command or FEN:** `r3k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1` (Stockfish-verified; the en-passant capture is white's only capture and wins a clean pawn)
+- **Expected (post-fix reference):** an en-passant capture is a capture in quiescence: it takes the capture path (SEE prefilter, `see_ge`, MVV-LVA ordering) and is searched.
+- **Actual:** the quiescence quiet test is `position.piece_at(mv.to()) == EMPTY && !mv.is_promotion()` (`src/search/quiescence.rs`). An en-passant capture lands on an empty square, so it is classified quiet and skipped when quiet checks are off — quiescence never searches it.
+- **Reproduction:** quiescence on the fixture above returns the stand-pat score although the en-passant capture improves on it.
+- **Status:** open — **deliberately inherited** from the reference. The reference is fixed (predecessor commit `f274b39`); KnightByte keeps the old behaviour until the Phase 1 restart re-pin (ADR-0008). Fix: add `&& !mv.is_en_passant()` to the quiet test at `src/search/quiescence.rs`.
+
+## B37 — Inherited reference bug 149: the correction-history quiet gate omits the capture disjunct
+
+- **Date:** 2026-11-18
+- **Build / commit:** `fdff189` (search node identity) — the omission is deliberate parity, not a port slip
+- **Platform / CPU:** all
+- **Command or FEN:** any Exact node whose best move is an ordinary capture
+- **Expected (post-fix reference):** the quiet gate treats "destination occupied by the opponent" as a capture, so ordinary captures do NOT update the correction tables (only en passant and promotions were excluded before the fix — and captures, wrongly, passed as quiet).
+- **Actual:** KnightByte's gate omits the reference's own-occupancy disjunct entirely (`src/search/searcher.rs`): `best_move.flag() != EN_PASSANT && !best_move.is_promotion()`. Because the reference's own-occupancy test could never fire (a mover never lands on its own piece), the omission reproduces the reference's effective behaviour exactly — capture cutoffs DO update the tables.
+- **Reproduction:** search any position to an Exact node with a capture best move under `UseCorrectionHistory=true` and `UseRefCorrectionHistory=true`; the correction tables receive the capture's eval-error diff.
+- **Status:** open — **deliberately inherited** from the reference. The reference is fixed (predecessor commit `f274b39`: the gate now tests the opponent occupancy, so ordinary captures no longer count as quiet); KnightByte keeps the old behaviour until the Phase 1 restart re-pin (ADR-0008).
+
 ## Predecessor behaviour
 
 Predecessor quirks are tracked in the local quirk register, which is not part of
@@ -550,24 +586,30 @@ code evidence (a known-and-worked-around packing loss, self-contradicting
 capture classification, a gate comment that misdescribes its own line) rules out
 intentional behaviour. All three are fixed in the predecessor (commit `f274b39`,
 with the regression tests `PredecessorBugs147to149Tests`, full suite 734/734).
+KnightByte carries the same three defects as **B35, B36 and B37** above.
 Consequences for KnightByte:
 
-- KnightByte must **stop reproducing** Q2/Q3/Q4 when the migration restarts;
-  the fixed predecessor is the new specification.
+- KnightByte must **stop reproducing** them (B35/B36/B37) when the migration
+  restarts; the fixed predecessor is the new specification.
 - The Phase 4 node-identity pins (`bench 6/12/16/18` = 14,979 / 416,533 /
-  3,169,859 / 6,925,762) were captured against the quirk build and no longer
+  3,169,859 / 6,925,762) were captured against the old build and no longer
   describe the reference. New reference totals: **15,528 / 456,308 / 2,815,799 /
   6,892,874** (deterministic, two passes). They are re-captured and re-pinned in
   Phase 1 when the migration restarts; until then the KnightByte pins describe
   the old build.
 - Q1 (singular extensions never fire) was reviewed in the same pass and left as
-  a quirk for now; its fix is a strength-affecting change that needs its own
-  measured decision (see the quirk register).
+  a quirk; ADR-0006 measured the fixed behaviour and found no gain (negative
+  point estimate).
 
 ## Open
 
-- No open defects. The search-parity gate is closed by node identity
-  (ADR-0005), which supersedes the accepted deviation of ADR-0004.
+- **B33-B37 are open by decision.** B33/B34 await the alignment with the
+  predecessor's UCI fixes, and B35/B36/B37 are the defects KnightByte
+  deliberately inherited from the reference (predecessor bugs 147-149, fixed
+  there at `f274b39`); KnightByte keeps reproducing them until the Phase 1
+  restart re-pins the node identity, so the current binary stays green against
+  its goldens. No *porting* defect is open: the search-parity gate is closed by
+  node identity (ADR-0005), which supersedes the accepted deviation of ADR-0004.
 
 ## Verified platforms
 
