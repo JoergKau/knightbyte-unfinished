@@ -15,7 +15,6 @@ use crate::board::position::Position;
 use crate::eval::nnue::evaluate_position;
 use crate::search::MAX_PLY;
 use crate::search::correction::CorrectionHistory;
-use crate::search::eval_cache::EvalCache;
 use crate::search::history::{History, Previous};
 use crate::search::killers::Killers;
 use crate::search::limits::Limits;
@@ -23,7 +22,7 @@ use crate::search::move_picker::PickerState;
 use crate::search::params::SearchParams;
 use crate::search::pv::PvTable;
 use crate::search::time_manager::{TimeControl, TimeManager};
-use crate::search::tt::{Bound, TranspositionTable, TtEntry, score_from_tt, score_to_tt};
+use crate::search::tt::{Bound, TtEntry, score_from_tt, score_to_tt};
 use crate::types::color::{BLACK, Color, WHITE};
 use crate::types::r#move::Move;
 use crate::types::piece::{self, EMPTY};
@@ -93,8 +92,7 @@ pub struct SearchResult {
 
 /// Shared search state plus the iterative-deepening driver.
 pub struct Searcher {
-    pub(crate) tt: TranspositionTable,
-    pub(crate) eval_cache: EvalCache,
+    pub(crate) tables: crate::search::tables::SharedTables,
     pub(crate) history: History,
     pub(crate) correction: CorrectionHistory,
     pub(crate) killers: Killers,
@@ -159,8 +157,7 @@ impl Searcher {
     /// that stack is only one megabyte.
     pub fn new(tt_megabytes: usize) -> Self {
         Self {
-            tt: TranspositionTable::new(tt_megabytes),
-            eval_cache: EvalCache::new(2),
+            tables: crate::search::tables::SharedTables::new(tt_megabytes),
             history: History::new(),
             correction: CorrectionHistory::new(),
             killers: Killers::new(),
@@ -193,8 +190,8 @@ impl Searcher {
     /// `ucinewgame` and each benchmark position call this, which is what makes
     /// benchmark node counts reproducible from run to run.
     pub fn clear(&mut self) {
-        self.tt.clear();
-        self.eval_cache.clear();
+        self.tables.tt.clear();
+        self.tables.eval_cache.clear();
         self.history.clear();
         self.correction.clear();
         self.killers.clear();
@@ -253,12 +250,16 @@ impl Searcher {
 
     /// Returns the transposition-table occupancy in permill.
     pub fn hashfull(&self) -> u16 {
-        self.tt.hashfull()
+        self.tables.tt.hashfull()
     }
 
     /// Resizes the transposition table to `megabytes`.
+    ///
+    /// The exclusive borrow holds because `setoption` arrives when no search
+    /// is active (the UCI loop's join-first rule), so no other thread holds
+    /// a handle to the shared tables.
     pub fn set_hash(&mut self, megabytes: usize) {
-        self.tt.resize(megabytes.clamp(1, 1024));
+        self.tables.resize(megabytes.clamp(1, 1024));
     }
 
     /// Sets the per-move time overhead in milliseconds.
@@ -339,7 +340,7 @@ impl Searcher {
         self.killers.clear();
         self.reset_stacks();
         *self.nodes_per_move = [0; 64 * 64];
-        self.tt.new_generation();
+        self.tables.tt.new_generation();
 
         let root_moves = crate::board::movegen::legal(position);
         if root_moves.is_empty() {
@@ -425,7 +426,7 @@ impl Searcher {
                 nps: nps_of(best.nodes, time_ms),
                 // Read once per completed iteration, not per node: the
                 // occupancy is only published on the `info` line.
-                hashfull: self.tt.hashfull(),
+                hashfull: self.tables.tt.hashfull(),
                 pv: best.pv.clone(),
             });
 
@@ -533,12 +534,13 @@ impl Searcher {
     pub(crate) fn evaluate(&mut self, position: &Position) -> i32 {
         let key = position.key();
         if self.params.use_eval_cache
-            && let Some(cached) = self.eval_cache.probe(key)
+            && let Some(cached) = self.tables.eval_cache.probe(key)
         {
             return i32::from(cached);
         }
         let value = evaluate_position(position);
-        self.eval_cache
+        self.tables
+            .eval_cache
             .store(key, value.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
         value
     }
@@ -689,8 +691,8 @@ impl Searcher {
     /// The generation is stamped here so every search-code caller records the
     /// same value the ageing policy expects.
     pub(crate) fn store_tt(&self, mut entry: TtEntry) {
-        entry.generation = self.tt.generation();
-        self.tt.store(entry);
+        entry.generation = self.tables.tt.generation();
+        self.tables.tt.store(entry);
     }
 
     /// Converts a stored score back to search terms.

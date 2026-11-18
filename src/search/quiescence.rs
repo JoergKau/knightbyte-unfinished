@@ -70,7 +70,7 @@ impl Searcher {
         let mut tt_eval: Option<i32> = None;
         let mut tt_probe: Option<crate::search::tt::TtEntry> = None;
         if self.params.use_qs_tt_probe
-            && let Some(entry) = self.tt.probe(position.key())
+            && let Some(entry) = self.tables.tt.probe(position.key())
         {
             tt_probe = Some(entry);
             let stored_eval = i32::from(entry.eval);

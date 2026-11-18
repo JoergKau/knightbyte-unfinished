@@ -258,6 +258,13 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       the reference binary. Every `go` limiter is now implemented; the
       step-1 fallback (answering a legal move for unsupported limiters) is
       gone.
+- [x] Step 7: the transposition table and the evaluation cache live behind
+      the `SharedTables` Arc handle (`src/search/tables.rs`) — both tables
+      were already lock-free inside (`&self` probe/store/clear with
+      atomics); resize takes the exclusive borrow, which the join-first
+      rule guarantees to find. B38 fixed: the table clear zeroes in
+      parallel above 64 MB, bounding even the first clear after a fresh
+      1 GB resize at 59–64 ms.
 
 ### Endgame and book
 

@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-18 (Phase 5 steps 0–6 done — step 6 implemented `go mate N` (first iteration proving a mate within N; unbounded otherwise) and `go searchmoves` (root restriction; empty/illegal-only lists ignored — the restricted cold run is node-identical to the reference binary); every `go` limiter is now implemented)  
+**Last updated:** 2026-11-18 (Phase 5 steps 0–7 done — step 7 moved both tables behind the `SharedTables` Arc handle for the step-8 workers and fixed B38 with parallel table zeroing: the first clear after a 1 GB resize now costs 59–64 ms)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
@@ -43,15 +43,17 @@ implemented `go mate N` (stops at the first iteration proving a mate within
 N moves, unbounded otherwise) and `go searchmoves` (root restriction; empty
 and illegal-only lists are ignored; the restricted cold run is
 node-identical to the reference binary). Every `go` limiter is now
-implemented. The step-0
+implemented. **Step 7** moved the transposition table and the evaluation
+cache behind the shared `Arc` handle (`src/search/tables.rs`) that the
+step-8 workers will clone per search, and fixed **B38**: the table clear
+zeroes in parallel, so even the first clear after a fresh 1 GB `Hash`
+resize costs 59–64 ms. The step-0
 capture found **predecessor
 bug 150** (`setoption Hash` above the declared maximum crashed the reference
 via an overflowing `TTable.Resize` allocation); it was fixed in the
 predecessor the same day (commit `acaff1f`, full suite 745/745). KnightByte
-was not affected (spin clamping). The step-2 measurement found **B38**: the
-first table clear after a fresh 1 GB `Hash` resize pays the OS page commit
-(~190–275 ms); step 7's bounded `ucinewgame` fixes it. Next: Phase 5 step 7
-(shared tables refactor).
+was not affected (spin clamping). Next: Phase 5 step 8 (persistent workers
+and `Threads`, the Lazy SMP core).
 
 Verification status on the last run: all 239 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
@@ -274,9 +276,9 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 ## 3. Recommended next steps, in order
 
-**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–6 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag, `go ponder`/`ponderhit`, and `go mate`/`searchmoves` — every `go` limiter is now implemented, and the ponder/mate/searchmoves behaviours were verified against the reference binary itself. **Step 7 (shared tables refactor) is next.** Details in `migration-plan.md`, Phase 5.
+**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–7 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag, `go ponder`/`ponderhit`, `go mate`/`searchmoves` (every `go` limiter implemented), and the shared-tables refactor with the parallel-zeroing bounded clear (B38 fixed). **Step 8 (persistent workers and `Threads`, the Lazy SMP core) is next.** Details in `migration-plan.md`, Phase 5.
 
-### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–6 done)
+### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–7 done)
 
 - ~~Step 2: option surface and `setoption` validation~~ — done (2026-11-18):
   full lever catalogue advertised and pinned against `levers.json`,
@@ -313,7 +315,12 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
   (empty and illegal-only lists are ignored, restricted cold run
   node-identical to the reference binary). Every `go` limiter is
   implemented; the step-1 fallback is gone.
-- Steps 7–9: shared tables, Lazy SMP workers, multi-thread stress gates.
+- ~~Step 7: shared tables refactor~~ — done (2026-11-18): both tables moved
+  behind the `SharedTables` Arc handle (`src/search/tables.rs`) for the
+  step-8 workers; resize keeps its exclusive-borrow guarantee through the
+  join-first rule. B38 fixed: parallel zeroing bounds every clear at
+  59–64 ms (was ~190–275 ms for the first clear after a 1 GB resize).
+- Steps 8–9: persistent Lazy SMP workers, multi-thread stress gates.
 - Steps 10–13: output decision, lever independence, UCI transcript tests
   against the step-0 captures, match gates (1,000 games vs the reference).
 

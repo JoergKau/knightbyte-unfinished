@@ -21,6 +21,7 @@ pub mod pv;
 pub mod quiescence;
 pub mod searcher;
 pub mod see;
+pub mod tables;
 pub mod time_manager;
 pub mod tt;
 

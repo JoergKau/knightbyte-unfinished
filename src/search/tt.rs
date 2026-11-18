@@ -249,10 +249,37 @@ impl TranspositionTable {
     }
 
     /// Removes every entry.
+    ///
+    /// The zeroing runs in parallel threads above 64 MB: a 1 GB table costs
+    /// ~50 ms to zero single-threaded, and the first clear after a resize
+    /// additionally pays the operating system's page commit for the fresh
+    /// allocation (~200 ms on the Windows host — bug B38), which the
+    /// parallel first touch divides by the thread count. Called only when
+    /// no search is active (the UCI join-first rule), so the scoped threads
+    /// never race a search.
     pub fn clear(&self) {
-        for bucket in self.buckets.iter() {
-            for slot in bucket.slots.iter() {
-                slot.store(0, Ordering::Relaxed);
+        let thread_count = std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1);
+        let size_bytes = self.buckets.len() * BUCKET_BYTES;
+        if thread_count > 1 && size_bytes >= 64 * 1024 * 1024 {
+            let chunks = self.buckets.chunks(self.buckets.len() / thread_count + 1);
+            std::thread::scope(|scope| {
+                for chunk in chunks {
+                    scope.spawn(|| {
+                        for bucket in chunk.iter() {
+                            for slot in bucket.slots.iter() {
+                                slot.store(0, Ordering::Relaxed);
+                            }
+                        }
+                    });
+                }
+            });
+        } else {
+            for bucket in self.buckets.iter() {
+                for slot in bucket.slots.iter() {
+                    slot.store(0, Ordering::Relaxed);
+                }
             }
         }
         self.generation.store(1, Ordering::Relaxed);

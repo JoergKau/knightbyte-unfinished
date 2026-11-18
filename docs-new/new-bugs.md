@@ -583,7 +583,7 @@ last section lists predecessor quirks that are reproduced on purpose.
 - **Expected:** a synchronous table clear stays inside the step-2 threshold of about 100 ms at the maximum hash size.
 - **Actual:** the steady-state clear is fine (~45–55 ms for 1 GB), but the **first** clear after a fresh resize costs ~190–275 ms: the resize reserves 1 GB of zeroed memory lazily, and the clear's first touch pays the OS page commit. One `ucinewgame` sample under memory pressure reached ~126 ms.
 - **Reproduction:** `python tools/time_clear_hash.py target/release/knightbyte.exe` — the "Clear Hash (2nd)" line is the commit-paying first clear.
-- **Status:** open — not a search or protocol defect (node identity is untouched; the cost is a one-time page commit at game start, before the clock matters). The step-2 rule requires a log when the clear exceeds about 100 ms, and the fix is step 7's planned bounded `ucinewgame` (generation bump or parallel zeroing). Re-measure after step 7.
+- **Status:** fixed 2026-11-18 (Phase 5 step 7) — `TranspositionTable::clear` zeroes in parallel (`std::thread::scope` over bucket chunks above 64 MB, `src/search/tt.rs`), so the parallel first touch divides the page-commit cost: the first clear after a fresh 1 GB resize now measures 59-64 ms (was ~190-275 ms), inside the step-2 threshold. Re-measured with `tools/time_clear_hash.py` (three runs, all bounded); node identity is untouched.
 
 ## Predecessor behaviour
 
@@ -620,11 +620,13 @@ Consequences for KnightByte:
   behaviour, and KnightByte adopts the reference's fixes for the former quirks
   Q2-Q4 (predecessor bugs 147-149). Node identity with the bug-fixed reference
   holds at every captured depth and position.
-- **B38 is a performance note, not a correctness defect** (see its entry): the
-  first table clear after a large `Hash` resize pays the OS page commit
-  (~190-275 ms at Hash 1024 on the Windows host). Step 7 makes `ucinewgame`
-  cost bounded, as the step-2 measurement requires; node identity is
-  unaffected.
+- **No open KnightByte defects.** B33-B37 were fixed at the Phase 1 restart (`07b401c`,
+  2026-11-18): the UCI position handling follows the predecessor's decided
+  behaviour, and KnightByte adopts the reference's fixes for the former quirks
+  Q2-Q4 (predecessor bugs 147-149). Node identity with the bug-fixed reference
+  holds at every captured depth and position. B38 (the first-clear page
+  commit after a large `Hash` resize) was fixed in Phase 5 step 7 with the
+  parallel table zeroing.
 
 ## Verified platforms
 

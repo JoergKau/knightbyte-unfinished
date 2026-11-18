@@ -209,7 +209,7 @@ impl Searcher {
         let mut tt_move = Move::NONE;
         let mut tt_probe = None;
         let mut tt_eval = None;
-        if let Some(entry) = self.tt.probe(position.key()) {
+        if let Some(entry) = self.tables.tt.probe(position.key()) {
             // Bug B35 fix (reference bug 147): the table move is used as stored,
             // markers included. KnightByte's table packing keeps the full move,
             // so a stored castling or en-passant move compares equal to the
