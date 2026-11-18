@@ -9,6 +9,7 @@
 //! to 6.
 
 use std::io::{self, BufRead};
+use std::sync::Arc;
 
 use crate::board::fen::STARTPOS_FEN;
 use crate::board::movegen::{gives_check, legal};
@@ -19,6 +20,7 @@ use crate::output::Output;
 use crate::search::lever_table::{LEVERS, LeverSpec};
 use crate::search::limits::Limits;
 use crate::search::options::{OptionKind, PUBLIC_OPTIONS, UciOption, lever, public, set};
+use crate::search::pool::{SearchJob, StopFlag, WorkerPool};
 use crate::search::searcher::{MATE_LIMIT, MATE_SCORE, SearchInfo, SearchResult, Searcher};
 use crate::search::time_manager::TimeControl;
 use crate::tools::bench;
@@ -106,6 +108,10 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
         &mut output,
     )?;
     let mut active: Option<ActiveSearch> = None;
+    // Step 8: the persistent helper pool. `Threads = 1` keeps it empty; a
+    // `setoption Threads` grows and shrinks it without touching the main
+    // searcher's state.
+    let mut pool = crate::search::pool::WorkerPool::new();
 
     let mut debug_mode = false;
     for line in reader.lines() {
@@ -145,6 +151,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                 handle_set_option(
                     command,
                     searcher.as_mut().expect("restored by the join"),
+                    &mut pool,
                     &mut output,
                 )?
             }
@@ -166,7 +173,14 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             }
             parser::Command::Go => {
                 stop_search(&mut active, &mut searcher, &mut output);
-                handle_go(command, position, &mut searcher, &mut active, &mut output)?
+                handle_go(
+                    command,
+                    position,
+                    &mut searcher,
+                    &mut active,
+                    &mut pool,
+                    &mut output,
+                )?
             }
             // The flag is set and the worker joined: its one `bestmove` is
             // already on the wire (or, for a ponder search, the Q5 null
@@ -177,9 +191,13 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             // to the position and a fresh search starts with the clock
             // beginning at this moment (the step-0 capture, scenario b). A
             // `ponderhit` with no ponder search running is ignored.
-            parser::Command::PonderHit => {
-                handle_ponder_hit(&mut active, &mut searcher, &mut position, &mut output)?
-            }
+            parser::Command::PonderHit => handle_ponder_hit(
+                &mut active,
+                &mut searcher,
+                &mut position,
+                &mut pool,
+                &mut output,
+            )?,
             parser::Command::Debug => {
                 // The flag exists for reference parity; its consumers arrive
                 // with the search instrumentation.
@@ -202,9 +220,11 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             parser::Command::SearchStats => output
                 .line("info string searchstats: the search instrumentation is not ported yet")?,
             // `quit` stops and joins first: the worker finishes its
-            // `bestmove` and the process exits cleanly.
+            // `bestmove`, the helper pool shuts down, and the process exits
+            // cleanly.
             parser::Command::Quit => {
                 stop_search(&mut active, &mut searcher, &mut output);
+                pool.shutdown();
                 break;
             }
             parser::Command::Unknown => {
@@ -220,8 +240,10 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
     }
     let _ = debug_mode;
     // End of input behaves like `quit`: a still-running search is stopped,
-    // joined and answers its `bestmove` before the process exits.
+    // joined and answers its `bestmove`, and the helper pool is shut down,
+    // before the process exits.
     stop_search(&mut active, &mut searcher, &mut output);
+    pool.shutdown();
 
     Ok(())
 }
@@ -229,9 +251,6 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
 /// A search worker's join handle: the searcher comes back with the finished
 /// search result.
 type WorkerHandle = std::thread::JoinHandle<(Searcher, SearchResult)>;
-
-/// The stop-flag handle shared between the UCI loop and the search worker.
-type StopFlag = std::sync::Arc<std::sync::atomic::AtomicBool>;
 
 /// A search running on the worker thread.
 struct ActiveSearch {
@@ -596,6 +615,7 @@ fn handle_go(
     position: Option<Position>,
     state: &mut Option<Searcher>,
     active: &mut Option<ActiveSearch>,
+    pool: &mut WorkerPool,
     output: &mut Output,
 ) -> io::Result<()> {
     let limits = parse_go(line);
@@ -637,22 +657,64 @@ fn handle_go(
     // step-0 capture, scenario b). Depth and node limiters still apply.
     let search_limits = init_search_limits(&mut searcher, &limits, &position, limits.ponder);
 
-    // A fresh flag per `go`: the UCI loop keeps the handle for `stop` and
-    // the join-first fallback, the search polls it every 1024 nodes. A
-    // ponder search answers no bestmove itself; the loop decides its ending.
-    let (stop, worker) = spawn_search_worker(searcher, position, search_limits, limits.ponder)?;
-    // A spawn failure loses the moved searcher, so it is fatal: the engine
-    // exits with the error instead of continuing without its search state.
-    *active = Some(ActiveSearch {
-        stop,
-        worker,
-        ponder: limits.ponder,
+    *active = Some(spawn_active_search(
+        searcher,
+        position,
+        search_limits,
+        limits.ponder,
         limits,
-    });
+        pool,
+    )?);
     Ok(())
 }
 
-/// Spawns the search worker for one search and returns its stop-flag handle.
+/// Arms the stop flag, launches the helpers (step 8) and spawns the main
+/// worker; returns the active search.
+///
+/// With `Threads > 1` every helper gets the same job the main worker runs —
+/// the same root, the same limits minus the time budgets (only the main
+/// thread runs the time manager and reports) — plus the shared tables and a
+/// shared node counter. The main thread's result is the answer.
+fn spawn_active_search(
+    mut searcher: Searcher,
+    position: Position,
+    search_limits: Limits,
+    ponder: bool,
+    go_limits: GoLimits,
+    pool: &mut WorkerPool,
+) -> io::Result<ActiveSearch> {
+    use std::sync::atomic::AtomicU64;
+    // A fresh flag per `go`: the UCI loop keeps the handle for `stop` and
+    // the join-first fallback; every search polls it every 1024 nodes. A
+    // ponder search answers no bestmove itself; the loop decides its ending.
+    let stop = searcher.arm_stop_flag();
+    if pool.threads() > 1 {
+        let helper_limits = Limits {
+            soft_time_ms: None,
+            hard_time_ms: None,
+            ..search_limits.clone()
+        };
+        let counter = Arc::new(AtomicU64::new(0));
+        pool.launch(SearchJob {
+            position,
+            limits: helper_limits,
+            params: *searcher.params(),
+            tables: searcher.tables().clone(),
+            stop: Arc::clone(&stop),
+            helper_nodes: Arc::clone(&counter),
+        });
+        searcher.attach_helpers(counter);
+    }
+    let worker = spawn_search_worker(searcher, position, search_limits, ponder, &stop)?;
+    Ok(ActiveSearch {
+        stop,
+        worker,
+        ponder,
+        limits: go_limits,
+    })
+}
+
+/// Spawns the main search worker and returns its join handle.
 ///
 /// The worker owns its output writer (both writers lock standard output per
 /// line, so replies never interleave mid-line); the first failed write sets
@@ -669,9 +731,9 @@ fn spawn_search_worker(
     position: Position,
     search_limits: Limits,
     ponder: bool,
-) -> io::Result<(StopFlag, WorkerHandle)> {
-    let stop = searcher.arm_stop_flag();
-    let worker_stop = std::sync::Arc::clone(&stop);
+    stop: &StopFlag,
+) -> io::Result<WorkerHandle> {
+    let worker_stop = Arc::clone(stop);
     let worker = std::thread::Builder::new()
         .name("search".to_owned())
         .stack_size(SEARCH_STACK_BYTES)
@@ -688,6 +750,10 @@ fn spawn_search_worker(
                     worker_stop.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             });
+            // Step 8: the helpers stop at their next 1024-node poll once the
+            // flag is set; the main thread's result is the answer.
+            worker_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            searcher.detach_helpers();
             if result.depth == 0 {
                 // The interrupted-search answer (also for a ponder search):
                 // the depth-0 line reports the static evaluation and the
@@ -713,7 +779,7 @@ fn spawn_search_worker(
             }
             (searcher, result)
         })?;
-    Ok((stop, worker))
+    Ok(worker)
 }
 
 /// Promotes a ponder search to a normal one.
@@ -734,6 +800,7 @@ fn handle_ponder_hit(
     active: &mut Option<ActiveSearch>,
     state: &mut Option<Searcher>,
     position: &mut Option<Position>,
+    pool: &mut WorkerPool,
     output: &mut Output,
 ) -> io::Result<()> {
     use std::sync::atomic::Ordering;
@@ -771,13 +838,14 @@ fn handle_ponder_hit(
     // The clock starts at the ponderhit moment; the depth and node limiters
     // carry over.
     let search_limits = init_search_limits(&mut searcher, &job.limits, &pondered, false);
-    let (stop, worker) = spawn_search_worker(searcher, pondered, search_limits, false)?;
-    *active = Some(ActiveSearch {
-        stop,
-        worker,
-        ponder: false,
-        limits: job.limits,
-    });
+    *active = Some(spawn_active_search(
+        searcher,
+        pondered,
+        search_limits,
+        false,
+        job.limits,
+        pool,
+    )?);
     Ok(())
 }
 
@@ -1067,8 +1135,13 @@ fn kind_name(kind: OptionKind) -> &'static str {
 /// with an `info string`, every value-level rejection (out-of-range spin,
 /// non-boolean check value, missing value) is silent and keeps the previous
 /// value, and a button acts without a value.
-fn handle_set_option(line: &str, searcher: &mut Searcher, output: &mut Output) -> io::Result<()> {
-    if let Some(reply) = apply_set_option(line, searcher) {
+fn handle_set_option(
+    line: &str,
+    searcher: &mut Searcher,
+    pool: &mut WorkerPool,
+    output: &mut Output,
+) -> io::Result<()> {
+    if let Some(reply) = apply_set_option(line, searcher, pool) {
         output.line(&reply)?;
     }
     Ok(())
@@ -1078,7 +1151,7 @@ fn handle_set_option(line: &str, searcher: &mut Searcher, output: &mut Output) -
 ///
 /// `None` means the command was accepted silently or rejected silently —
 /// both leave no trace on the wire, exactly like the reference.
-fn apply_set_option(line: &str, searcher: &mut Searcher) -> Option<String> {
+fn apply_set_option(line: &str, searcher: &mut Searcher, pool: &mut WorkerPool) -> Option<String> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
     if tokens.get(1).copied() != Some("name") {
         return Some("info string setoption expects 'name <name>'".to_owned());
@@ -1093,7 +1166,7 @@ fn apply_set_option(line: &str, searcher: &mut Searcher) -> Option<String> {
     }
 
     if let Some(spec) = public(&name) {
-        apply_public_option(spec, &value, searcher);
+        apply_public_option(spec, &value, searcher, pool);
         return None;
     }
     if let Some(spec) = lever(&name) {
@@ -1122,11 +1195,16 @@ fn spin_value_is_valid(spec_min: Option<i64>, spec_max: Option<i64>, value: &str
 /// Applies one public option with full validation.
 ///
 /// The functional options resize the table (`Hash`), clear it (`Clear Hash`)
-/// or set the move overhead; the book, tablebase, `EvalFile` and `Contempt`
-/// names are accepted and inert until their phases land. An out-of-range or
-/// unparsable spin value is rejected silently and the previous value is kept;
-/// a check option accepts only `true`/`false`.
-fn apply_public_option(spec: &UciOption, value: &str, searcher: &mut Searcher) {
+/// or resize the helper pool (`Threads`); the book, tablebase, `EvalFile` and
+/// `Contempt` names are accepted and inert until their phases land. An
+/// out-of-range or unparsable spin value is rejected silently and the
+/// previous value is kept; a check option accepts only `true`/`false`.
+fn apply_public_option(
+    spec: &UciOption,
+    value: &str,
+    searcher: &mut Searcher,
+    pool: &mut WorkerPool,
+) {
     match spec.kind {
         OptionKind::Button => {
             // A button acts without a value; a stray value token is ignored.
@@ -1152,8 +1230,12 @@ fn apply_public_option(spec: &UciOption, value: &str, searcher: &mut Searcher) {
                 "Move Overhead" => {
                     searcher.set_move_overhead(value.parse::<u64>().expect("validated above"));
                 }
-                // `Threads` is validated (1-256) but the engine still searches
-                // on one thread until the worker pool lands in step 8.
+                // Step 8: `Threads` resizes the persistent helper pool. The
+                // main thread's state is not rebuilt; `Threads = 1` runs the
+                // single-threaded path with no helpers.
+                "Threads" => {
+                    pool.set_threads(value.parse::<usize>().expect("validated above"));
+                }
                 _ => {}
             }
         }
@@ -1188,18 +1270,20 @@ fn apply_lever(spec: &LeverSpec, value: &str, searcher: &mut Searcher) {
 mod tests {
     use super::{GoLimits, apply_set_option, eval_source_line, handshake_lines, parse_go};
     use crate::search::options::{get, lever, public};
+    use crate::search::pool::WorkerPool;
     use crate::search::searcher::Searcher;
 
     /// Applies `line` to a fresh 2 MB searcher and returns (reply, value read
     /// back through the lever accessor).
     fn applied(name: &str, value: Option<&str>) -> (Option<String>, i64) {
         let mut searcher = Searcher::new(2);
+        let mut pool = WorkerPool::new();
         let spec = lever(name).expect("test names a lever");
         let line = match value {
             Some(value) => format!("setoption name {name} value {value}"),
             None => format!("setoption name {name}"),
         };
-        let reply = apply_set_option(&line, &mut searcher);
+        let reply = apply_set_option(&line, &mut searcher, &mut pool);
         let state = get(searcher.params(), spec);
         (reply, state)
     }
@@ -1339,8 +1423,13 @@ mod tests {
     #[test]
     fn an_unknown_option_name_is_reported() {
         let mut searcher = Searcher::new(2);
+        let mut pool = WorkerPool::new();
         assert_eq!(
-            apply_set_option("setoption name NoSuchOption value 5", &mut searcher),
+            apply_set_option(
+                "setoption name NoSuchOption value 5",
+                &mut searcher,
+                &mut pool,
+            ),
             Some("info string Unknown option: NoSuchOption".to_owned())
         );
     }
@@ -1396,13 +1485,18 @@ mod tests {
     #[test]
     fn a_button_acts_without_a_value() {
         let mut searcher = Searcher::new(2);
+        let mut pool = WorkerPool::new();
         // Both forms act silently: the bare button and one with a stray value.
         assert_eq!(
-            apply_set_option("setoption name Clear Hash", &mut searcher),
+            apply_set_option("setoption name Clear Hash", &mut searcher, &mut pool),
             None
         );
         assert_eq!(
-            apply_set_option("setoption name Clear Hash value 5", &mut searcher),
+            apply_set_option(
+                "setoption name Clear Hash value 5",
+                &mut searcher,
+                &mut pool
+            ),
             None
         );
     }
@@ -1410,16 +1504,21 @@ mod tests {
     #[test]
     fn hash_values_outside_the_declared_range_are_rejected() {
         let mut searcher = Searcher::new(2);
+        let mut pool = WorkerPool::new();
         for bad in ["0", "999999", "abc"] {
             assert_eq!(
-                apply_set_option(&format!("setoption name Hash value {bad}"), &mut searcher),
+                apply_set_option(
+                    &format!("setoption name Hash value {bad}"),
+                    &mut searcher,
+                    &mut pool,
+                ),
                 None,
                 "Hash value {bad} must be rejected silently"
             );
         }
         // A valid value is accepted silently.
         assert_eq!(
-            apply_set_option("setoption name Hash value 32", &mut searcher),
+            apply_set_option("setoption name Hash value 32", &mut searcher, &mut pool),
             None
         );
     }
@@ -1427,28 +1526,34 @@ mod tests {
     #[test]
     fn threads_is_validated_but_the_engine_stays_single_threaded() {
         let mut searcher = Searcher::new(2);
+        let mut pool = WorkerPool::new();
         // Below the minimum and above the maximum: rejected silently.
         for bad in ["0", "999"] {
             assert_eq!(
                 apply_set_option(
                     &format!("setoption name Threads value {bad}"),
-                    &mut searcher
+                    &mut searcher,
+                    &mut pool,
                 ),
                 None,
                 "Threads value {bad} must be rejected silently"
             );
         }
-        // In range: accepted silently (the pool arrives in step 8).
+        // In range: accepted silently. `Threads = 1` keeps the pool empty;
+        // a bigger value grows it (the pool behaviour itself is covered by
+        // the step-8 pool tests).
         for good in ["1", "256"] {
             assert_eq!(
                 apply_set_option(
                     &format!("setoption name Threads value {good}"),
-                    &mut searcher
+                    &mut searcher,
+                    &mut pool,
                 ),
                 None,
                 "Threads value {good} must be accepted"
             );
         }
+        assert_eq!(pool.threads(), 256, "the accepted value reached the pool");
     }
 
     #[test]
@@ -1465,6 +1570,7 @@ mod tests {
     #[test]
     fn public_inert_options_are_accepted_silently() {
         let mut searcher = Searcher::new(2);
+        let mut pool = WorkerPool::new();
         // Book, tablebase, EvalFile and Contempt names are known (advertised)
         // but inert until their phases land; they must not be reported as
         // unknown.
@@ -1479,14 +1585,18 @@ mod tests {
             "setoption name Contempt value -10",
         ] {
             assert_eq!(
-                apply_set_option(line, &mut searcher),
+                apply_set_option(line, &mut searcher, &mut pool),
                 None,
                 "{line} must be accepted silently"
             );
         }
         // Their spin/check values are still validated.
         assert_eq!(
-            apply_set_option("setoption name Book Depth value 200", &mut searcher),
+            apply_set_option(
+                "setoption name Book Depth value 200",
+                &mut searcher,
+                &mut pool
+            ),
             None,
             "an out-of-range inert value must be rejected silently, not applied"
         );
@@ -1495,8 +1605,9 @@ mod tests {
     #[test]
     fn a_malformed_setoption_is_reported() {
         let mut searcher = Searcher::new(2);
-        assert!(apply_set_option("setoption value 5", &mut searcher).is_some());
-        assert!(apply_set_option("setoption", &mut searcher).is_some());
+        let mut pool = WorkerPool::new();
+        assert!(apply_set_option("setoption value 5", &mut searcher, &mut pool).is_some());
+        assert!(apply_set_option("setoption", &mut searcher, &mut pool).is_some());
     }
 
     #[test]
@@ -1651,6 +1762,7 @@ mod tests {
     /// one searcher and returns the last (reply, lever state).
     fn applied_after(name: &str, values: &[&str]) -> (Option<String>, i64) {
         let mut searcher = Searcher::new(2);
+        let mut pool = WorkerPool::new();
         let spec = lever(name).expect("test names a lever");
         let mut reply = None;
         for value in values {
@@ -1659,7 +1771,7 @@ mod tests {
             } else {
                 format!("setoption name {name} value {value}")
             };
-            reply = apply_set_option(&line, &mut searcher);
+            reply = apply_set_option(&line, &mut searcher, &mut pool);
         }
         (reply, get(searcher.params(), spec))
     }

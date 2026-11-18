@@ -17,6 +17,7 @@ pub mod move_picker;
 pub mod negamax;
 pub mod options;
 pub mod params;
+pub mod pool;
 pub mod pv;
 pub mod quiescence;
 pub mod searcher;

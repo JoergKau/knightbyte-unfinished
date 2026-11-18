@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-18 (Phase 5 steps 0–7 done — step 7 moved both tables behind the `SharedTables` Arc handle for the step-8 workers and fixed B38 with parallel table zeroing: the first clear after a 1 GB resize now costs 59–64 ms)  
+**Last updated:** 2026-11-18 (Phase 5 steps 0–8 done — step 8 built the persistent Lazy SMP pool: `Threads` resizes the pool, helpers search the same job with their own persistent state, only the main thread reports the aggregate node counts; `Threads=1` pins unchanged)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
@@ -47,15 +47,24 @@ implemented. **Step 7** moved the transposition table and the evaluation
 cache behind the shared `Arc` handle (`src/search/tables.rs`) that the
 step-8 workers will clone per search, and fixed **B38**: the table clear
 zeroes in parallel, so even the first clear after a fresh 1 GB `Hash`
-resize costs 59–64 ms. The step-0
+resize costs 59–64 ms. **Step 8** built the persistent Lazy SMP pool
+(`src/search/pool.rs`): `Threads` resizes the pool without touching the
+main searcher's state; every helper owns its search state (history,
+correction, killers, PV, stacks, picker) and runs the same job — same root,
+same limits minus the time budgets — publishing its node count in 2048-node
+blocks; only the main thread runs the time manager and reports
+(`reported_nodes` = own exact count + helpers' published blocks; the
+`go nodes` aggregate check happens at the 1024-node poll). Measured:
+`Threads=1` stays exact, `Threads=4` runs ~2.1× the single-threaded NPS on
+the depth-12 startpos search. The step-0
 capture found **predecessor
 bug 150** (`setoption Hash` above the declared maximum crashed the reference
 via an overflowing `TTable.Resize` allocation); it was fixed in the
 predecessor the same day (commit `acaff1f`, full suite 745/745). KnightByte
-was not affected (spin clamping). Next: Phase 5 step 8 (persistent workers
-and `Threads`, the Lazy SMP core).
+was not affected (spin clamping). Next: Phase 5 step 9 (helper diversity and
+the multi-thread stress gates).
 
-Verification status on the last run: all 239 tests pass locally on Windows
+Verification status on the last run: all 244 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
 fmt/clippy clean; all four bench pins exact and `capture_bench.py compare`
 shows every per-position delta at +0. Node identity is verified on this
@@ -197,12 +206,12 @@ Step 4 (2026-11-18) is done: `go` runs on a 16 MB worker thread, the UCI
 loop keeps reading commands while it searches, `stop` sets a shared flag
 that the search polls every 1024 nodes (the exact `go nodes` limit stays a
 per-node integer comparison), and `quit`/EOF plus every state-touching
-command stop and join a running search first. `Threads` is still validated
-and inert (one thread) until step 8.
+command stop and join a running search first. Step 8 (2026-11-18) added the
+Lazy SMP pool: `setoption Threads` resizes it, helpers persist with their
+own search state, and the main thread's result is the answer.
 
-Next action (Phase 5): step 5 `go ponder`/`ponderhit`, step 6
-`go mate`/`searchmoves`, then step 7 shared tables and step 8 Lazy SMP
-workers.
+Next action (Phase 5): step 9 stress gates (1, 2, 4, 8 threads, 500 random
+cycles), then step 10-13.
 
 ### 2.5 Inert public options
 
@@ -255,7 +264,7 @@ Syzygy optional.
 | Repetitions of earlier game positions | fixed (B31); bench could never have shown it |
 | Own book off, ponder off | trivially true: the book and ponder options are accepted and inert |
 | Hash 128/256 MB | the `Hash` option accepts 1-1024 MB (default 256) |
-| Threads | accepted, single-threaded until Phase 5 step 8 |
+| Threads | implemented (Phase 5 step 8, Lazy SMP pool; multi-thread play is stress-gated in step 9) |
 | Syzygy | not implemented (optional for CCRL, Phase 6) |
 | Windows x64 zip, README, licence | README and MIT licence exist; the release packaging, a tagged public release and a Linux build are Phase 8 |
 
@@ -278,7 +287,7 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 **State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–7 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag, `go ponder`/`ponderhit`, `go mate`/`searchmoves` (every `go` limiter implemented), and the shared-tables refactor with the parallel-zeroing bounded clear (B38 fixed). **Step 8 (persistent workers and `Threads`, the Lazy SMP core) is next.** Details in `migration-plan.md`, Phase 5.
 
-### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–7 done)
+### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–8 done)
 
 - ~~Step 2: option surface and `setoption` validation~~ — done (2026-11-18):
   full lever catalogue advertised and pinned against `levers.json`,
@@ -320,7 +329,15 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
   step-8 workers; resize keeps its exclusive-borrow guarantee through the
   join-first rule. B38 fixed: parallel zeroing bounds every clear at
   59–64 ms (was ~190–275 ms for the first clear after a 1 GB resize).
-- Steps 8–9: persistent Lazy SMP workers, multi-thread stress gates.
+- ~~Step 8: persistent workers and `Threads`~~ — done (2026-11-18): the
+  pool grows and shrinks with `setoption Threads` without touching the main
+  searcher's state; each helper owns its search state, runs the same job
+  (limits minus the time budgets), and publishes nodes in 2048-node blocks;
+  only the main thread runs the time manager and reports. Measured:
+  `Threads=4` ≈ 2.1× the single-threaded NPS (depth 12 startpos);
+  `Threads=1` pins unchanged.
+- Steps 9–13: helper-diversity stress gates, output decision, lever
+  independence, UCI transcript tests, match gates.
 - Steps 10–13: output decision, lever independence, UCI transcript tests
   against the step-0 captures, match gates (1,000 games vs the reference).
 

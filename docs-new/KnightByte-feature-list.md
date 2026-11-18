@@ -150,7 +150,7 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       attribution feeds the node-fraction term.
 - [x] Clock-imbalance weighting (two-sided, off by default, supersedes the
       one-sided time-advantage multiplier, which is on).
-- [ ] Persistent Lazy SMP workers.
+- [x] Persistent Lazy SMP workers (step 8, above).
 - [x] Full lever-catalogue surface: all 83 reference levers are advertised
       under their reference names, defaults and ranges (step 2,
       `src/search/lever_table.rs`), plus three KnightByte-only research
@@ -265,6 +265,18 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       rule guarantees to find. B38 fixed: the table clear zeroes in
       parallel above 64 MB, bounding even the first clear after a fresh
       1 GB resize at 59–64 ms.
+- [x] Step 8: the persistent Lazy SMP pool (`src/search/pool.rs`) —
+      `setoption Threads` resizes it without touching the main searcher's
+      state; every helper owns its search state (history, correction,
+      killers, PV, stacks, picker), persists between searches, and runs the
+      same job as the main thread (same root, same limits minus the time
+      budgets), publishing its node count in 2048-node blocks from the
+      1024-node poll. Only the main thread runs the time manager, prints
+      `info` and answers `bestmove`; the reported `nodes` and the
+      `go nodes` limit use the aggregate while helpers are attached.
+      `Threads=1` runs the single-threaded path unchanged (exact node pins).
+      Measured on the Windows host: `Threads=4` ≈ 2.1× the single-threaded
+      NPS at depth 12 on the start position.
 
 ### Endgame and book
 

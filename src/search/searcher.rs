@@ -11,6 +11,9 @@
 //! thread can raise arrives with the threading phase; the node limit already
 //! exercises the same early-exit path and keeps the tables honest.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::board::position::Position;
 use crate::eval::nnue::evaluate_position;
 use crate::search::MAX_PLY;
@@ -141,6 +144,14 @@ pub struct Searcher {
     /// for the current search. Empty means no restriction. Set once per
     /// search in [`Searcher::search`], read at every root node.
     pub(crate) root_filter: Vec<Move>,
+    /// Step 8 (Lazy SMP): the shared node counter the HELPER threads publish
+    /// to, while helpers are attached. The main thread never publishes — its
+    /// own count stays exact, which is what keeps the `Threads=1` node pins
+    /// bit-identical. `None` = no helpers (the single-threaded path).
+    pub(crate) helper_nodes: Option<Arc<AtomicU64>>,
+    /// This searcher's node count already published to the shared counter
+    /// (the block frontier; only helpers publish).
+    pub(crate) published_nodes: u64,
     /// Number of completed iterations; the first one always runs to the end.
     pub(crate) completed_depth: i32,
     /// When the trace flag is on, every search node writes one ledger line to
@@ -180,6 +191,8 @@ impl Searcher {
             start: std::time::Instant::now(),
             stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             root_filter: Vec::new(),
+            helper_nodes: None,
+            published_nodes: 0,
             completed_depth: 0,
             trace: std::env::var_os("KNIGHTBYTE_TRACE").is_some(),
         }
@@ -334,6 +347,7 @@ impl Searcher {
         self.limits = limits;
         self.completed_depth = 0;
         self.nodes = 0;
+        self.published_nodes = 0;
         self.seldepth = 0;
         self.stopped = false;
         self.pv.reset();
@@ -410,7 +424,7 @@ impl Searcher {
             best.score = score;
             best.depth = depth;
             best.seldepth = self.seldepth;
-            best.nodes = self.nodes;
+            best.nodes = self.reported_nodes();
             best.pv = pv;
             self.completed_depth = depth;
             if let Some(&first) = best.pv.first() {
@@ -466,7 +480,7 @@ impl Searcher {
             }
         }
 
-        best.nodes = self.nodes;
+        best.nodes = self.reported_nodes();
         best.seldepth = self.seldepth;
         best
     }
@@ -551,21 +565,84 @@ impl Searcher {
     /// join-first fallback for protocol-breaking commands); the search polls
     /// it every 1024 nodes and before every iteration. Arming before every
     /// `go` also clears any flag left over from a previous search.
-    pub fn arm_stop_flag(&mut self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
-        use std::sync::Arc;
-        use std::sync::atomic::AtomicBool;
-        let flag = Arc::new(AtomicBool::new(false));
+    pub fn arm_stop_flag(&mut self) -> Arc<std::sync::atomic::AtomicBool> {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.stop_flag = Arc::clone(&flag);
         flag
+    }
+
+    /// Returns the shared tables (the step-7 handle).
+    pub fn tables(&self) -> &crate::search::tables::SharedTables {
+        &self.tables
+    }
+
+    /// Adopts `flag` as this searcher's stop flag instead of arming a fresh
+    /// one.
+    ///
+    /// The worker pool uses this to give a helper the main search's flag, so
+    /// the helper's iteration ends when the main thread's does.
+    pub fn use_stop_flag(&mut self, flag: Arc<std::sync::atomic::AtomicBool>) {
+        self.stop_flag = flag;
+    }
+
+    /// Replaces the shared tables (the step-7 handle).
+    ///
+    /// The worker pool swaps the shared handle in before every helper
+    /// search, so all threads always probe the same table.
+    pub fn set_tables(&mut self, tables: crate::search::tables::SharedTables) {
+        self.tables = tables;
+    }
+
+    /// Attaches the shared node counter of a helper search.
+    ///
+    /// While attached, the reported node counts are this searcher's exact
+    /// count plus the helpers' published blocks, and the node limit is also
+    /// checked against that aggregate at the 1024-node poll.
+    pub fn attach_helpers(&mut self, helper_nodes: Arc<AtomicU64>) {
+        self.helper_nodes = Some(helper_nodes);
+    }
+
+    /// Detaches the shared node counter (back to the exact single-threaded
+    /// reporting).
+    pub fn detach_helpers(&mut self) {
+        self.helper_nodes = None;
+    }
+
+    /// Publishes this searcher's unpublished node block to the shared
+    /// counter.
+    ///
+    /// Helpers call this from the 1024-node poll, where it publishes only
+    /// full 2048-node blocks (no per-node atomic), and once with `force` when
+    /// their search ends, which flushes the final partial block. The main
+    /// thread never publishes (its count stays exact).
+    pub fn publish_node_blocks(&mut self, force: bool) {
+        if let Some(counter) = &self.helper_nodes {
+            let unpublished = self.nodes - self.published_nodes;
+            if unpublished > 0 && (force || unpublished >= 2048) {
+                counter.fetch_add(unpublished, Ordering::Relaxed);
+                self.published_nodes = self.nodes;
+            }
+        }
+    }
+
+    /// Returns the node count this searcher reports: its own exact count
+    /// plus, while helpers are attached, the helpers' published blocks.
+    pub fn reported_nodes(&self) -> u64 {
+        self.nodes
+            + self
+                .helper_nodes
+                .as_ref()
+                .map_or(0, |counter| counter.load(Ordering::Relaxed))
     }
 
     /// Returns whether the search must stop before visiting another node.
     ///
     /// Two checks stay on every node, and they are plain integer comparisons:
-    /// the exact `go nodes` limit, and the remembered stop decision. The
-    /// expensive inputs — the wall clock and the shared stop flag — are
-    /// polled only every 1024 nodes (the plan's step-4 rule: no clock read
-    /// and no atomic access per node).
+    /// the exact `go nodes` limit against this thread's own count, and the
+    /// remembered stop decision. The expensive inputs — the wall clock, the
+    /// shared stop flag and the helpers' published node blocks — are touched
+    /// only every 1024 nodes (the plan's step-4 rule: no clock read and no
+    /// atomic access per node).
     pub(crate) fn should_stop(&mut self) -> bool {
         use std::sync::atomic::Ordering;
         if self.stopped {
@@ -579,11 +656,23 @@ impl Searcher {
         }
         // `nodes` was incremented before this call, so the polling window
         // fires once every 1024 visited nodes.
-        if self.nodes & 1023 == 0
-            && (self.stop_flag.load(Ordering::Relaxed)
-                || self.time_manager.should_stop(self.now_ms()))
-        {
-            self.stopped = true;
+        if self.nodes & 1023 == 0 {
+            // Step 8: helpers publish their counts in blocks; with helpers
+            // attached, the node limit is enforced on the aggregate here.
+            if self.helper_nodes.is_some() {
+                self.publish_node_blocks(false);
+                if let Some(limit) = self.limits.nodes
+                    && self.reported_nodes() >= limit
+                {
+                    self.stopped = true;
+                    return true;
+                }
+            }
+            if self.stop_flag.load(Ordering::Relaxed)
+                || self.time_manager.should_stop(self.now_ms())
+            {
+                self.stopped = true;
+            }
         }
         self.stopped
     }
