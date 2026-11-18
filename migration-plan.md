@@ -1,8 +1,8 @@
 # KnightByte â€” Migration Plan: the predecessor C# engine â†’ Rust
 
-**Status:** Phase 0 complete; Phase 1 oracle capture and Phase 2 perft are complete; Phase 3 scalar evaluation is bit-exact. SIMD kernels and the incremental accumulator are deferred to the performance phase. Phase 4 (search), including 4d time management and lever exposure, is complete: the search is node-identical to the reference (ADR-0005, which supersedes the ADR-0004 deviation); `bench 6/12/16/18` match exactly. Next: Phase 5.  
+**Status:** Phase 0 complete; Phase 1 oracle capture and Phase 2 perft are complete; Phase 3 scalar evaluation is bit-exact. SIMD kernels and the incremental accumulator are deferred to the performance phase. Phase 4 (search), including 4d time management and lever exposure, is complete: the search is node-identical to the reference (ADR-0005, which supersedes the ADR-0004 deviation). **MIGRATION ON HOLD; PREDECESSOR BUGS FIXED IN TWO ROUNDS (2026-11-18).** Round 1: bugs 143 to 145 fixed in the predecessor (commit bffe98a, with unit tests and the full unit suite passing); bug 146 was not reproduced. Round 2: former quirks Q2, Q3 and Q4 were reviewed against the predecessor source, reclassified as predecessor bugs 147 to 149, and fixed in the predecessor (commit f274b39, regression tests `PredecessorBugs147to149Tests`, full suite 734/734). The fixes change the reference's search behaviour: the new reference bench totals are **15,528 / 456,308 / 2,815,799 / 6,892,874** (`bench 6/12/16/18`, deterministic over two passes) and replace the pins 14,979 / 416,533 / 3,169,859 / 6,925,762, which describe the old quirk build. When the migration restarts, KnightByte must remove its Q2/Q3/Q4 reproduction and re-pin against the new totals in Phase 1; Q1 (singular extensions never fire) stays a reproduced quirk — ADR-0006 measured the fixed behaviour and found no gain (negative point estimate). No Phase 5 step has been implemented. Phase 5 is planned as 14 ordered steps (0-13, see its section).
 **Companion documents:** `project-rules.md`, `additional-nodes.md`, `maximizing_performance_in_a_rust_uci_chess_engine.md`  
-**Source of behaviour:** the predecessor C# tree (internal, not published with KnightByte)  
+**Source of behaviour:** the predecessor C# tree (kept in the migration folder outside this repository; during the migration everything inside the repository is published)  
 **Target:** a headless UCI engine named **KnightByte**, MIT licensed, built with the current stable Rust toolchain (`rustc 1.100.0` at the time of writing).
 
 > This is an internal engineering plan. Do not copy paths to internal/reference trees into shipped code, comments, tests, option names or public documentation. Credits and third-party notices belong in the project's own documentation, not in source files.
@@ -30,7 +30,7 @@ The project succeeds when all of the following are true:
 * A GUI, a web service, a cloud trainer, or an opening-book authoring tool.
 * Intel macOS, Linux ARM and Windows ARM.
 * Search-strength tuning before parity is proven. Tuning starts only after the golden bench, perft and evaluation gates pass.
-* Copying code from the GPL reference engines. They are design references only.
+* Copying code from the GPL reference engines. They are design references only. but their code can be a blueprint to write and optimize our code. 
 
 ---
 
@@ -45,7 +45,7 @@ These rules are non-negotiable and apply to every phase.
 | **All levers visible** | The C# predecessor has 12 public options and 83 hidden research levers (95 option names in total). KnightByte exposes the full catalog as visible UCI options, with the same defaults/ranges, and keeps the count nearly equal. |
 | **MIT only** | KnightByte is MIT. The reference Rust engines and the reference C++ universal-build source are GPL-3.0: read them for architecture, never paste code. Port from the MIT C# tree. |
 | **No engine/author names in code** | No reference-engine names, blueprint names, author names or company names in `.rs` files, comments, test names or option names. Credits live in project documentation only. |
-| **No references to unpublished files** | Code, tests and public docs must not point at the internal predecessor tree or `reference_engines/`. Those trees stay local and git-ignored. |
+| **Predecessor material during the migration** | The predecessor tree and the migration files live in the migration folder outside the repository. Everything inside the repository is published, and files may refer to the predecessor. The publishing policy for predecessor material is decided at the end of the migration. |
 | **Small files, inline docs** | Split modules rather than growing a 2,000-line file. Document every public item and every non-obvious invariant. |
 | **Tests are migrated, not reinvented** | Port the C# test suite where it makes sense. Every FEN constant is verified against the locally installed Stockfish at test time (`/opt/homebrew/bin/stockfish` on macOS; `KNIGHTBYTE_STOCKFISH` may override the path). |
 | **No warnings** | CI builds with warnings denied. `unsafe` blocks carry a `// SAFETY:` comment explaining the invariant. |
@@ -163,7 +163,7 @@ KnightByte/
 â””â”€â”€ .github/workflows/           # macOS arm64, Linux x64, Windows x64
 ```
 
-**Internal trees stay local:** add the internal predecessor tree, `reference_engines/` and any raw capture dumps to `.gitignore`. If a captured golden file is needed by the published tests, commit the derived values (not the source tree) and document how they were produced.
+**Predecessor tree:** it lives in the migration folder outside the repository, not in the repository. Golden files used by the tests are committed as derived values, and each one is documented with how it was produced. The publishing policy for predecessor material is decided at the end of the migration.
 
 **Crate policy:** keep dependencies close to zero. A chess engine needs no async runtime, no logging framework and no serialization framework in the hot path. Every dependency must be justified in an ADR, audited for license compatibility, and kept out of the search/evaluation path.
 
@@ -261,7 +261,7 @@ A phase is not done because the code compiles. It is done when its gate passes:
   - a stable JSON schema/version and a baseline directory.
 - [ ] Build `tools/uci_oracle.py`: runs two engine binaries with the same script and diffs node counts, best moves, eval lines and option sets.
 - [ ] Build `tools/time_to_depth.py`: a fixed 20-position set (openings, middlegames, endgames, tactics), fixed time controls, depth and NPS per position.
-- [x] Record the initial golden values; the C# tree itself remains git-ignored.
+- [x] Record the initial golden values; the C# tree itself stays in the migration folder outside the repository.
 
 **Exit gate:** the initial oracle is reproducible and the golden files are versioned. A full per-position trace and the expanded evaluation set remain follow-up work for the search-parity phase. Any reference nondeterminism is documented (the M4 `movetime` variance is already recorded).
 
@@ -315,7 +315,7 @@ A phase is not done because the code compiles. It is done when its gate passes:
 
 **Progress:** 4a-4d complete, including the full time-management port
 (allocation, panic mode, stability ladders, clock imbalance, minimum-depth
-guard, per-move node attribution) and lever exposure (39 of 83 wired). The
+guard, per-move node attribution) and lever exposure (36 of the 83 reference levers exposed under their reference names; 47 are not yet exposed; the lever catalogue also holds three KnightByte-only research levers, see the Phase 5 policy). The
 parity gate is **passed with exact node identity** (ADR-0005, 2026-11-17).
 The first audit round (B1-B17) had closed the gate as a documented
 deviation (ADR-0004); a second round, driven by per-node ledgers of both
@@ -339,17 +339,23 @@ of depths 1-8; the audit record is `docs/audit/migration-audit.md`.
 - [x] `search/quiescence.rs` (parity pass): recapture/promotion narrowing (lever `UseQsNarrowing`, off by default, matching the reference).
 - [x] `search/time_manager.rs` (full port): move-time and clock allocation with soft/hard budgets and move overhead, tournament ten-move cap, sudden-death increment, tactical floor, safety buffer, panic mode, the legacy PV-stability multipliers, the stable-TM three-signal scaler (best-move ladder, score ladder, node-fraction term), the five-iteration minimum-depth guard, one-sided time advantage, two-sided clock imbalance and per-move node attribution.
 - [x] `search/options.rs`: declarative catalogue for the 12 public options and the 39 wired research levers; generates the handshake and drives `setoption`.
-- [ ] Port the remaining levers (44 of 83). They gate reference features that ship off or are not ported (ProbCut, SEE-reach, LMR v2 and its terms, quiescence checks, book, tablebases); expose each one when its feature lands. A test that setting each lever changes the search on a probe position is still open.
+- [ ] Port the remaining levers (47 of 83 are not exposed yet). They gate reference features that ship off or are not ported (ProbCut, SEE-reach, LMR v2 and its terms, quiescence checks, book, tablebases); expose each one when its feature lands. A test that setting each lever changes the search on a probe position is still open.
 - [ ] Port the C# search tests: mate tests, PVS, LMR tables, futility, history, singular, extension cap, TT, root TT cutoff, repetition, time compliance, lever independence.
 - [ ] Build `docs/SEARCH-PARITY.md`: every C# search feature, its Rust module, its lever name, its test.
 - [x] Deterministic `bench [depth]` and `go depth|nodes`, with search tests (mate in one/two, playable PV, reproducible node totals, node limit).
 
 **Exit gate G3 + G4 (search part):** **passed** with exact node identity
-(ADR-0005, superseding ADR-0004): `bench 6/12/16/18` = 14,979 / 416,533 /
-3,169,859 / 6,925,762 and every captured per-position count identical.
-Predecessor quirks that look wrong are reproduced on purpose and logged
-(`docs-new/new-bugs.md` Q1-Q4); the most consequential is that singular
-extensions never fire in the reference.
+(ADR-0005, superseding ADR-0004) **against the predecessor build BEFORE the
+2026-11-18 bug fixes**: `bench 6/12/16/18` = 14,979 / 416,533 / 3,169,859 /
+6,925,762 and every captured per-position count identical. Those pins describe
+the quirk build and are stale since predecessor bugs 147-149 (the reclassified
+former quirks Q2-Q4) were fixed in the reference (commit f274b39); the new
+reference totals are 15,528 / 456,308 / 2,815,799 / 6,892,874 and are re-captured
+in Phase 1 when the migration restarts, together with the removal of KnightByte's
+Q2/Q3/Q4 reproduction. Q1 remains a reproduced quirk; ADR-0006 measured the
+fixed behaviour and found no gain (ADR-0008 records the Q2-Q4 reclassification). Predecessor behaviour that looks wrong is first
+recorded in the quirk register, and reclassified as a bug only with code
+evidence against intentionality, as happened for Q2-Q4.
 
 > If node counts change after a search change, it is a search change: update
 > `tests/search.rs`, `tests/golden/bench.json` and `docs/baselines.md` in the
@@ -362,15 +368,141 @@ extensions never fire in the reference.
 
 **Objective:** a robust, tournament-safe UCI engine.
 
-- [ ] `uci/parser.rs`: full command set, case-insensitive tokens, `position startpos|fen`, `moves`, all `go` limiters (`depth`, `movetime`, `wtime/btime/winc/binc`, `movestogo`, `nodes`, `mate`, `infinite`, `ponder`), `stop`, `ponderhit`, `quit`, `setoption`, `ucinewgame`, `isready`, `bench`, `perft`.
-- [ ] `uci/options.rs`: visible catalog, `option` handshake, `setoption` dispatch, button options (`Clear Hash`), type validation.
-- [ ] `uci/output.rs`: dedicated writer thread with a bounded channel; build lines once; coalesce/drop optional `info currmove` under back-pressure; flush correctly for GUIs.
-- [ ] Persistent Lazy SMP worker pool: start/stop signaling, `Threads` changes without rebuilding state, per-thread node counters padded to the cache line, main-thread aggregation, shared TT and read-only net.
-- [ ] Search control: stop flag, ponderhit, time-up checks every N nodes, no `Instant::now()` per node, no shared atomic per node.
-- [ ] `bench` command: deterministic four-position set, per-position output, total nodes and NPS; same defaults as C#.
-- [ ] `info` line parity: depth, seldepth, multipv? (single PV only, as C#), score cp/mate, nodes, nps, hashfull, tbhits, time, pv.
-- [ ] UCI transcript tests against the captured C# transcripts.
-- [ ] `fastchess` + `cutechess-cli` harness: 1,000 games vs C# at a fixed control, plus 1/2/4/8-thread smoke matches. Check legality, crashes, time losses and clean `quit`/`stop` handling.
+**Predecessor alignment (decided)**
+
+- **Reference:** the predecessor's publication folder and its local files, kept in a separate migration folder outside this repository (`C:\dev\Migration-Project`). It is a plain folder with no history of its own. It is the specification for behaviour.
+- **Quirks:** reproduced now and recorded in a local, unpublished register. Each one is checked again after the migration (`project-rules.md`). Updated 2026-11-18: Q2, Q3 and Q4 were reclassified as predecessor bugs 147-149 and fixed in the predecessor (commit f274b39); KnightByte stops reproducing them at the restart.
+- **Bugs (decided 2026-11-18):** the migration stops. The predecessor bugs are fixed in the predecessor first, then the migration resumes. Reproduced: bug 143 (`go` after `ucinewgame` without a position prints nothing), bug 144 (a rejected `position` keeps the previous position), bug 145 (an illegal move in `position` leaves a partial position). Unverified: bug 146 (helper threads may outlive the search). The details and reproduction commands are in the predecessor bug log in the migration folder. Fixed in the predecessor at commit bffe98a: a rejected `position` keeps the previous position with an error line (the loud rejection chosen over Stockfish's fatal exit), and `ucinewgame` resets to the start position. Bug 146 was not reproduced. Fixed at commit f274b39: bugs 147-149, the reclassified former quirks Q2-Q4 (TT move flag loss, quiescence skipping en-passant captures, the correction-history quiet gate testing the wrong occupancy).
+- **No new deviations in Phase 5.** Any KnightByte-only behaviour is listed in the feature list and approved first. Ideas that are worth doing after the migration, such as the helper skip table, are recorded in `docs-new/enhancements-for-knightbyte.md` and are not carried out during the migration.
+- **Levers:** all 83 reference levers are exposed with the reference names, defaults and ranges. Three KnightByte-only research levers stay (`UseCorrectionHistory`, `UseCheckAwareQuiescence`, `UseSeeApproxPrefilter`). They switch off features the reference always runs and are kept for later ablation tests. They are documented as KnightByte-only and excluded from the reference option-set check. `SingularExcludeTtCutoff` is removed in step 2.
+
+**Revised estimate:** 10-12 focused days. The 3-5 day estimate in the heading is superseded: it did not include the search-thread refactor, the shared-table refactor, the oracle transcripts or the multi-thread stress gates.
+
+**Ordering principle:** the steps follow dependencies and risk. First the oracle (what the reference actually does), then the protocol surface without threads, then single-thread search control (stop, ponder), then shared state and Lazy SMP, then the closing tests and match gates. Each step ends with:
+
+- the quality gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test --all-targets` with `KNIGHTBYTE_FEN_VERIFIER` set;
+- the bench pins for any step that touches search or threads: `bench 6/12/16/18` = the totals captured at the Phase 1 restart against the bug-fixed predecessor (the 2026-11-18 reference totals are 15,528 / 456,308 / 2,815,799 / 6,892,874; single thread, defaults). The pre-fix pins 14,979 / 416,533 / 3,169,859 / 6,925,762 are stale;
+- the documentation update required by the project rules (this checklist, `docs-new/KnightByte-feature-list.md`, and `docs-new/new-bugs.md` for any defect found). The next step does not start before this update is done.
+
+**Invariants for every step**
+
+- Protocol changes are not search changes. Node counts move only where a step says so explicitly.
+- After step 4, no clock read and no atomic access happens per node. Time and stop checks run every 1024 nodes; the exact `go nodes` limit stays a per-node integer comparison.
+- Test FENs are verified against Stockfish at test time, as before.
+
+**Step 0 - Oracle transcripts (no Rust changes, about 0.5 day)**
+
+Capture the reference engine's behaviour before writing protocol code. Cover: `go` with every limiter (`depth`, `nodes`, `movetime`, clocks, `movestogo`, `infinite`, `ponder`, `mate`, `searchmoves`); `stop` during a search and after one; `ponderhit` after `go ponder`; `ucinewgame`; `setoption` with valid, out-of-range, unknown and button values; `isready` during a search.
+
+Output: derived transcripts in `tests/golden/transcripts/`, produced by an extended `tools/oracle_capture.py`. The files are published, so the reference's identity lines are replaced by neutral placeholders and the transcripts contain no reference names, paths or source excerpts.
+
+Exit: each open question below has an answer. Questions: (1) does a `stop` during depth 1 print a `bestmove` and any `info` line? (2) does `ponderhit` restart the clock from the `ponderhit` moment? (3) are `mate` and `searchmoves` implemented, and how? (4) which thread's result does the reference report with more than one thread? (5) does it answer `isready` during a search?
+
+**Step 1 - Command surface and parser (about 0.5 day)**
+
+Recognise every UCI command, including `stop` and `ponderhit`. Command words are matched case-insensitively (accepting more input never rejects a valid line; the old doc comment in `uci/parser.rs` that calls matching case-sensitive is updated with this step). Parse `go` into one structure holding all limiters (`depth`, `nodes`, `movetime`, clocks, `movestogo`, `mate`, `infinite`, `ponder`, `searchmoves`). Match the reference's `go` parsing: unknown tokens are ignored, a `go` with no limiter searches depth 6, `movestogo` alone also searches depth 6, and `go perft N` is supported. Add the reference's diagnostic commands (`debug`, `d`, `eval`, `nnueregions`, `searchstats`, `checkmoves`) and its argv handling (`param:Name=Value` overrides and the one-shot command line). Until their steps land, `ponder`, `mate` and `searchmoves` keep today's fallback: a legal `bestmove` and an `info string`. The `go`-without-position case stays as it is until bug 143 is decided.
+
+Exit: parser table tests for every token; no change in replies for the existing commands.
+
+**Step 2 - Option surface and `setoption` validation (about 0.5 day)**
+
+Validate every `setoption` against the catalogue. Unknown names give an `info string`. Spin values outside min/max are rejected and the previous value is kept. `check` accepts only `true`/`false`. Buttons act without a value. `Threads` is validated (1-256) but still searches on one thread until step 8.
+
+Measure `Clear Hash` / `ucinewgame` at `Hash 1024`. If the synchronous clear takes more than about 100 ms, log it in `docs-new/new-bugs.md` and fix it in step 7.
+
+Remove `SingularExcludeTtCutoff` (Q1 is reproduced; ADR-0006 records that the lever gave no gain). Remove the three-lever exemption list from the option check; `UseCorrectionHistory`, `UseCheckAwareQuiescence` and `UseSeeApproxPrefilter` stay and are marked KnightByte-only. The handshake also prints the reference's book, tablebase and eval-source `info string` lines.
+
+Exit: the handshake matches the step-0 transcript (after the placeholder rule) and the lever golden file, which lists 83 reference levers plus the three KnightByte-only research levers; one test per validation rule.
+
+**Step 3 - `info` line completeness (about 0.5 day)**
+
+Every `info` line from an iteration carries `depth`, `seldepth`, `score`, `nodes`, `nps`, `time`, `hashfull`, `tbhits 0`, and `pv`. `nps` is guarded against a zero time. `hashfull` is read once per iteration, not per node. The `bench` output format does not change.
+
+Exit: format tests for cp and mate scores, `nps` arithmetic and the zero-time guard.
+
+**Step 4 - Search thread, stop flag, and removal of the per-node clock read (about 1.5 days)**
+
+This is the core change of the phase.
+
+- `go` runs the search on a worker thread with an explicit 16 MB stack (the Windows main thread has 1 MB, and the recursion depth must not depend on the platform; the performance audit recommends 16 MB). The `Searcher` moves into the worker and comes back on join, so history and other persistent tables survive between searches.
+- The UCI loop keeps reading stdin during a search. `stop` sets a shared `AtomicBool`. `quit` stops, joins and exits. `isready` answers at once (as the Step 0 transcripts show).
+- Commands that touch the searcher or the position (`position`, `go`, `setoption`, `ucinewgame`, `bench`, `perft`) first stop and join a running search. This is a fallback for GUIs that break the protocol; it must never print a second `bestmove`.
+- The stop check runs every 1024 nodes. `Searcher::should_stop` currently calls `now_ms()` on every node while not stopped (`src/search/searcher.rs`, around line 484); this step removes that clock read.
+- Match the reference: the stop flag is checked before each iteration and inside the search. If `stop` arrives before depth 1 finishes, the reference returns the first legal move with no `info` line; KnightByte does the same. Note that this replaces an earlier draft rule that depth 1 always completes; that rule was not the reference's behaviour.
+- A single legal move is returned at once with `info depth 0 score cp X pv move` (not while pondering), as the reference does (quirk Q8).
+- Exactly one `bestmove` per `go`, printed by the worker after its last `info` line.
+
+Tests: `go infinite` then `stop` gives a `bestmove` within 100 ms; 200 go/stop cycles at depths 1-6 give exactly one `bestmove` each; `quit` during a search exits cleanly; bench pins unchanged.
+
+**Step 5 - `ponder` and `ponderhit` (about 0.5 day, after step 4)**
+
+`go ponder` searches with no time limit until `ponderhit` or `stop`. On `ponderhit` the time manager starts from the clock values stored with the `go` (behaviour as recorded in step 0). `stop` ends a ponder search with `bestmove 0000` when `ponderhit` has not arrived (the reference's behaviour, quirk Q5). A `ponderhit` with no active ponder search is ignored. The ponder flag is an `AtomicBool` read with the step-4 stop check.
+
+The `Ponder` option is not advertised (CCRL requires ponder off).
+
+Exit: transcript structure matches step 0; a test starts the clock at `ponderhit` with a fixed clock.
+
+**Step 6 - `go mate N` and `go searchmoves` (about 0.5 day)**
+
+`mate N` stops at the first completed iteration that proves a mate in at most N moves; other limits still apply. `searchmoves` restricts the root moves in `search_root` and has no effect when absent. Both follow the step-0 captures. If the reference does not implement one of them, KnightByte answers it the same way and records that in the feature list.
+
+Exit: tests for both; bench pins unchanged.
+
+**Step 7 - Shared tables refactor (about 0.5 day)**
+
+Move the transposition table and the evaluation cache behind a shared handle that every search thread can reference. `resize` and `clear` run only when no search is active, which step 4's join rule guarantees. Make `ucinewgame` cost bounded (generation bump or parallel zeroing), as step 2's measurement requires.
+
+Exit: pure refactor for `Threads=1`; bench pins and the existing TT tests (resize, ageing) unchanged.
+
+**Step 8 - Persistent workers and `Threads` (about 2 days, the Lazy SMP core)**
+
+- A pool of N-1 helper threads, started when `Threads > 1` and kept between searches. Each helper owns its own search state (history, correction, killers, PV, stacks, picker). Helpers must persist: history tables survive between searches, so rebuilding them per search would change the search, not only its speed.
+- Shared: the transposition table and evaluation cache from step 7, the read-only net, and the stop flag. Helpers stop when the main thread stops.
+- Only the main thread runs the time manager, prints `info`, and prints `bestmove`. Its result is the answer, as recorded in step 0.
+- Node counts: each thread publishes its count to a shared counter in blocks of 2048 nodes (no per-node atomic). `go nodes N` and the reported `nodes` use the aggregate.
+- `setoption Threads` resizes the pool without rebuilding the main thread's state; surplus helpers are joined.
+- `Threads=1` runs the step 4-7 path unchanged, with no helpers.
+
+Exit: `Threads=1` bench pins unchanged. Multi-thread node counts are not compared (non-deterministic by design, plan 7.3).
+
+**Step 9 - Helper diversity and multi-thread safety (about 1 day)**
+
+Helpers search the same iterations as the main thread, as in the reference; they start at depth 1 and differ only by their own history. A skip table for helpers is a deviation from the reference and is not part of Phase 5. It can be tested later as a Phase 7 experiment, with its own SPRT.
+
+Stress tests with 1, 2, 4 and 8 threads, 500 random `go`/`stop`/`position`/`setoption` cycles: no panic, every `bestmove` legal, exactly one `bestmove` per `go`, every TT probe key verified (the existing exact-key check). Node counts are not asserted.
+
+**Step 10 - Output decision (about 0.25 day)**
+
+The bounded-channel writer thread from the checklist is needed only if output can block the search. One `info` line per iteration cannot block it, so the synchronous writer stays for now. The decision, with the measured output time per search from step 9, is recorded in `docs/decisions/ADR-0007`. `info currmove` is added only if the step-0 transcripts show the reference emits it.
+
+**Step 11 - Lever independence (about 0.5 day)**
+
+Closes the Phase 4d open item: a probe-position test that each of the 39 wired levers changes the search (the C# suite uses the same pattern). A lever that changes nothing is logged in `docs-new/new-bugs.md`.
+
+**Step 12 - UCI transcript tests (about 0.5 day)**
+
+Compare the engine's transcripts for handshake, `position`, `go`, `stop`, `ponderhit`, `ucinewgame`, `setoption` and `bench` with the step-0 captures. Compare the order and structure of lines, the option sets, and the legality of every `bestmove`. Do not compare timing fields or `info` values; node counts are compared only at fixed depth with `Threads=1`.
+
+**Step 13 - Match gates (about 1 day of work, plus background match time)**
+
+- Smoke: short matches with fastchess or cutechess-cli at 1, 2, 4 and 8 threads against the C# engine: no illegal moves, crashes, time losses or stray stdout; clean `quit` and `stop` handling.
+- G5: 1,000 games against the C# engine on the Windows host, at the ADR-0006 control (8+0.08). Read the `Timeouts` and `Crashed` columns, not only the exit code. Runs in the background; the phase does not close until it finishes.
+
+**Dependency summary:** 0 -> 1 -> 2 -> 3 (protocol, no threads); 4 -> 5 -> 6 (single-thread search control); 7 -> 8 -> 9 (threads); 10-12 (closing); 13 (gates). Steps 1-3 are protocol-only and low risk, so they go first; they give step 4 a tested parser and option layer to build on. Step 4 is the biggest risk and the first change to the search loop.
+
+**Phase 4 carry-over (required for 100 % feature compliance, not yet scheduled).** Node identity was checked on the default configuration only. Still missing against the reference: 47 of its 83 levers, and the features they gate that are off by default there (ProbCut in its main and secondary layers, quiescence checks, SEE reach, LMR v2 and its terms, verified null move, TT extension, trio extension). Features outside the lever list are missing too: Syzygy probing, the `.ctg` book, the `EvalFile` net override, Contempt (currently inert), and the incremental accumulator and SIMD kernels (Phase 7). Each needs its own step, a parity check with the lever set, and a lever-independence test. The order is open: a proposal is to do them after Phase 5 step 13 and before Phase 6. Your decision is needed.
+
+**Scope checklist** (each item is delivered by the step named in the plan above):
+
+- [ ] `uci/parser.rs`: full command set, case-insensitive tokens, `position startpos|fen`, `moves`, all `go` limiters (`depth`, `movetime`, `wtime/btime/winc/binc`, `movestogo`, `nodes`, `mate`, `infinite`, `ponder`), `stop`, `ponderhit`, `quit`, `setoption`, `ucinewgame`, `isready`, `bench`, `perft`. (Steps 1, 4, 5, 6)
+- [ ] `uci/options.rs`: visible catalog, `option` handshake, `setoption` dispatch, button options (`Clear Hash`), type validation. (Steps 2, 7)
+- [ ] `uci/output.rs`: dedicated writer thread with a bounded channel; build lines once; coalesce/drop optional `info currmove` under back-pressure; flush correctly for GUIs. (Step 10, decision recorded in ADR-0007)
+- [ ] Persistent Lazy SMP worker pool: start/stop signaling, `Threads` changes without rebuilding state, per-thread node counters padded to the cache line, main-thread aggregation, shared TT and read-only net. (Steps 7, 8, 9)
+- [ ] Search control: stop flag, ponderhit, time-up checks every N nodes, no `Instant::now()` per node, no shared atomic per node. (Steps 4, 5)
+- [ ] `bench` command: deterministic four-position set, per-position output, total nodes and NPS; same defaults as C#. (Verified in every search step; output unchanged in step 3)
+- [ ] `info` line parity: depth, seldepth, multipv? (single PV only, as C#), score cp/mate, nodes, nps, hashfull, tbhits, time, pv. (Step 3)
+- [ ] UCI transcript tests against the captured C# transcripts. (Steps 0 and 12)
+- [ ] `fastchess` + `cutechess-cli` harness: 1,000 games vs C# at a fixed control, plus 1/2/4/8-thread smoke matches. Check legality, crashes, time losses and clean `quit`/`stop` handling. (Step 13)
 
 **Exit gate G4 + G5:** no illegal moves, no crashes, no time losses; `Threads` scaling is sane; `ucinewgame` is fast (no multi-GB TT clear); every option is visible and functional.
 

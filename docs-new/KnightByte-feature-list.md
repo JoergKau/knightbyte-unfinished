@@ -14,6 +14,13 @@ by ADR-0005. `bench 6` is asserted in `tests/search.rs` and the per-position
 counts for depths 1-8 are asserted as well. See `docs/SEARCH-PARITY.md`,
 `docs/audit/migration-audit.md` and `docs-new/new-bugs.md` (B1-B29, Q1-Q4).
 
+> **Stale since 2026-11-18 (ADR-0008):** the pins above describe the predecessor
+> build *before* predecessor bugs 147-149 (the reclassified former quirks Q2-Q4)
+> were fixed in the reference. The fixed reference measures 15,528 / 456,308 /
+> 2,815,799 / 6,892,874. KnightByte still reproduces the old build and stays
+> green against these pins; both are re-captured together at the Phase 1
+> restart.
+
 ### Engine skeleton
 
 - [x] Single `knightbyte` binary with a reusable library crate.
@@ -147,7 +154,7 @@ counts for depths 1-8 are asserted as well. See `docs/SEARCH-PARITY.md`,
 - [x] Clock-imbalance weighting (two-sided, off by default, supersedes the
       one-sided time-advantage multiplier, which is on).
 - [ ] Persistent Lazy SMP workers.
-- [ ] Full lever catalogue parity (39 of the 83 research levers are wired and
+- [ ] Full lever catalogue parity (36 of the 83 reference levers are wired and
       advertised; the remaining 44 gate reference features that ship off or
       are not ported — ProbCut, SEE-reach, LMR v2, quiescence checks, book,
       tablebases).

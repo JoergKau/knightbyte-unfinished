@@ -518,28 +518,51 @@ predecessor quirks that are reproduced on purpose.
   (`ponder`, `mate`, `searchmoves`) are still unsupported; CCRL plays with
   ponder off, so that is a Phase 5 item, not a blocker.
 
-## Predecessor quirks reproduced on purpose
+## B33 — A rejected `position` command keeps the previous position
 
-These are behaviours of the reference implementation that look wrong. They are
-reproduced for node identity, not fixed (migration-plan §5.2).
+- **Date:** 2026-11-18
+- **Build / commit:** release build of 2026-11-18 00:14 (no source change since)
+- **Platform / CPU:** Windows 11 x64
+- **Command or FEN:** `position startpos moves e2e4`, then `position fen this-is-not-a-fen`, then `nnueeval`
+- **Expected:** after a rejected `position` command the engine must not search a position the GUI did not set; either the new position is set, or no position is set and `go` says so.
+- **Actual:** `nnueeval` still reports the position after `e2e4` (-45 cp; the start position gives 27). The same happens when `position startpos moves e2e4 e2e4 d7d5` is rejected for an illegal move.
+- **Status:** open. The fix is part of the migration stop: the predecessor's behaviour is the same, and both are to be decided together.
 
-- **Q1 — Singular extensions never fire.** The verification search probes the
-  transposition table without excluding the entry that triggered it, so it
-  takes a table cutoff on that very entry. In `bench 14` the verification ran
-  2,810 times and never produced an extension. It is pure cost in both
-  engines. A deliberate fix (skip the table cutoff in a verification node) was
-  tried behind the KnightByte-only lever `SingularExcludeTtCutoff` (default
-  off) and measured over 904 games: Elo -18.7 +/- 15.2 after 800 games, no
-  gain, run stopped before the SPRT decided. The quirk stays; see ADR-0006.
-- **Q2 — Castle and en-passant table moves lose their marker.** The table packs
-  only the two squares and the promotion piece, so a stored castling or
-  en-passant move matches no generated move: it is not tried first, it is not
-  excluded in a verification, it earns no singular extension, and it stays in
-  the generated quiet/capture list.
-- **Q3 — Quiescence never searches an en-passant capture** (its target square
-  is empty, so it counts as quiet). Logged earlier as part of B6.
-- **Q4 — The correction-history quiet gate can never see a real capture**
-  (the mover's own occupancy is tested). Logged earlier as part of B5.
+## B34 — `ucinewgame` does not clear the current position
+
+- **Date:** 2026-11-18
+- **Build / commit:** release build of 2026-11-18 00:14 (no source change since)
+- **Platform / CPU:** Windows 11 x64
+- **Command or FEN:** `position startpos moves e2e4`, `ucinewgame`, `go depth 1`
+- **Expected:** a new game starts without a position, so `go` must not search the previous game's position (the reference answers nothing here; see B32 for KnightByte's answer when no position is set).
+- **Actual:** the search runs on the old position and answers `bestmove e7e5`.
+- **Status:** open. Differs from the predecessor; to be aligned with the decision on predecessor bug 143.
+
+## Predecessor behaviour
+
+Predecessor quirks are tracked in the local quirk register, which is not part of
+the published documentation. Predecessor bugs stop the migration until decided
+(`project-rules.md`). Both are described in the migration plan, Phase 5.
+
+**Reclassification (2026-11-18).** Quirks Q2, Q3 and Q4 were reviewed against the
+predecessor source and reclassified as predecessor bugs 147, 148 and 149 — the
+code evidence (a known-and-worked-around packing loss, self-contradicting
+capture classification, a gate comment that misdescribes its own line) rules out
+intentional behaviour. All three are fixed in the predecessor (commit `f274b39`,
+with the regression tests `PredecessorBugs147to149Tests`, full suite 734/734).
+Consequences for KnightByte:
+
+- KnightByte must **stop reproducing** Q2/Q3/Q4 when the migration restarts;
+  the fixed predecessor is the new specification.
+- The Phase 4 node-identity pins (`bench 6/12/16/18` = 14,979 / 416,533 /
+  3,169,859 / 6,925,762) were captured against the quirk build and no longer
+  describe the reference. New reference totals: **15,528 / 456,308 / 2,815,799 /
+  6,892,874** (deterministic, two passes). They are re-captured and re-pinned in
+  Phase 1 when the migration restarts; until then the KnightByte pins describe
+  the old build.
+- Q1 (singular extensions never fire) was reviewed in the same pass and left as
+  a quirk for now; its fix is a strength-affecting change that needs its own
+  measured decision (see the quirk register).
 
 ## Open
 
