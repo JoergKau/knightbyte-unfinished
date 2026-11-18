@@ -190,6 +190,10 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       (step 2): it was measured with no gain (ADR-0006) and the reproduced
       reference behaviour — the singular verification takes its own table
       cutoff, so singular extensions never fire — is the only code path now.
+- [x] The search reuses one `Evaluator` (B40, Phase 7 preparation): the
+      accumulator buffers are allocated once per searcher, not two vectors
+      per node. The performance decomposition lives in
+      `tests/perf_microbench.rs` (evaluation ~67% of the node budget).
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).

@@ -233,12 +233,34 @@ cycles), then step 10-13.
 `Syzygy50MoveRule`, `EvalFile`, `Contempt` are advertised and accepted but do
 nothing. This is documented on purpose; do not report them as working.
 
-### 2.6 Performance (Phase 7, not a correctness problem)
+### 2.6 Performance (Phase 7) — measured decomposition, attack order fixed
 
-About 0.36 MNPS against the reference's ~1.4 MNPS on the same host. Causes:
-full-refresh NNUE evaluation per node, copy-make per node, direction-walking
-sliders, and a non-incremental accumulator. All are Phase 7 items; do not mix
-them into other work.
+Measured on this host (release, `tests/perf_microbench.rs`, Ryzen 7 260):
+
+| Building block | Rate | Share of the 2.7 µs node budget |
+| :--- | ---: | ---: |
+| NNUE evaluation (full refresh) | ~548K/s (1.8 µs) | **~67 %** |
+| Legal move generation | ~1.5M/s | ~5 % |
+| Copy-make (one move) | ~1.5M/s | ~5 % |
+| Search (whole node) | 370K nodes/s | — |
+
+The evaluation dominates, and inside it the per-node allocation waste
+(B40, fixed: the searcher now reuses its `Evaluator`). The Phase 7 attack
+order follows the measurement and the performance document's bottom line:
+
+1. ~~Wire the reusable `Evaluator`~~ (B40, done — pins unchanged).
+2. **Incremental accumulator** (the biggest item): update ~4 feature rows
+   per move instead of a full 2 × 512-wide refresh per node.
+3. **SIMD kernels** for refresh + output (AVX-512 VNNI on this host; the
+   ADR-0001 ladder `v2 → v3 → v3-vnni → v4-vnni`).
+4. **Slider attacks** (PEXT — fast on Zen 3+ — vs magics, benchmarked).
+5. **`target-cpu` + PGO builds** (the ladder's per-variant artifacts).
+
+Gate for every step: the bench pins stay exact (15,528 / 456,308 /
+2,815,799 / 6,892,874) — a pin change is a search change and stops the
+step. Target: at least PawnForgeCS's ~1.4 MNPS single-threaded on this
+host (the plan's goal is higher: ≥1.5× the reference, ≥2.48 MNPS on the M4
+baseline host).
 
 ### 2.7 CI: macOS hosted runners are starved
 

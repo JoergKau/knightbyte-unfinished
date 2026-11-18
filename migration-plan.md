@@ -593,6 +593,14 @@ Compare the engine's transcripts for handshake, `position`, `go`, `stop`, `ponde
 
 **Objective:** convert the parity build into a faster engine without changing its node counts.
 
+**Preparation done (2026-11-18):** the performance decomposition exists
+(`tests/perf_microbench.rs`, release mode): the full-refresh evaluation
+dominates the node budget at ~67% (1.8 µs of 2.7 µs per node); movegen and
+copy-make are ~5% each. B40 (the per-node evaluation allocations; the
+reusable `Evaluator` existed but was never wired into the search) is fixed
+with the bench pins unchanged. The attack order is in `next-steps.md`
+§2.6.
+
 **Measurement protocol**
 
 * Fixed benchmark set: the four-position `bench` plus the 20-position time-to-depth set.

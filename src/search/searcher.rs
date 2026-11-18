@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::board::position::Position;
-use crate::eval::nnue::evaluate_position;
+use crate::eval::nnue::Evaluator;
 use crate::search::MAX_PLY;
 use crate::search::correction::CorrectionHistory;
 use crate::search::history::{History, Previous};
@@ -157,6 +157,9 @@ pub struct Searcher {
     pub(crate) nodes_per_move: Box<[u64; 64 * 64]>,
     /// Per-move time overhead subtracted from every budget, in milliseconds.
     pub(crate) move_overhead_ms: u64,
+    /// The reusable full-refresh evaluator over the embedded net (its two
+    /// accumulator buffers are allocated once per searcher, not per node).
+    pub(crate) evaluator: crate::eval::nnue::evaluate::Evaluator<'static>,
     /// Start of the current search, used for the time budgets.
     pub(crate) start: std::time::Instant,
     /// Cooperative stop flag shared with the UCI loop. The loop sets it on
@@ -215,6 +218,7 @@ impl Searcher {
             time_manager: TimeManager::new(),
             nodes_per_move: Box::new([0; 64 * 64]),
             move_overhead_ms: crate::search::time_manager::DEFAULT_MOVE_OVERHEAD_MS,
+            evaluator: Evaluator::new(crate::eval::nnue::embedded_net()),
             start: std::time::Instant::now(),
             stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             root_filter: Vec::new(),
@@ -586,6 +590,11 @@ impl Searcher {
     }
 
     /// Returns the static evaluation of `position`, optionally via the cache.
+    ///
+    /// The evaluation reuses this searcher's [`Evaluator`] (its accumulators
+    /// are allocated once per searcher). The earlier path called the
+    /// `evaluate_position` convenience function, which allocates two
+    /// accumulator vectors per call — pure waste at one call per node.
     pub(crate) fn evaluate(&mut self, position: &Position) -> i32 {
         let key = position.key();
         if self.params.use_eval_cache
@@ -593,7 +602,7 @@ impl Searcher {
         {
             return i32::from(cached);
         }
-        let value = evaluate_position(position);
+        let value = self.evaluator.evaluate(position);
         self.tables
             .eval_cache
             .store(key, value.clamp(i16::MIN as i32, i16::MAX as i32) as i16);

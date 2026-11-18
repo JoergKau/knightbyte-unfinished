@@ -600,6 +600,17 @@ last section lists predecessor quirks that are reproduced on purpose.
 - **Is this bug in the reference? No — it cannot be.** The reference's helpers hold .NET references to the shared `TTable` object, and `TTable.Resize` (the bug-150-fixed one) replaces the bucket array on the shared object with no exclusivity requirement; a garbage-collected reference cannot block a resize, so the crash mode does not exist there. Probed for the record (2026-11-18, publish build): `Threads 4`, `go depth 14`, the `Hash 16` resize sent mid-search — the reference never even stops the search (it completes to depth 14 and answers normally, exit code 0). The defect is a consequence of Rust's ownership rules in KnightByte's handle design, so it is logged here, not in the predecessor's log.
 - **Status:** fixed 2026-11-18 (step 9). The 500-cycle stress walk passes (8 s, seeded and therefore replayable), with per-search bounded waits, the engine's stderr captured to a file, and bestmove legality checked against the walk's mirrored position.
 
+## B40 — The search's evaluation allocated two accumulator vectors per node
+
+- **Date:** 2026-11-18
+- **Build / commit:** Phase 7 preparation (found by the performance decomposition, not by a behaviour test)
+- **Platform / CPU:** Windows 11, AMD Ryzen 7 260; release build
+- **Command or FEN:** any search (one evaluation per node)
+- **Expected:** `evaluate.rs`'s own contract — "The search will reuse an `Evaluator` instead of allocating one per position."
+- **Actual:** `Searcher::evaluate` called the `evaluate_position` convenience function, which allocates two accumulator `Vec`s per call and memsets both — two heap allocations plus two full-buffer clears per node, on top of the full-refresh refresh itself.
+- **Measured context** (`tests/perf_microbench.rs`, release, Ryzen 7 260): full-refresh evaluation ~548K/s (1.8 µs), legal move generation ~1.5M/s, copy-make ~1.5M/s; the search at 370K nodes/s (2.7 µs/node) — so the evaluation is ~67 % of the entire node budget, and the per-node allocations are part of that.
+- **Status:** fixed 2026-11-18 — the `Searcher` owns an `Evaluator` over the embedded net (allocated once); `evaluate` uses it. The values are bit-identical (the same code path), verified by the unchanged bench pins. The bigger wins (incremental accumulator, SIMD kernels, `target-cpu`/PGO builds) are the Phase 7 items proper.
+
 ## Predecessor behaviour
 
 Predecessor quirks are tracked in the local quirk register, which is not part of
