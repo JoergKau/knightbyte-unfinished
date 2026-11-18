@@ -104,16 +104,6 @@ pub struct SearchParams {
     /// Singular-beta slope: the verification window sits this many centipawns
     /// per ply below the stored score.
     pub singular_beta_slope: i32,
-    /// Whether a singular-verification node skips the transposition-table
-    /// cutoff and bound narrowing.
-    ///
-    /// The reference does not skip them: the verification search probes the
-    /// very entry that triggered it and returns on that entry's score, so its
-    /// result can never fall below the verification bound and no singular
-    /// extension ever fires. Turning this on makes the verification search
-    /// actually search the alternatives. It is a KnightByte research lever, not
-    /// a reference lever, and it changes node counts.
-    pub singular_exclude_tt_cutoff: bool,
     /// Verification fail-low margin that earns a second extension ply.
     pub singular_double_margin: i32,
     /// Verification fail-low margin that earns a third extension ply.
@@ -203,7 +193,6 @@ impl Default for SearchParams {
             use_singular_double_extensions: true,
             singular_min_depth: 8,
             singular_beta_slope: 2,
-            singular_exclude_tt_cutoff: false,
             singular_double_margin: 30,
             singular_triple_margin: 120,
             use_negative_extensions: true,
@@ -272,7 +261,6 @@ mod tests {
         assert!(params.use_singular_double_extensions);
         assert_eq!(params.singular_min_depth, 8);
         assert_eq!(params.singular_beta_slope, 2);
-        assert!(!params.singular_exclude_tt_cutoff);
         assert_eq!(params.singular_double_margin, 30);
         assert_eq!(params.singular_triple_margin, 120);
         assert!(params.use_negative_extensions);

@@ -1,7 +1,7 @@
 # ADR-0006 — Singular verification keeps the reference behaviour
 
 **Date:** 2026-11-18
-**Status:** accepted
+**Status:** accepted (the research lever was removed 2026-11-18, Phase 5 step 2)
 
 ## Context
 
@@ -55,6 +55,15 @@ disconnection.
    is 41,511 nodes) and that switching the lever on changes the search.
 4. Whether to keep or remove the lever is a project decision; removing it does
    not touch the default behaviour.
+
+**Resolution (2026-11-18, Phase 5 step 2):** the lever was removed. It was a
+KnightByte-only name that the option-surface check would have to exempt forever,
+and the experiment had shown no gain. The catalogue now holds exactly the 83
+reference levers plus the three marked KnightByte-only research levers
+(`src/search/lever_table.rs`); the verification search unconditionally takes its
+own table cutoff (the code comment at the site records the reasoning), the
+`SearchParams` field and the regression test are gone, and the node pins are
+unchanged (the default was off).
 
 ## Consequences
 

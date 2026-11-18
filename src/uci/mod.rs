@@ -16,8 +16,9 @@ use crate::board::perft::perft;
 use crate::board::position::Position;
 use crate::eval::nnue::evaluate_position;
 use crate::output::Output;
+use crate::search::lever_table::{LEVERS, LeverSpec};
 use crate::search::limits::Limits;
-use crate::search::options::{LEVERS, OptionKind, PUBLIC_OPTIONS};
+use crate::search::options::{OptionKind, PUBLIC_OPTIONS, UciOption, lever, public, set};
 use crate::search::searcher::{MATE_LIMIT, MATE_SCORE, SearchInfo, Searcher};
 use crate::search::time_manager::TimeControl;
 use crate::tools::bench;
@@ -101,7 +102,13 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
 
         match parser::parse(command) {
             parser::Command::Uci => handshake(&mut output)?,
-            parser::Command::IsReady => output.line("readyok")?,
+            // The eval-source line is restated on every `isready` (the step-0
+            // transcript shows it before each `readyok`): a GUI that attaches
+            // late still learns which evaluation the engine will use.
+            parser::Command::IsReady => {
+                output.line(&eval_source_line())?;
+                output.line("readyok")?;
+            }
             // Reference parity (the predecessor's bug-143 fix): a new game
             // resets to the start position, so `go` after `ucinewgame` never
             // searches the previous game's position. The game history is
@@ -670,22 +677,39 @@ fn handle_check_moves(position: Option<&Position>, output: &mut Output) -> io::R
 }
 
 /// Sends the UCI identity block, the option catalogue and `uciok`.
+///
+/// The three trailing `info string` lines mirror the reference's handshake:
+/// the book state, the tablebase state and the evaluation source. The option
+/// lines themselves are KnightByte's documented superset of the transcript —
+/// the reference keeps its 83 research levers hidden, the ground rules expose
+/// the full catalogue as visible options.
 fn handshake(output: &mut Output) -> io::Result<()> {
-    output.line(&format!("id name KnightByte {}", env!("CARGO_PKG_VERSION")))?;
-    output.line("id author KnightByte project")?;
+    for line in handshake_lines() {
+        output.line(&line)?;
+    }
+    Ok(())
+}
+
+/// Builds every line of the UCI handshake reply.
+fn handshake_lines() -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(format!("id name KnightByte {}", env!("CARGO_PKG_VERSION")));
+    lines.push("id author KnightByte project".to_owned());
     for option in PUBLIC_OPTIONS {
         let mut line = format!(
             "option name {} type {}",
             option.name,
             kind_name(option.kind)
         );
-        if !option.default.is_empty() {
+        // Reference parity: a string option prints its (possibly empty)
+        // default, a button prints none.
+        if option.kind != OptionKind::Button {
             line.push_str(&format!(" default {}", option.default));
         }
         if let (Some(min), Some(max)) = (option.min, option.max) {
             line.push_str(&format!(" min {min} max {max}"));
         }
-        output.line(&line)?;
+        lines.push(line);
     }
     for lever in LEVERS {
         let default = if lever.kind == OptionKind::Check {
@@ -702,9 +726,22 @@ fn handshake(output: &mut Output) -> io::Result<()> {
         if lever.kind == OptionKind::Spin {
             line.push_str(&format!(" min {} max {}", lever.min, lever.max));
         }
-        output.line(&line)?;
+        lines.push(line);
     }
-    output.line("uciok")
+    // Reference parity: the book, tablebase and eval-source state lines close
+    // the handshake, before `uciok`.
+    lines.push("info string no opening book loaded".to_owned());
+    lines.push("info string syzygy tablebases: none (set SyzygyPath)".to_owned());
+    lines.push(eval_source_line());
+    lines.push("uciok".to_owned());
+    lines
+}
+
+/// The `info string` naming the evaluation source (the embedded net file).
+///
+/// The handshake and every `isready` reply carry it.
+fn eval_source_line() -> String {
+    format!("info string eval-source: nnue net {NET_SOURCE_NAME}")
 }
 
 /// Returns the UCI type word for an option kind.
@@ -718,11 +755,27 @@ fn kind_name(kind: OptionKind) -> &'static str {
 }
 
 /// Parses and applies `setoption name <name> [value <value>]`.
+///
+/// Every name is validated against the catalogue (public options and levers);
+/// the reply behaviour mirrors the step-0 capture: an unknown name is reported
+/// with an `info string`, every value-level rejection (out-of-range spin,
+/// non-boolean check value, missing value) is silent and keeps the previous
+/// value, and a button acts without a value.
 fn handle_set_option(line: &str, searcher: &mut Searcher, output: &mut Output) -> io::Result<()> {
+    if let Some(reply) = apply_set_option(line, searcher) {
+        output.line(&reply)?;
+    }
+    Ok(())
+}
+
+/// Applies one `setoption` command and returns the optional reply line.
+///
+/// `None` means the command was accepted silently or rejected silently —
+/// both leave no trace on the wire, exactly like the reference.
+fn apply_set_option(line: &str, searcher: &mut Searcher) -> Option<String> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
-    if tokens.get(1) != Some(&"name") {
-        output.line("info string setoption expects 'name <name>'")?;
-        return Ok(());
+    if tokens.get(1).copied() != Some("name") {
+        return Some("info string setoption expects 'name <name>'".to_owned());
     }
     let value_index = tokens.iter().position(|token| *token == "value");
     let (name, value) = match value_index {
@@ -730,44 +783,120 @@ fn handle_set_option(line: &str, searcher: &mut Searcher, output: &mut Output) -
         None => (tokens[2..].join(" "), String::new()),
     };
     if name.is_empty() {
-        output.line("info string setoption needs a name")?;
-        return Ok(());
+        return Some("info string setoption needs a name".to_owned());
     }
 
-    match name.as_str() {
-        "Hash" => {
-            if let Ok(megabytes) = value.parse::<usize>() {
-                searcher.set_hash(megabytes);
+    if let Some(spec) = public(&name) {
+        apply_public_option(spec, &value, searcher);
+        return None;
+    }
+    if let Some(spec) = lever(&name) {
+        apply_lever(spec, &value, searcher);
+        return None;
+    }
+    // Reference parity: an unknown name is the one reported rejection.
+    Some(format!("info string Unknown option: {name}"))
+}
+
+/// True when `value` is a valid spin value for `spec`.
+///
+/// A value that does not parse, or that falls outside the declared range, is
+/// rejected: the previous value is kept and nothing is printed.
+fn spin_value_is_valid(spec_min: Option<i64>, spec_max: Option<i64>, value: &str) -> bool {
+    match value.parse::<i64>() {
+        Ok(parsed) => {
+            let min = spec_min.unwrap_or(i64::MIN);
+            let max = spec_max.unwrap_or(i64::MAX);
+            min <= parsed && parsed <= max
+        }
+        Err(_) => false,
+    }
+}
+
+/// Applies one public option with full validation.
+///
+/// The functional options resize the table (`Hash`), clear it (`Clear Hash`)
+/// or set the move overhead; the book, tablebase, `EvalFile` and `Contempt`
+/// names are accepted and inert until their phases land. An out-of-range or
+/// unparsable spin value is rejected silently and the previous value is kept;
+/// a check option accepts only `true`/`false`.
+fn apply_public_option(spec: &UciOption, value: &str, searcher: &mut Searcher) {
+    match spec.kind {
+        OptionKind::Button => {
+            // A button acts without a value; a stray value token is ignored.
+            if spec.name == "Clear Hash" {
+                searcher.clear();
             }
         }
-        "Clear Hash" => searcher.clear(),
-        "Move Overhead" => {
-            if let Ok(milliseconds) = value.parse::<u64>() {
-                searcher.set_move_overhead(milliseconds);
-            }
+        OptionKind::Check => {
+            // Accepted only when well-formed; the inert check options store
+            // nothing yet, so acceptance is the whole effect.
         }
-        "Threads" => {
-            // Threading arrives with Phase 5; accept the option so scripts keep
-            // working and the engine keeps searching on one thread.
+        OptionKind::String => {
+            // Accepted, inert until the book/tablebase phases land.
         }
-        other => {
-            if let Some(spec) = crate::search::options::lever(other) {
-                let parsed = match spec.kind {
-                    OptionKind::Check => i64::from(value == "true"),
-                    _ => value.parse::<i64>().unwrap_or(spec.default),
-                };
-                crate::search::options::set(searcher.params_mut(), spec.name, parsed);
+        OptionKind::Spin => {
+            if !spin_value_is_valid(spec.min, spec.max, value) {
+                return;
             }
-            // Unknown public names (book, tablebase, EvalFile, Contempt) are
-            // accepted silently: their phases are not implemented yet.
+            match spec.name {
+                "Hash" => {
+                    searcher.set_hash(value.parse::<usize>().expect("validated above"));
+                }
+                "Move Overhead" => {
+                    searcher.set_move_overhead(value.parse::<u64>().expect("validated above"));
+                }
+                // `Threads` is validated (1-256) but the engine still searches
+                // on one thread until the worker pool lands in step 8.
+                _ => {}
+            }
         }
     }
-    Ok(())
+}
+
+/// Applies one research lever with full validation.
+///
+/// A check lever accepts only `true`/`false`; a spin lever only an integer in
+/// its declared range. Anything else is rejected silently and the previous
+/// value is kept. An unwired lever passes validation and is accepted without
+/// effect (see [`crate::search::lever_table`]).
+fn apply_lever(spec: &LeverSpec, value: &str, searcher: &mut Searcher) {
+    let parsed = match spec.kind {
+        OptionKind::Check => {
+            if value != "true" && value != "false" {
+                return;
+            }
+            i64::from(value == "true")
+        }
+        _ => {
+            if !spin_value_is_valid(Some(spec.min), Some(spec.max), value) {
+                return;
+            }
+            value.parse::<i64>().expect("validated above")
+        }
+    };
+    set(searcher.params_mut(), spec.name, parsed);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GoLimits, parse_go};
+    use super::{GoLimits, apply_set_option, eval_source_line, handshake_lines, parse_go};
+    use crate::search::options::{get, lever, public};
+    use crate::search::searcher::Searcher;
+
+    /// Applies `line` to a fresh 2 MB searcher and returns (reply, value read
+    /// back through the lever accessor).
+    fn applied(name: &str, value: Option<&str>) -> (Option<String>, i64) {
+        let mut searcher = Searcher::new(2);
+        let spec = lever(name).expect("test names a lever");
+        let line = match value {
+            Some(value) => format!("setoption name {name} value {value}"),
+            None => format!("setoption name {name}"),
+        };
+        let reply = apply_set_option(&line, &mut searcher);
+        let state = get(searcher.params(), spec);
+        (reply, state)
+    }
 
     #[test]
     fn depth_and_nodes_limiters_parse() {
@@ -893,5 +1022,213 @@ mod tests {
         assert_eq!(limits.nodes, 0);
         assert!(!limits.infinite);
         assert!(!limits.ponder);
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 5 step 2: one test per `setoption` validation rule. The reply
+    // behaviour mirrors the step-0 capture: only an unknown name is reported,
+    // every value-level rejection is silent and keeps the previous value.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn an_unknown_option_name_is_reported() {
+        let mut searcher = Searcher::new(2);
+        assert_eq!(
+            apply_set_option("setoption name NoSuchOption value 5", &mut searcher),
+            Some("info string Unknown option: NoSuchOption".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_spin_value_above_the_maximum_is_rejected_and_the_previous_kept() {
+        let (_, set) = applied("AspirationBase", Some("60"));
+        assert_eq!(set, 60, "a valid value is applied");
+        // 999999 is far above AspirationBase's maximum of 100: rejected, and
+        // the previous value survives.
+        let (reply, kept) = applied_after("AspirationBase", &["60", "999999"]);
+        assert_eq!(reply, None, "a range rejection is silent");
+        assert_eq!(kept, 60, "the previous value was not kept");
+    }
+
+    #[test]
+    fn a_spin_value_below_the_minimum_is_rejected() {
+        let (reply, kept) = applied_after("AspirationBase", &["60", "0"]);
+        assert_eq!(reply, None);
+        assert_eq!(kept, 60, "the previous value was not kept");
+    }
+
+    #[test]
+    fn an_unparsable_spin_value_is_rejected() {
+        let (reply, kept) = applied_after("AspirationBase", &["60", "not-a-number"]);
+        assert_eq!(reply, None);
+        assert_eq!(kept, 60, "the previous value was not kept");
+    }
+
+    #[test]
+    fn a_missing_spin_value_is_rejected() {
+        let (reply, kept) = applied_after("AspirationBase", &["60", ""]);
+        assert_eq!(reply, None);
+        assert_eq!(kept, 60, "the previous value was not kept");
+    }
+
+    #[test]
+    fn a_check_option_accepts_only_true_and_false() {
+        // Valid values are applied.
+        let (reply, state) = applied("UseEvalCache", Some("true"));
+        assert_eq!(reply, None);
+        assert_eq!(state, 1);
+        // Anything else is rejected silently and the previous value is kept.
+        let (reply, kept) = applied_after("UseEvalCache", &["true", "maybe"]);
+        assert_eq!(reply, None, "a check rejection is silent");
+        assert_eq!(kept, 1, "the previous value was not kept");
+        // `false` is accepted again.
+        let (reply, state) = applied("UseEvalCache", Some("false"));
+        assert_eq!(reply, None);
+        assert_eq!(state, 0);
+    }
+
+    #[test]
+    fn a_button_acts_without_a_value() {
+        let mut searcher = Searcher::new(2);
+        // Both forms act silently: the bare button and one with a stray value.
+        assert_eq!(
+            apply_set_option("setoption name Clear Hash", &mut searcher),
+            None
+        );
+        assert_eq!(
+            apply_set_option("setoption name Clear Hash value 5", &mut searcher),
+            None
+        );
+    }
+
+    #[test]
+    fn hash_values_outside_the_declared_range_are_rejected() {
+        let mut searcher = Searcher::new(2);
+        for bad in ["0", "999999", "abc"] {
+            assert_eq!(
+                apply_set_option(&format!("setoption name Hash value {bad}"), &mut searcher),
+                None,
+                "Hash value {bad} must be rejected silently"
+            );
+        }
+        // A valid value is accepted silently.
+        assert_eq!(
+            apply_set_option("setoption name Hash value 32", &mut searcher),
+            None
+        );
+    }
+
+    #[test]
+    fn threads_is_validated_but_the_engine_stays_single_threaded() {
+        let mut searcher = Searcher::new(2);
+        // Below the minimum and above the maximum: rejected silently.
+        for bad in ["0", "999"] {
+            assert_eq!(
+                apply_set_option(
+                    &format!("setoption name Threads value {bad}"),
+                    &mut searcher
+                ),
+                None,
+                "Threads value {bad} must be rejected silently"
+            );
+        }
+        // In range: accepted silently (the pool arrives in step 8).
+        for good in ["1", "256"] {
+            assert_eq!(
+                apply_set_option(
+                    &format!("setoption name Threads value {good}"),
+                    &mut searcher
+                ),
+                None,
+                "Threads value {good} must be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn reserved_reference_levers_validate_without_effect() {
+        // `UseProbCut` ships off and is not ported yet: it is accepted like
+        // any other option, but the search state does not change.
+        let spec = lever("UseProbCut").expect("the catalogue holds the reserved lever");
+        assert!(!spec.wired);
+        let (reply, state) = applied("UseProbCut", Some("true"));
+        assert_eq!(reply, None);
+        assert_eq!(state, spec.default, "a reserved lever must stay inert");
+    }
+
+    #[test]
+    fn public_inert_options_are_accepted_silently() {
+        let mut searcher = Searcher::new(2);
+        // Book, tablebase, EvalFile and Contempt names are known (advertised)
+        // but inert until their phases land; they must not be reported as
+        // unknown.
+        for line in [
+            "setoption name Own Book value true",
+            "setoption name Book File value book.ctg",
+            "setoption name Book Depth value 8",
+            "setoption name SyzygyPath value C:\\tb",
+            "setoption name SyzygyRootProbe value false",
+            "setoption name Syzygy50MoveRule value false",
+            "setoption name EvalFile value other.nnue",
+            "setoption name Contempt value -10",
+        ] {
+            assert_eq!(
+                apply_set_option(line, &mut searcher),
+                None,
+                "{line} must be accepted silently"
+            );
+        }
+        // Their spin/check values are still validated.
+        assert_eq!(
+            apply_set_option("setoption name Book Depth value 200", &mut searcher),
+            None,
+            "an out-of-range inert value must be rejected silently, not applied"
+        );
+    }
+
+    #[test]
+    fn a_malformed_setoption_is_reported() {
+        let mut searcher = Searcher::new(2);
+        assert!(apply_set_option("setoption value 5", &mut searcher).is_some());
+        assert!(apply_set_option("setoption", &mut searcher).is_some());
+    }
+
+    #[test]
+    fn the_handshake_carries_the_reference_info_lines() {
+        let lines = handshake_lines();
+        let last = lines.last().map(String::as_str).expect("non-empty");
+        assert_eq!(last, "uciok");
+        assert!(lines.contains(&"info string no opening book loaded".to_owned()));
+        assert!(lines.contains(&"info string syzygy tablebases: none (set SyzygyPath)".to_owned()));
+        assert!(lines.contains(&eval_source_line()));
+    }
+
+    #[test]
+    fn every_public_option_is_resolvable_and_validated() {
+        // The public spin ranges are consistent with the validation helper:
+        // the default is in range, one step out is not.
+        for spec in super::PUBLIC_OPTIONS {
+            assert!(public(spec.name).is_some());
+            if let (Some(min), Some(max)) = (spec.min, spec.max) {
+                assert!(min <= max, "{}: inverted range", spec.name);
+            }
+        }
+    }
+
+    /// Applies a sequence of `setoption name <name> value <value>` commands to
+    /// one searcher and returns the last (reply, lever state).
+    fn applied_after(name: &str, values: &[&str]) -> (Option<String>, i64) {
+        let mut searcher = Searcher::new(2);
+        let spec = lever(name).expect("test names a lever");
+        let mut reply = None;
+        for value in values {
+            let line = if value.is_empty() {
+                format!("setoption name {name}")
+            } else {
+                format!("setoption name {name} value {value}")
+            };
+            reply = apply_set_option(&line, &mut searcher);
+        }
+        (reply, get(searcher.params(), spec))
     }
 }

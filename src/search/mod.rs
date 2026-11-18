@@ -11,6 +11,7 @@ pub mod correction;
 pub mod eval_cache;
 pub mod history;
 pub mod killers;
+pub mod lever_table;
 pub mod limits;
 pub mod move_picker;
 pub mod negamax;

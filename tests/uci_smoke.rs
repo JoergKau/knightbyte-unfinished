@@ -372,3 +372,70 @@ fn argv_param_overrides_fail_fast_on_unknown_names() {
     let (_stdout, success) = run_engine_with_args(&["param:NoSuchLever=5", "uci"], b"");
     assert!(!success, "an unknown param override must fail fast");
 }
+
+/// The step-0 handshake transcript, with its header comments.
+const HANDSHAKE_TRANSCRIPT: &str = include_str!("golden/transcripts/handshake.txt");
+
+#[test]
+fn the_handshake_matches_the_step_zero_transcript() {
+    // Every engine line of the captured handshake appears, in order, in
+    // KnightByte's reply. KnightByte additionally advertises its research
+    // levers between the public options and the info lines, so the expected
+    // lines are matched as an ordered subsequence. Placeholders: the identity
+    // lines and the eval-source net name are checked structurally.
+    let expected: Vec<String> = HANDSHAKE_TRANSCRIPT
+        .lines()
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with('#')
+                && !line.starts_with('>')
+                && !line.starts_with('<')
+        })
+        .map(|line| match line {
+            "id name <engine>" => "id name KnightByte".to_owned(),
+            "id author <author>" => "id author KnightByte project".to_owned(),
+            _ => line.replace("<nnue net>", "nnue net jokausch.nnue"),
+        })
+        .collect();
+
+    let stdout = run_engine(b"uci\nisready\nucinewgame\nisready\nquit\n");
+    let actual: Vec<&str> = stdout.lines().collect();
+    let mut cursor = 0;
+    for want in &expected {
+        let found = actual[cursor..]
+            .iter()
+            .position(|line| {
+                line == want
+                    || (want == "id name KnightByte" && line.starts_with("id name KnightByte "))
+            })
+            .unwrap_or_else(|| panic!("handshake line '{want}' missing or out of order"));
+        cursor += found + 1;
+    }
+}
+
+#[test]
+fn setoption_validation_matches_the_step_zero_transcript() {
+    // The captured transcript replays ten setoption scenarios; only the
+    // unknown name produces a line, everything else is silent (accepted or
+    // rejected with the previous value kept). This is the exact behaviour
+    // step 2 implements.
+    let stdout = run_engine(
+        b"setoption name Hash value 32\n\
+          setoption name Hash value 999999\n\
+          setoption name Hash value 0\n\
+          setoption name NoSuchOption value 5\n\
+          setoption name Own Book value true\n\
+          setoption name Own Book value false\n\
+          setoption name Own Book value maybe\n\
+          setoption name Clear Hash\n\
+          setoption name Threads value 0\n\
+          setoption name Threads value 999\n\
+          quit\n",
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        vec!["info string Unknown option: NoSuchOption"],
+        "the setoption replay must stay silent except for the unknown name"
+    );
+}

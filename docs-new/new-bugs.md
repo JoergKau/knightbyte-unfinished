@@ -574,6 +574,17 @@ last section lists predecessor quirks that are reproduced on purpose.
 - **Reproduction:** search any position to an Exact node with a capture best move under `UseCorrectionHistory=true` and `UseRefCorrectionHistory=true`; the correction tables receive the capture's eval-error diff.
 - **Status:** fixed 2026-11-18 (`07b401c`, Phase 1 restart). The gate classifies through the new `is_quiet_store_move` helper (`src/search/searcher.rs`): quiet means the destination is not occupied by the opponent and the move is neither en passant nor a promotion — the fixed reference's semantics. Unit-tested in `searcher.rs::the_correction_quiet_gate_accepts_quiet_moves_and_rejects_captures`.
 
+## B38 — The first `Clear Hash`/`ucinewgame` after a large `Hash` resize costs unbounded page-commit time
+
+- **Date:** 2026-11-18
+- **Build / commit:** Phase 5 step 2 working tree
+- **Platform / CPU:** Windows 11, AMD Ryzen 7 260 (Zen 4); release build
+- **Command or FEN:** `setoption name Hash value 1024` → `setoption name Clear Hash` / `ucinewgame` (measured with `tools/time_clear_hash.py`)
+- **Expected:** a synchronous table clear stays inside the step-2 threshold of about 100 ms at the maximum hash size.
+- **Actual:** the steady-state clear is fine (~45–55 ms for 1 GB), but the **first** clear after a fresh resize costs ~190–275 ms: the resize reserves 1 GB of zeroed memory lazily, and the clear's first touch pays the OS page commit. One `ucinewgame` sample under memory pressure reached ~126 ms.
+- **Reproduction:** `python tools/time_clear_hash.py target/release/knightbyte.exe` — the "Clear Hash (2nd)" line is the commit-paying first clear.
+- **Status:** open — not a search or protocol defect (node identity is untouched; the cost is a one-time page commit at game start, before the clock matters). The step-2 rule requires a log when the clear exceeds about 100 ms, and the fix is step 7's planned bounded `ucinewgame` (generation bump or parallel zeroing). Re-measure after step 7.
+
 ## Predecessor behaviour
 
 Predecessor quirks are tracked in the local quirk register, which is not part of
@@ -609,6 +620,11 @@ Consequences for KnightByte:
   behaviour, and KnightByte adopts the reference's fixes for the former quirks
   Q2-Q4 (predecessor bugs 147-149). Node identity with the bug-fixed reference
   holds at every captured depth and position.
+- **B38 is a performance note, not a correctness defect** (see its entry): the
+  first table clear after a large `Hash` resize pays the OS page commit
+  (~190-275 ms at Hash 1024 on the Windows host). Step 7 makes `ucinewgame`
+  cost bounded, as the step-2 measurement requires; node identity is
+  unaffected.
 
 ## Verified platforms
 

@@ -184,29 +184,6 @@ fn bench_node_counts_are_identical_to_the_reference_per_position_and_depth() {
 }
 
 #[test]
-fn singular_verification_lever_is_off_by_default_and_changes_the_search_when_on() {
-    // Off (the default) reproduces the reference: depth 9 of the start position
-    // is 47,178 nodes there (bug-fixed build, ADR-0008), and singular
-    // extensions never fire. The KnightByte-only lever makes the verification
-    // search the alternatives, which must change the tree.
-    let position = verified(STARTPOS);
-
-    let mut reference = Searcher::new(bench::BENCH_TT_MEGABYTES);
-    reference.clear();
-    let off = reference.search(&position, Limits::depth(9), &mut |_| {});
-    assert_eq!(
-        off.nodes, 47_178,
-        "default behaviour must match the reference"
-    );
-
-    let mut research = Searcher::new(bench::BENCH_TT_MEGABYTES);
-    research.clear();
-    research.params_mut().singular_exclude_tt_cutoff = true;
-    let on = research.search(&position, Limits::depth(9), &mut |_| {});
-    assert_ne!(on.nodes, off.nodes, "the lever had no effect on the search");
-}
-
-#[test]
 fn a_timed_search_is_measured_from_the_go_command_not_from_an_earlier_search() {
     // Regression: the search clock used to be restarted inside `search()`,
     // after the time manager had stored its absolute limits on the old clock.

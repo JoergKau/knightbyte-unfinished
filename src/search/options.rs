@@ -1,21 +1,30 @@
 //! UCI option catalogue.
 //!
 //! One declarative table drives the `option` handshake, `setoption` dispatch and
-//! the documentation. Two groups exist:
+//! the documentation. Three groups exist:
 //!
 //! * **public options** — the twelve names a GUI expects (`Hash`, `Threads`,
 //!   `Move Overhead`, `Clear Hash`, book/tablebase placeholders, `EvalFile`,
 //!   `Contempt`). The ones that are functional today are marked in the help
 //!   text; the rest are accepted and ignored until their phase lands.
-//! * **research levers** — the tunable search parameters that are actually
-//!   wired into the search. Every lever listed here changes behaviour when set;
-//!   levers whose feature is not ported yet are not advertised (a knob that does
-//!   nothing is worse than a missing knob).
+//! * **reference levers** — all 83 hidden research levers of the reference,
+//!   exposed under their reference names, defaults and ranges. The ones whose
+//!   feature is not ported yet are marked `wired == false` in
+//!   [`crate::search::lever_table`]: they validate and are accepted, but have
+//!   no effect until their feature lands (a knob that silently lies about its
+//!   range is worse than an inert knob with the right range).
+//! * **KnightByte-only levers** — three research knobs that switch off
+//!   features the reference always runs; see
+//!   [`crate::search::lever_table::KNIGHTBYTE_ONLY`].
 //!
-//! Adding a lever means one row here plus a getter/setter arm; the handshake and
-//! the parser pick it up automatically.
+//! Adding a lever means one row in [`crate::search::lever_table`] plus a
+//! getter/setter arm here; the handshake and the parser pick it up
+//! automatically.
 
+use crate::search::lever_table::{LEVERS, LeverSpec};
 use crate::search::params::SearchParams;
+
+pub use crate::search::lever_table::KNIGHTBYTE_ONLY;
 
 /// Type of a UCI option.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,347 +146,6 @@ pub const PUBLIC_OPTIONS: &[UciOption] = &[
     },
 ];
 
-/// A research lever bound to a [`SearchParams`] field.
-#[derive(Clone, Copy, Debug)]
-pub struct LeverSpec {
-    /// Lever name, identical to the recorded catalogue.
-    pub name: &'static str,
-    /// Value type (`Spin` or `Check`).
-    pub kind: OptionKind,
-    /// Default value.
-    pub default: i64,
-    /// Minimum for spin levers.
-    pub min: i64,
-    /// Maximum for spin levers.
-    pub max: i64,
-    /// Short description shown in the documentation.
-    pub help: &'static str,
-}
-
-/// Research levers that are wired into the current search.
-pub const LEVERS: &[LeverSpec] = &[
-    LeverSpec {
-        name: "AspirationBase",
-        kind: OptionKind::Spin,
-        default: 50,
-        min: 10,
-        max: 100,
-        help: "Initial aspiration window in centipawns.",
-    },
-    LeverSpec {
-        name: "AspirationMaxCycles",
-        kind: OptionKind::Spin,
-        default: 8,
-        min: 1,
-        max: 16,
-        help: "Maximum aspiration re-searches per depth.",
-    },
-    LeverSpec {
-        name: "AspirationStartDepth",
-        kind: OptionKind::Spin,
-        default: 5,
-        min: 1,
-        max: 10,
-        help: "First depth that uses an aspiration window.",
-    },
-    LeverSpec {
-        name: "NmpBaseReduction",
-        kind: OptionKind::Spin,
-        default: 3,
-        min: 1,
-        max: 6,
-        help: "Fixed part of the null-move reduction.",
-    },
-    LeverSpec {
-        name: "NmpDepthDivisor",
-        kind: OptionKind::Spin,
-        default: 4,
-        min: 1,
-        max: 8,
-        help: "Depth divisor of the null-move reduction.",
-    },
-    LeverSpec {
-        name: "RfpMaxDepth",
-        kind: OptionKind::Spin,
-        default: 4,
-        min: 4,
-        max: 12,
-        help: "Reverse-futility gate for the per-depth margin table.",
-    },
-    LeverSpec {
-        name: "RfpFormulaMaxDepth",
-        kind: OptionKind::Spin,
-        default: 8,
-        min: 4,
-        max: 12,
-        help: "Reverse-futility gate for the linear formula.",
-    },
-    LeverSpec {
-        name: "RfpImprovingScale",
-        kind: OptionKind::Spin,
-        default: 65,
-        min: 10,
-        max: 200,
-        help: "Reverse-futility margin per ply when improving.",
-    },
-    LeverSpec {
-        name: "RfpNotImprovingScale",
-        kind: OptionKind::Spin,
-        default: 95,
-        min: 10,
-        max: 300,
-        help: "Reverse-futility margin per ply when not improving.",
-    },
-    LeverSpec {
-        name: "RazorMaxDepth",
-        kind: OptionKind::Spin,
-        default: 3,
-        min: 2,
-        max: 8,
-        help: "Deepest node that may use razoring.",
-    },
-    LeverSpec {
-        name: "HistPruneMargin",
-        kind: OptionKind::Spin,
-        default: 2_000,
-        min: 800,
-        max: 4_000,
-        help: "History-pruning margin scale: the threshold is the margin times the depth.",
-    },
-    LeverSpec {
-        name: "LmpMaxDepth",
-        kind: OptionKind::Spin,
-        default: 4,
-        min: 2,
-        max: 8,
-        help: "Deepest node that may use late move pruning.",
-    },
-    LeverSpec {
-        name: "ClockImbalanceAheadScale",
-        kind: OptionKind::Spin,
-        default: 50,
-        min: 0,
-        max: 100,
-        help: "Ahead-side clock-imbalance scale, in percent of the ratio surplus.",
-    },
-    LeverSpec {
-        name: "ClockImbalanceBehindScale",
-        kind: OptionKind::Spin,
-        default: 50,
-        min: 0,
-        max: 80,
-        help: "Behind-side clock-imbalance scale, in percent of the ratio deficit.",
-    },
-    LeverSpec {
-        name: "FutilityMaxDepth",
-        kind: OptionKind::Spin,
-        default: 7,
-        min: 4,
-        max: 10,
-        help: "Deepest node that may use futility pruning.",
-    },
-    LeverSpec {
-        name: "SeePruningMaxDepth",
-        kind: OptionKind::Spin,
-        default: 8,
-        min: 2,
-        max: 10,
-        help: "Deepest node that may prune captures by SEE.",
-    },
-    LeverSpec {
-        name: "QsDeltaMargin",
-        kind: OptionKind::Spin,
-        default: 1100,
-        min: 700,
-        max: 1500,
-        help: "Delta-pruning margin in quiescence.",
-    },
-    LeverSpec {
-        name: "MaxPathExtensions",
-        kind: OptionKind::Spin,
-        default: 32,
-        min: 8,
-        max: 64,
-        help: "Extension budget along one path.",
-    },
-    LeverSpec {
-        name: "UseTerm1NotImproving",
-        kind: OptionKind::Check,
-        default: 0,
-        min: 0,
-        max: 1,
-        help: "Add a whole ply of late-move reduction when not improving.",
-    },
-    LeverSpec {
-        name: "UseCutNode",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Reduce one ply more at predicted cut nodes and admit them to the null-move gate.",
-    },
-    LeverSpec {
-        name: "UseImprovingFlag",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Compare the evaluation with the same line two plies ago.",
-    },
-    LeverSpec {
-        name: "UseFormulaRfp",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Use the linear reverse-futility margin.",
-    },
-    LeverSpec {
-        name: "UseLmrTable",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Use the log table for late move reductions.",
-    },
-    LeverSpec {
-        name: "UseLmrHistoryPrecision",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Use multiply-before-divide fixed point for the late-move-reduction history term.",
-    },
-    LeverSpec {
-        name: "SingularExcludeTtCutoff",
-        kind: OptionKind::Check,
-        default: 0,
-        min: 0,
-        max: 1,
-        help: "KnightByte research lever: a singular-verification node skips the table cutoff, so the verification actually searches the alternatives. Off reproduces the reference, where singular extensions never fire.",
-    },
-    LeverSpec {
-        name: "UseNegativeExtensions",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Search suspicious moves (losing captures, historically bad quiets) one ply shallower.",
-    },
-    LeverSpec {
-        name: "UseTtScoreEval",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Reuse a consistent transposition-table score as the evaluation.",
-    },
-    LeverSpec {
-        name: "UseEvalCache",
-        kind: OptionKind::Check,
-        default: 0,
-        min: 0,
-        max: 1,
-        help: "Consult the static-evaluation cache.",
-    },
-    LeverSpec {
-        name: "UseQsTtProbe",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Probe the table in quiescence.",
-    },
-    LeverSpec {
-        name: "UseTwofoldRepetitionDraw",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Score the second occurrence of a position as a draw.",
-    },
-    LeverSpec {
-        name: "UseCorrectionHistory",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Apply the learned static-evaluation correction.",
-    },
-    LeverSpec {
-        name: "UseRefCorrectionHistory",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Use the four-term correction tables.",
-    },
-    LeverSpec {
-        name: "UseRefSeeThresholds",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Use the depth-scaled, history-refunded SEE-pruning thresholds.",
-    },
-    LeverSpec {
-        name: "UseStableTimeManagement",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Scale the soft limit by the best-move, score and node-fraction stability signals.",
-    },
-    LeverSpec {
-        name: "UseTrioHindsight",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Run the hindsight depth pair: reduced nodes earn or lose a ply by their evaluation.",
-    },
-    LeverSpec {
-        name: "UseMicroRiders",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Fail-soft quiescence with fail-high averaging.",
-    },
-    LeverSpec {
-        name: "UseSeeApproxPrefilter",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Prefilter quiescence captures by the approximate exchange.",
-    },
-    LeverSpec {
-        name: "UseCheckAwareQuiescence",
-        kind: OptionKind::Check,
-        default: 1,
-        min: 0,
-        max: 1,
-        help: "Search all evasions when the king is attacked.",
-    },
-    LeverSpec {
-        name: "UseClockImbalance",
-        kind: OptionKind::Check,
-        default: 0,
-        min: 0,
-        max: 1,
-        help: "Scale the time allocation by the two-sided clock ratio (supersedes the time advantage).",
-    },
-    LeverSpec {
-        name: "UseQsNarrowing",
-        kind: OptionKind::Check,
-        default: 0,
-        min: 0,
-        max: 1,
-        help: "Apply the recapture-only and promotion limits in quiescence.",
-    },
-];
-
 /// Returns the lever spec with this name.
 pub fn lever(name: &str) -> Option<&'static LeverSpec> {
     LEVERS.iter().find(|spec| spec.name == name)
@@ -489,7 +157,12 @@ pub fn public(name: &str) -> Option<&'static UciOption> {
 }
 
 /// Reads the current value of a lever.
+///
+/// An unwired lever has no storage yet, so its recorded default is reported.
 pub fn get(params: &SearchParams, spec: &LeverSpec) -> i64 {
+    if !spec.wired {
+        return spec.default;
+    }
     match spec.name {
         "AspirationBase" => i64::from(params.aspiration_base),
         "AspirationMaxCycles" => i64::from(params.aspiration_max_cycles),
@@ -525,23 +198,29 @@ pub fn get(params: &SearchParams, spec: &LeverSpec) -> i64 {
         "ClockImbalanceBehindScale" => i64::from(params.clock_imbalance_behind_scale),
         "HistPruneMargin" => i64::from(params.hist_prune_margin),
         "UseLmrHistoryPrecision" => i64::from(params.use_lmr_history_precision),
-        "SingularExcludeTtCutoff" => i64::from(params.singular_exclude_tt_cutoff),
         "UseNegativeExtensions" => i64::from(params.use_negative_extensions),
         "UseRefSeeThresholds" => i64::from(params.use_ref_see_thresholds),
         "UseStableTimeManagement" => i64::from(params.use_stable_time_management),
         "UseTrioHindsight" => i64::from(params.use_hindsight_reductions),
         "UseClockImbalance" => i64::from(params.use_clock_imbalance),
-        _ => 0,
+        _ => spec.default,
     }
 }
 
 /// Sets a lever, clamping spin values into range.
 ///
-/// Returns `false` for an unknown lever name.
+/// Returns `false` for an unknown lever name. An unwired lever is accepted
+/// (returning `true`) but stores nothing: its feature is not ported yet.
+/// Values that arrive through the UCI layer are already validated against the
+/// spec's range; the clamp also protects the `param:` startup overrides,
+/// which are only type-checked.
 pub fn set(params: &mut SearchParams, name: &str, value: i64) -> bool {
     let Some(spec) = lever(name) else {
         return false;
     };
+    if !spec.wired {
+        return true;
+    }
     let value = value.clamp(spec.min, spec.max) as i32;
     let flag = value != 0;
     match name {
@@ -579,7 +258,6 @@ pub fn set(params: &mut SearchParams, name: &str, value: i64) -> bool {
         "ClockImbalanceBehindScale" => params.clock_imbalance_behind_scale = value,
         "HistPruneMargin" => params.hist_prune_margin = value,
         "UseLmrHistoryPrecision" => params.use_lmr_history_precision = flag,
-        "SingularExcludeTtCutoff" => params.singular_exclude_tt_cutoff = flag,
         "UseNegativeExtensions" => params.use_negative_extensions = flag,
         "UseRefSeeThresholds" => params.use_ref_see_thresholds = flag,
         "UseStableTimeManagement" => params.use_stable_time_management = flag,
@@ -596,9 +274,9 @@ mod tests {
     use crate::search::params::SearchParams;
 
     #[test]
-    fn lever_defaults_match_the_parameters() {
+    fn wired_lever_defaults_match_the_parameters() {
         let params = SearchParams::default();
-        for spec in LEVERS {
+        for spec in LEVERS.iter().filter(|spec| spec.wired) {
             assert_eq!(
                 get(&params, spec),
                 spec.default,
@@ -609,9 +287,9 @@ mod tests {
     }
 
     #[test]
-    fn every_lever_round_trips() {
+    fn every_wired_lever_round_trips() {
         let mut params = SearchParams::default();
-        for spec in LEVERS {
+        for spec in LEVERS.iter().filter(|spec| spec.wired) {
             let target = if spec.kind == OptionKind::Check {
                 1 - spec.default
             } else {
@@ -619,6 +297,22 @@ mod tests {
             };
             assert!(set(&mut params, spec.name, target), "{}", spec.name);
             assert_eq!(get(&params, spec), target, "{}", spec.name);
+        }
+    }
+
+    #[test]
+    fn unwired_levers_are_accepted_but_inert() {
+        // A reserved lever validates like any other option and is accepted,
+        // but nothing is stored: its feature is not ported yet.
+        let mut params = SearchParams::default();
+        for spec in LEVERS.iter().filter(|spec| !spec.wired) {
+            assert!(set(&mut params, spec.name, spec.max), "{}", spec.name);
+            assert_eq!(
+                get(&params, spec),
+                spec.default,
+                "unwired lever {} changed state",
+                spec.name
+            );
         }
     }
 

@@ -151,15 +151,30 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
 - [x] Clock-imbalance weighting (two-sided, off by default, supersedes the
       one-sided time-advantage multiplier, which is on).
 - [ ] Persistent Lazy SMP workers.
-- [ ] Full lever catalogue parity (36 of the 83 reference levers are wired and
-      advertised; the remaining 44 gate reference features that ship off or
-      are not ported — ProbCut, SEE-reach, LMR v2, quiescence checks, book,
-      tablebases).
+- [x] Full lever-catalogue surface: all 83 reference levers are advertised
+      under their reference names, defaults and ranges (step 2,
+      `src/search/lever_table.rs`), plus three KnightByte-only research
+      levers. 36 reference levers are wired into the search; the other 47
+      carry `wired: false` and stay validated-but-inert until their feature
+      lands (ProbCut, SEE-reach, LMR v2 and its terms, quiescence checks,
+      book, tablebases). The catalogue is pinned against
+      `tests/golden/levers.json`, with no names outside the 83 plus the
+      marked KnightByte-only three.
+- [x] Full `setoption` validation (step 2): an unknown name prints
+      `info string Unknown option: <name>`; out-of-range, unparsable or
+      missing spin values and non-boolean check values are rejected silently
+      and the previous value is kept; the `Clear Hash` button acts without a
+      value; `Threads` validates 1-256 and stays single-threaded until the
+      worker pool lands.
+- [x] Handshake `info string` lines (step 2): the book state, the tablebase
+      state and the eval-source line close the handshake before `uciok`;
+      every `isready` restates the eval-source line before `readyok`.
 - [x] Exact search-parity gate: `bench 6/12/16/18` node-identical, and every
       captured per-position count identical (ADR-0005, supersedes ADR-0004).
-- [x] KnightByte-only research lever `SingularExcludeTtCutoff` (default off =
-      reference behaviour, where singular extensions never fire). Measured, no
-      gain; see ADR-0006. It is not one of the reference's 95 option names.
+- [x] Removed KnightByte-only research lever `SingularExcludeTtCutoff`
+      (step 2): it was measured with no gain (ADR-0006) and the reproduced
+      reference behaviour — the singular verification takes its own table
+      cutoff, so singular extensions never fire — is the only code path now.
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).
@@ -191,6 +206,13 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
 - [x] Step 1: argv surface — `param:Name=Value` overrides validated against the
       lever catalogue and announced (fail-fast on unknown names), other
       arguments joined into a one-shot command line.
+- [x] Step 2: option surface and `setoption` validation — the full lever
+      catalogue advertised and golden-file-pinned, one validation test per
+      rule, the handshake's book/tablebase/eval-source `info string` lines,
+      the `isready` eval-source line, and the removal of
+      `SingularExcludeTtCutoff`. The step-2 `Clear Hash`/`ucinewgame`
+      measurement at `Hash 1024` found B38 (first-clear page commit,
+      ~190–275 ms); the bounded clear belongs to step 7.
 - [ ] `nnueregions` / `searchstats` full instrumentation (the commands are
       recognised and answer honestly; the king-region histogram and the search
       instrumentation land with their features).

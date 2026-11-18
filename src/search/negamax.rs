@@ -234,16 +234,15 @@ impl Searcher {
                     entry.generation
                 );
             }
-            // A verification node may be told not to take the cutoff: its
-            // entry is the one that triggered the verification, so returning
-            // on it would make the verification meaningless.
-            let verification_skips_tt =
-                self.params.singular_exclude_tt_cutoff && !excluded_move.is_none();
-            if !is_root
-                && allow_tt_cutoff
-                && !verification_skips_tt
-                && i32::from(entry.depth) >= depth
-            {
+            // A verification node would want to skip the transposition-table
+            // cutoff: its entry is the one that triggered the verification, so
+            // returning on it makes the verification meaningless. The reference
+            // does not skip it (the verification always returns on its own
+            // trigger entry, so a singular extension never fires — quirk Q1,
+            // reproduced for parity; see ADR-0006), and neither does
+            // KnightByte. The former `SingularExcludeTtCutoff` research lever
+            // was removed after it measured no gain.
+            if !is_root && allow_tt_cutoff && i32::from(entry.depth) >= depth {
                 let score = Self::probe_score(&entry, ply);
                 match entry.bound {
                     Bound::Exact => {

@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-18 (Phase 1 restart complete; Phase 5 started — steps 0 and 1 done; predecessor bug 150 found and fixed on the way)  
+**Last updated:** 2026-11-18 (Phase 5 steps 0–2 done — step 2 completed the option surface and `setoption` validation, removed `SingularExcludeTtCutoff`, and logged the clear-hash page-commit note B38)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
@@ -14,19 +14,24 @@ bug-fixed reference**: `bench 6/12/16/18` = 15,528 / 456,308 / 2,815,799 /
 pre-fix build). The Phase 1 restart adopted the predecessor's bug fixes 143–149
 (KnightByte side: B33–B37, all fixed) and re-captured the oracle. Phase 5 (UCI
 robustness and threading) has started: **step 0** (oracle transcripts in
-`tests/golden/transcripts/`, all five exit questions answered) and **step 1**
+`tests/golden/transcripts/`, all five exit questions answered), **step 1**
 (full command surface, case-insensitive parser, `GoLimits` structure with the
 reference's parsing rules, diagnostics `d`/`eval`/`checkmoves`/`debug`, argv
-with `param:Name=Value` overrides and one-shot command lines) are done. The
-step-0 capture found **predecessor bug 150** (`setoption Hash` above the
-declared maximum crashed the reference via an overflowing `TTable.Resize`
-allocation); it was fixed in the predecessor the same day (commit `acaff1f`,
-full suite 745/745). KnightByte was not affected (spin clamping). 36 of the 83
-reference levers are wired and advertised under their reference names, plus
-three KnightByte-only research levers. Next: Phase 5 step 2 (option surface and
-`setoption` validation).
+with `param:Name=Value` overrides and one-shot command lines) and **step 2**
+(all 83 reference levers advertised — the 47 unported ones as validated, inert
+`wired: false` rows in `src/search/lever_table.rs` — full `setoption`
+validation with one test per rule, the handshake's book/tablebase/eval-source
+`info string` lines plus the `isready` eval-source line, and the removal of
+`SingularExcludeTtCutoff`) are done. The step-0 capture found **predecessor
+bug 150** (`setoption Hash` above the declared maximum crashed the reference
+via an overflowing `TTable.Resize` allocation); it was fixed in the
+predecessor the same day (commit `acaff1f`, full suite 745/745). KnightByte
+was not affected (spin clamping). The step-2 measurement found **B38**: the
+first table clear after a fresh 1 GB `Hash` resize pays the OS page commit
+(~190–275 ms); step 7's bounded `ucinewgame` fixes it. Next: Phase 5 step 3
+(`info` line completeness).
 
-Verification status on the last run: all 199 tests pass locally on Windows
+Verification status on the last run: all 218 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
 fmt/clippy clean; all four bench pins exact. Node identity is verified on this
 Windows host only; macOS and Linux still have to confirm it (migration-plan G6).
@@ -132,9 +137,10 @@ Known and deliberately reproduced: singular extensions never fire in the
 reference (the verification search takes a table cutoff on its own
 trigger entry; `docs-new/new-bugs.md` Q1). It was tried behind the
 KnightByte-only lever `SingularExcludeTtCutoff` and showed no gain over 904
-games (Elo -18.7 +/- 15.2 at 800 games); the default stays the reference
-behaviour (ADR-0006). Whether to keep or remove the lever is still to be
-decided.
+games (Elo -18.7 +/- 15.2 at 800 games); the default stayed the reference
+behaviour (ADR-0006). The lever was removed in Phase 5 step 2 (2026-11-18):
+the reproduced behaviour is the only code path now, recorded in a comment at
+the verification site (`src/search/negamax.rs`).
 
 ### 2.2 Remaining time-management gaps — resolved
 
@@ -146,15 +152,19 @@ Nothing pending here; the tournament-behaviour validation (does the new
 allocation actually use the clock well?) is a Phase 7 tuning item, not a
 correctness gap.
 
-### 2.3 Lever exposure (47 of the 83 reference levers are not exposed)
+### 2.3 Lever exposure — the surface is complete, the wiring is not
 
-36 reference levers are wired and advertised (`search/options.rs`), plus three KnightByte-only research levers. The remaining 47
-gate reference features that ship off or are not ported (ProbCut, SEE-reach,
-LMR v2 and its terms, quiescence checks, book, tablebases); each lever is
-exposed when its feature lands.
+All 83 reference levers are advertised under their reference names, defaults
+and ranges (step 2, `src/search/lever_table.rs`), plus three KnightByte-only
+research levers. 36 reference levers are wired into the search; the other 47
+carry `wired: false`: they validate, are accepted, and stay inert until their
+feature lands (ProbCut, SEE-reach, LMR v2 and its terms, quiescence checks,
+book, tablebases). A golden-file test pins the whole catalogue against
+`tests/golden/levers.json` and allows no name outside the 83 plus the marked
+KnightByte-only three.
 
-Next action: still open is a test that setting each lever changes the search
-on a probe position (the C# suite has this pattern).
+Next action: still open is a test that setting each *wired* lever changes the
+search on a probe position (the C# suite has this pattern).
 
 ### 2.4 Threading, `stop`, `ponder` are not implemented
 
@@ -238,13 +248,16 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 ## 3. Recommended next steps, in order
 
-**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0 (oracle transcripts) and 1 (command surface and parser) are complete; **step 2 (option surface and `setoption` validation) is next**, then step 3 (`info` line completeness), then the search-thread core in step 4. Details in `migration-plan.md`, Phase 5.
+**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0 (oracle transcripts), 1 (command surface and parser) and 2 (option surface and `setoption` validation) are complete; **step 3 (`info` line completeness) is next**, then the search-thread core in step 4. Details in `migration-plan.md`, Phase 5.
 
-### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–1 done)
+### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–2 done)
 
-- Step 2: option surface and `setoption` validation (catalogue checks, button/
-  check/spin rules, remove `SingularExcludeTtCutoff`, handshake `info string`
-  lines, `Clear Hash` timing measurement).
+- ~~Step 2: option surface and `setoption` validation~~ — done (2026-11-18):
+  full lever catalogue advertised and pinned against `levers.json`,
+  catalogue-driven `setoption` validation with one test per rule, handshake
+  `info string` lines and the `isready` eval-source line,
+  `SingularExcludeTtCutoff` removed, `Clear Hash`/`ucinewgame` measured at
+  `Hash 1024` (B38 logged; fix belongs to step 7).
 - Step 3: complete `info` lines (nps, time, hashfull, tbhits).
 - Step 4: search thread with `stop`; step 5: `go ponder`/`ponderhit`;
   step 6: `go mate`/`searchmoves`.
