@@ -376,7 +376,7 @@ then the full table.
 | `Search/QuiescenceSearch.cs` | `search/quiescence.rs` | Ported for the default configuration; capture ordering now uses the classical values and the capture-history cell |
 | `Search/MovePicker.cs` | `search/move_picker.rs`, `search/quiescence.rs` | Staged picker, node-identical: separate capture-generation stage after the table move, killers and countermove by identity, no capture history in quiescence |
 | `Search/SearchHeuristics.cs` | `search/history.rs`, `search/correction.rs` | Ported: butterfly/capture/1-2-4-6-ply continuation (reference keying) and correction history |
-| `Search/Search.Options.cs` | `search/params.rs`, `search/options.rs` | Defaults mirrored for the shipped configuration; 39 of 83 levers wired and advertised (the rest gate off-by-default or unported features) |
+| `Search/Search.Options.cs` | `search/params.rs`, `search/options.rs` | Defaults mirrored for the shipped configuration; 36 of the 83 reference levers wired and advertised under their reference names (the rest gate off-by-default or unported features); three KnightByte-only research levers are also advertised |
 | `Search/EvalCache.cs` | `search/eval_cache.rs` | Structural parity; disabled by default in both |
 | `Search/PvTable.cs` | `search/pv.rs` | Ported |
 | `Search/TimeManager.cs` | `search/time_manager.rs` | Ported (Phase 4d complete): allocation, panic mode, stability ladders, clock imbalance, minimum-depth guard, node attribution |
@@ -393,7 +393,7 @@ then the full table.
   the catalogue. They still shape node counts, so the parity pass reads the
   source, not the catalogue.
 * KnightByte's `SearchParams` carries the shipped-configuration defaults for
-  all ported features, and `search/options.rs` advertises 39 of the 83
+  all ported features, and `search/options.rs` advertises 36 of the 83
   catalogue levers; the remaining 44 gate features that ship off in the
   reference or are not ported yet.
 

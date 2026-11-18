@@ -133,7 +133,7 @@ behaviour of SEE but not a line-by-line audit of it.
 - Time management (Phase 4d) — **closed**: the full port (allocation, panic
   mode, stability ladders, clock imbalance, minimum-depth guard, per-move
   node attribution) is in and unit-tested; the pins are unchanged.
-- Lever exposure — **closed for the wired features**: 39 of 83 levers are
+- Lever exposure — **closed for the wired features**: 36 of 83 reference levers are
   advertised; the remaining 44 gate reference features that ship off or are
   not ported (ProbCut, SEE-reach, LMR v2, quiescence checks, book,
   tablebases). They move with their features to later phases.

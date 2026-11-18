@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-17 (Phase 4 complete with exact node identity; the ADR-0004 deviation is gone)  
+**Last updated:** 2026-11-18 (migration stopped on predecessor bugs; Phase 4 complete with exact node identity; the ADR-0004 deviation is gone)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
@@ -22,7 +22,7 @@ with the tournament cap, sudden-death increment, tactical floor and safety
 buffer; panic mode; the legacy PV-stability multipliers; the stable-TM
 three-signal scaler with the five-iteration minimum-depth guard; one-sided
 time advantage; two-sided clock imbalance; per-move node attribution), and
-39 of the 83 research levers are wired and advertised. Next: Phase 5
+36 of the 83 reference levers are wired and advertised under their reference names, plus three KnightByte-only research levers. **The migration is stopped** (see `migration-plan.md`): predecessor bugs 143 to 145 must be decided and fixed before Phase 5 starts (bug 146 is unverified)
 (threading, `stop`/`ponderhit`, Lazy SMP).
 
 Verification status on the last run: all 172 tests pass locally on Windows
@@ -144,9 +144,9 @@ Nothing pending here; the tournament-behaviour validation (does the new
 allocation actually use the clock well?) is a Phase 7 tuning item, not a
 correctness gap.
 
-### 2.3 Lever exposure (44 of the 83 research levers are not exposed)
+### 2.3 Lever exposure (47 of the 83 reference levers are not exposed)
 
-39 levers are wired and advertised (`search/options.rs`). The remaining 44
+36 reference levers are wired and advertised (`search/options.rs`), plus three KnightByte-only research levers. The remaining 47
 gate reference features that ship off or are not ported (ProbCut, SEE-reach,
 LMR v2 and its terms, quiescence checks, book, tablebases); each lever is
 exposed when its feature lands.
@@ -235,6 +235,8 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 ---
 
 ## 3. Recommended next steps, in order
+
+**Stop state (2026-11-18):** the migration is halted by the project rules until the predecessor bugs 143 to 145 are decided and fixed in the predecessor (details in the local, unpublished predecessor bug log). The list below is the plan for after that; nothing in it has started.
 
 ### 3.1 Phase 5 — UCI robustness and threading (next)
 
@@ -325,16 +327,17 @@ Useful: `git log --oneline -5`, `gh run list --limit 3`,
 `gh run view <id>` (never `gh run watch` while a job is queued), and
 `gh run view --log-failed` after a red run.
 
-### Never commit
+### What is committed
 
-`target/`, the internal C# migration tree, `reference_engines/`, local
-`session-*.md` notes, `.bundle` files. They are in `.gitignore`. The network and
-the golden test data **are** part of the repository.
+Everything inside the repository is committed and pushed during the migration,
+including the migration documents, the golden files and the notes. The only
+exclusion is `target/` (host-specific build output, never committed). The
+predecessor tree and the migration files live in the migration folder outside
+the repository, not in the repository itself.
 
-Because the repository is public, everything pushed is public immediately:
-check `git status` and `git diff --stat` before every commit, and never add the
-predecessor tree, reference-engine material, tool paths on this machine that
-name other engines, or anything that is not meant to be published (see
+The repository is public, so everything pushed is public immediately: check
+`git status` and `git diff --stat` before every commit. The publishing policy
+for predecessor material is decided at the end of the migration (see
 `project-rules.md`).
 
 ---

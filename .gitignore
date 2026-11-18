@@ -1,19 +1,10 @@
-# Rust build output
+# Rust build output (host-specific, never published)
 /target/
 
-# Internal migration sources and reference material (not part of the published tree)
-/predecessor*/
-/reference_engines/
-
-# Local analysis scripts (not part of the engine)
-/perf-test/diff_search_options.py
-/perf-test/nps_floor_gate.py
-/perf-test/test_futility_impact.py
-/perf-test/validate_givescheck.py
-/perf-test/validate_mates.py
+# Local analysis scripts (kept local, see next-steps.md)
+/perf-test/
 
 # Local benchmark output and captures
-/perf-test/__pycache__/
 *.pgn
 *.log
 *.profraw
@@ -23,12 +14,13 @@
 /session-*.md
 *.bundle
 
-# macOS metadata
-.DS_Store
-
-# local predecessor checkout (never published)
-PawnForgeCS.win.final.dotnet11/
-
-# parity-trace ledger dumps (local debugging artifacts)
+# Parity-trace ledger dumps (local debugging artifacts)
 kb_*.txt
 ref_*.txt
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Python bytecode
+__pycache__/

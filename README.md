@@ -82,8 +82,10 @@ copying directories.
 * Pull before a work session, commit after each completed step, push to
   `origin`. Everything pushed is public immediately.
 * Do not copy or commit `target/`; it contains host-specific build artifacts.
-* The internal migration sources and reference trees are git-ignored. They
-  never travel with the engine repository.
+* The predecessor tree and the migration files live in a separate migration
+  folder outside this repository. Everything inside the repository is published
+  during the migration; the publishing policy for predecessor material is
+  decided at the end of the migration.
 * CI runs on push. Windows/macOS artifacts are attached to tags or GitHub
   Releases rather than copied between machines.
 * The source and the MIT licence are already public, which is what CCRL
