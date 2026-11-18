@@ -220,11 +220,28 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       reference (the capture masks `tbhits <n>` when present and no captured
       line carries one) until the Syzygy phase. Format tests cover cp/mate
       scores, nps arithmetic, the zero-time guard and the exact field order.
+- [x] Step 4: the search runs on a dedicated worker thread with an explicit
+      16 MB stack (the searcher moves into the worker and back on join, so
+      the learned tables survive between searches). The UCI loop keeps
+      reading commands while the search runs; `stop` sets a shared flag that
+      is polled every 1024 nodes and before every iteration (no per-node
+      clock read; the exact `go nodes` limit stays a per-node integer
+      comparison); `quit` and end of input stop, join and exit; every
+      state-touching command (`position`, `go`, `setoption`, `ucinewgame`,
+      `bench`, `perft`) stops and joins a running search first — the
+      fallback for protocol-breaking GUIs, printing never a second
+      `bestmove`. Exactly one `bestmove` per `go`, from the worker. A stop
+      before depth 1 finishes answers `info depth 0 score cp <eval> pv
+      <first legal move>` (the step-0 capture, scenario b — verified against
+      the reference binary, whose `quit` during a search behaves the same).
+      A single legal move is answered at once with the depth-0 line (quirk
+      Q8, not while pondering).
 - [ ] `nnueregions` / `searchstats` full instrumentation (the commands are
       recognised and answer honestly; the king-region histogram and the search
       instrumentation land with their features).
-- [ ] Real `stop`, `ponder`, `mate`, `searchmoves` behaviour (steps 4-6; the
-      fallback answers a legal move and an `info string`).
+- [x] Real `stop` behaviour and the worker-thread search (step 4, above).
+- [ ] Real `ponder`, `mate`, `searchmoves` behaviour (steps 5-6; the fallback
+      answers a legal move and an `info string`).
 
 ### Endgame and book
 

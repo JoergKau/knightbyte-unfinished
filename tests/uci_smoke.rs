@@ -1,7 +1,10 @@
 //! End-to-end smoke test for the UCI lifecycle.
 
+mod common;
+
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 #[test]
 fn uci_handshake_and_quit() {
@@ -91,23 +94,9 @@ fn unknown_command_is_reported_without_crashing() {
 
 #[test]
 fn go_depth_returns_a_bestmove_and_an_info_line() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_knightbyte"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn knightbyte");
-
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(b"position startpos moves e2e4 e7e5\ngo depth 2\nquit\n")
-        .expect("write search commands");
-
-    let output = child.wait_with_output().expect("wait for knightbyte");
-    assert!(output.status.success(), "engine exited with failure");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Interactive (GUI) pattern: the search runs on the worker and `quit`
+    // stops a running search, so the test waits for the bestmove first.
+    let stdout = run_interactively(b"position startpos moves e2e4 e7e5\ngo depth 2\n");
     assert!(stdout.contains("info depth 1 "), "missing first info line");
     assert!(stdout.contains("info depth 2 "), "missing second info line");
     let bestmove = stdout
@@ -122,27 +111,11 @@ fn go_depth_returns_a_bestmove_and_an_info_line() {
 
 #[test]
 fn setoption_and_time_limited_go_work() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_knightbyte"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn knightbyte");
-
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(
-            b"position startpos\nsetoption name Hash value 8\n\
-              setoption name AspirationBase value 60\n\
-              setoption name Clear Hash\ngo movetime 500\nquit\n",
-        )
-        .expect("write option commands");
-
-    let output = child.wait_with_output().expect("wait for knightbyte");
-    assert!(output.status.success(), "engine exited with failure");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = run_interactively(
+        b"position startpos\nsetoption name Hash value 8\n\
+          setoption name AspirationBase value 60\n\
+          setoption name Clear Hash\ngo movetime 500\n",
+    );
     assert!(stdout.contains("info depth 1 "), "no search happened");
     assert!(
         stdout.contains("bestmove "),
@@ -169,6 +142,45 @@ fn run_engine(input: &[u8]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Sends `commands`, waits until the search answers its `bestmove`, then
+/// quits, and returns everything the engine printed.
+///
+/// This is the GUI pattern: `quit` stops a running search (the reference
+/// does the same — a burst `go depth 6` + `quit` gets the depth-0 answer),
+/// so a test that wants the full search must wait for the `bestmove` before
+/// quitting.
+fn run_interactively(commands: &[u8]) -> String {
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (mut child, reader) = spawn_with_reader(&lines);
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin.write_all(commands).expect("write UCI commands");
+    stdin.flush().expect("flush UCI commands");
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let done = lines
+            .lock()
+            .expect("reader lock")
+            .iter()
+            .any(|(_, line)| line.starts_with("bestmove "));
+        if done || Instant::now() > deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    stdin.write_all(b"quit\n").expect("write quit");
+    drop(stdin);
+    assert!(child.wait().expect("wait").success(), "engine failed");
+    reader.join().expect("reader");
+    lines
+        .lock()
+        .expect("reader lock")
+        .iter()
+        .map(|(_, line)| line.clone())
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
 #[test]
 fn an_unsupported_go_limiter_still_gets_a_bestmove() {
     // A GUI waits for a bestmove after every go. An unparsable go must not
@@ -189,7 +201,7 @@ fn go_without_a_position_searches_the_start_position() {
     // runs without a position — it searches the start position and answers a
     // real bestmove. The null-bestmove answer path stays as robustness for a
     // state that can no longer be reached through the protocol.
-    let stdout = run_engine(b"go depth 3\nquit\n");
+    let stdout = run_interactively(b"go depth 3\n");
     assert!(stdout.contains("info depth 1 "), "no search happened");
     let bestmove = stdout
         .lines()
@@ -253,9 +265,9 @@ fn ucinewgame_resets_to_the_start_position() {
 fn a_clocked_search_after_a_game_with_moves_returns_in_time() {
     // The clock starts at `go`, and the game history of the position command
     // is accepted: two knights out and back repeat the start position.
-    let stdout = run_engine(
+    let stdout = run_interactively(
         b"ucinewgame\nposition startpos moves g1f3 g8f6 f3g1 f6g8\n\
-          go wtime 2000 btime 2000 winc 20 binc 20\nquit\n",
+          go wtime 2000 btime 2000 winc 20 binc 20\n",
     );
     assert!(stdout.contains("info depth 1 "), "no search happened");
     assert!(stdout.contains("bestmove "), "missing bestmove");
@@ -324,7 +336,7 @@ fn go_perft_runs_the_counter_instead_of_a_search() {
 fn a_bare_go_searches_depth_six() {
     // Reference parity: a `go` with no limiter searches depth 6 (the old
     // KnightByte default of 8 was a recorded deviation).
-    let stdout = run_engine(b"position startpos\ngo\nquit\n");
+    let stdout = run_interactively(b"position startpos\ngo\n");
     assert!(stdout.contains("info depth 6 "), "depth 6 was not reached");
     assert!(stdout.contains("bestmove "), "missing bestmove");
 }
@@ -333,7 +345,7 @@ fn a_bare_go_searches_depth_six() {
 fn unknown_go_tokens_are_ignored_not_rejected() {
     // Reference parity: a `go` with an unknown token still searches instead of
     // reporting an unsupported limiter, so a GUI never loses its move.
-    let stdout = run_engine(b"position startpos\ngo depth 2 nonsense\nquit\n");
+    let stdout = run_interactively(b"position startpos\ngo depth 2 nonsense\n");
     assert!(
         !stdout.contains("not supported"),
         "the unknown token was reported as an error"
@@ -345,12 +357,24 @@ fn unknown_go_tokens_are_ignored_not_rejected() {
 #[test]
 fn argv_runs_a_one_shot_command_line() {
     // The reference's argv surface: all non-param arguments are joined into ONE
-    // UCI command line, run once, and the engine exits afterwards. A bare
-    // `go depth 1` searches the start position (the predecessor's bug-143 fix).
+    // UCI command line, run once, and the engine exits afterwards. A burst
+    // `go depth 1` + `quit` stops the search before an iteration completes —
+    // verified against the reference binary (2026-11-18): it answers the same
+    // depth-0 line.
     let (stdout, success) = run_engine_with_args(&["go depth 1"], b"");
     assert!(success, "one-shot run failed");
-    assert!(stdout.contains("info depth 1 "), "no search happened");
-    assert!(stdout.contains("bestmove "), "missing bestmove");
+    assert!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("bestmove "))
+            .count()
+            == 1,
+        "exactly one bestmove expected: {stdout}"
+    );
+    assert!(
+        stdout.contains("info depth 0 score cp "),
+        "the stopped one-shot answers the depth-0 line: {stdout}"
+    );
 }
 
 #[test]
@@ -437,5 +461,217 @@ fn setoption_validation_matches_the_step_zero_transcript() {
         lines,
         vec!["info string Unknown option: NoSuchOption"],
         "the setoption replay must stay silent except for the unknown name"
+    );
+}
+
+// ----------------------------------------------------------------------
+// Phase 5 step 4: the search runs on a worker thread; the loop keeps
+// reading commands while it runs.
+// ----------------------------------------------------------------------
+
+/// Spawns the engine and returns it with a timestamped line reader running.
+///
+/// The reader records every output line with the instant it arrived, which
+/// is what the stop-latency test measures against.
+fn spawn_with_reader(
+    lines: &std::sync::Arc<std::sync::Mutex<Vec<(Instant, String)>>>,
+) -> (std::process::Child, std::thread::JoinHandle<()>) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_knightbyte"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn knightbyte");
+    let stdout = child.stdout.take().expect("stdout");
+    let reader_lines = std::sync::Arc::clone(lines);
+    let reader = std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(stdout).lines() {
+            match line {
+                Ok(line) => reader_lines
+                    .lock()
+                    .expect("reader lock")
+                    .push((Instant::now(), line)),
+                Err(_) => break,
+            }
+        }
+    });
+    (child, reader)
+}
+
+#[test]
+fn stop_answers_go_infinite_within_100_ms() {
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (mut child, reader) = spawn_with_reader(&lines);
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin
+        .write_all(b"position startpos\ngo infinite\n")
+        .expect("write go");
+    stdin.flush().expect("flush go");
+    // Let the search reach a couple of iterations before stopping.
+    std::thread::sleep(Duration::from_millis(300));
+
+    let stopped = Instant::now();
+    stdin.write_all(b"stop\n").expect("write stop");
+    stdin.flush().expect("flush stop");
+
+    let deadline = stopped + Duration::from_millis(100);
+    let mut bestmove_time = None;
+    while Instant::now() < deadline {
+        let found = lines
+            .lock()
+            .expect("reader lock")
+            .iter()
+            .find(|(_, line)| line.starts_with("bestmove "))
+            .map(|(instant, _)| *instant);
+        if let Some(instant) = found {
+            bestmove_time = Some(instant);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let bestmove_time = bestmove_time.expect("no bestmove within 100 ms of stop");
+    assert!(
+        bestmove_time.duration_since(stopped) < Duration::from_millis(100),
+        "the bestmove took {:?} after stop",
+        bestmove_time.duration_since(stopped)
+    );
+
+    stdin.write_all(b"quit\n").expect("write quit");
+    drop(stdin);
+    assert!(child.wait().expect("wait").success(), "engine failed");
+    reader.join().expect("reader");
+    // Exactly one bestmove for the one go.
+    assert_eq!(
+        lines
+            .lock()
+            .expect("reader lock")
+            .iter()
+            .filter(|(_, line)| line.starts_with("bestmove "))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn two_hundred_go_stop_cycles_answer_exactly_one_bestmove_each() {
+    // Every go gets exactly one bestmove, whether the stop arrives before
+    // depth 1 finishes (a depth-0 answer) or during a later iteration. The
+    // cycles walk depths 1 to 6, as the step-4 test prescription asks.
+    let mut script = String::from("position startpos\n");
+    let mut cycles = 0;
+    for depth in 1..=6 {
+        for _ in 0..(200 / 6 + usize::from(depth <= 2)) {
+            script.push_str(&format!("go depth {depth}\nstop\n"));
+            cycles += 1;
+        }
+    }
+    script.push_str("quit\n");
+
+    let stdout = run_engine_with_args(&[], script.as_bytes()).0;
+    assert_eq!(cycles, 200);
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("bestmove "))
+            .count(),
+        200,
+        "every go/stop cycle must answer exactly one bestmove"
+    );
+}
+
+#[test]
+fn quit_during_a_search_exits_cleanly() {
+    let stdout = run_engine(b"position startpos\ngo depth 30\nquit\n");
+    assert!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("bestmove "))
+            .count()
+            == 1,
+        "quit during a search must still answer the go exactly once"
+    );
+}
+
+#[test]
+fn isready_is_answered_during_a_search() {
+    // The step-0 capture (isready_during_search.txt): readyok comes at once,
+    // preceded by the eval-source line, while the search runs.
+    let stdout = run_engine(b"position startpos\ngo depth 20\nisready\nquit\n");
+    assert!(stdout.contains("readyok"), "readyok missing");
+    assert!(stdout.contains("eval-source"), "eval-source line missing");
+    assert!(
+        stdout.lines().any(|line| line.starts_with("bestmove ")),
+        "missing bestmove"
+    );
+}
+
+#[test]
+fn a_single_legal_move_is_answered_at_once() {
+    // Quirk Q8 (reference parity): nothing to consider, so the move is
+    // answered with a depth-0 info line carrying the static evaluation and
+    // no search runs. The FEN is verified against the external oracle at
+    // test time, per the project rules.
+    common::verify_fen("7k/8/8/8/8/1p6/r7/K7 w - - 0 1");
+    let stdout = run_engine(b"position fen 7k/8/8/8/8/1p6/r7/K7 w - - 0 1\ngo depth 5\nquit\n");
+    let depth_lines: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.starts_with("info depth "))
+        .collect();
+    assert_eq!(depth_lines.len(), 1, "exactly the depth-0 line: {stdout}");
+    assert!(
+        depth_lines[0].starts_with("info depth 0 score cp "),
+        "the depth-0 line carries the static evaluation: {}",
+        depth_lines[0]
+    );
+    assert!(
+        depth_lines[0].ends_with("pv a1b1"),
+        "the only move: {stdout}"
+    );
+    assert!(
+        stdout.contains("bestmove a1b1"),
+        "the only move is the bestmove: {stdout}"
+    );
+}
+
+#[test]
+fn a_stop_before_depth_1_finishes_answers_depth_zero() {
+    // The step-0 capture (stop.txt, scenario b): a stop that arrives before
+    // depth 1 completes gets `info depth 0 score cp <static-eval> pv
+    // <first-legal-move>` and the first legal move as the bestmove — the
+    // start position evaluates 27 and generates a2a3 first.
+    let stdout = run_engine(b"position startpos\ngo depth 1\nstop\nquit\n");
+    let depth_lines: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.starts_with("info depth "))
+        .collect();
+    assert_eq!(
+        depth_lines,
+        vec!["info depth 0 score cp 27 pv a2a3"],
+        "the stop-during-depth-1 answer must match the capture: {stdout}"
+    );
+    assert!(stdout.contains("bestmove a2a3"), "missing bestmove");
+}
+
+#[test]
+fn a_command_touching_the_state_joins_the_running_search() {
+    // The fallback for GUIs that break the protocol: `position` during a
+    // running search stops and joins it first (one bestmove on the wire),
+    // then applies. The `d` output proves the new position is live.
+    let stdout =
+        run_engine(b"position startpos\ngo depth 30\nposition startpos moves e2e4\nd\nquit\n");
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("bestmove "))
+            .count(),
+        1,
+        "the joined search answers once; no second bestmove"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("info string FEN: rnbqkbnr/pppppppp/8/8/4P3")),
+        "the position command was not applied after the join: {stdout}"
     );
 }

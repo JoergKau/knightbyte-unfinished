@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-18 (Phase 5 steps 0–3 done — step 3 completed the `info` lines: nps/time/hashfull per iteration with the captured field order; the plan's `tbhits 0` turned out to be absent from the captured reference lines and is omitted the same way)  
+**Last updated:** 2026-11-18 (Phase 5 steps 0–4 done — step 4 moved the search onto a 16 MB worker thread with a shared stop flag, per-1024-node stop polling, the join-first fallback and the Q8/stop-before-depth-1 depth-0 answers; the burst go+quit semantics were verified against the reference binary itself)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
@@ -25,18 +25,28 @@ validation with one test per rule, the handshake's book/tablebase/eval-source
 `SingularExcludeTtCutoff`) are done. **Step 3** completed the `info` lines:
 every iteration now reports `depth seldepth score nodes nps hashfull time pv`
 in the captured order, with the nps zero-time guard and the occupancy read
-once per iteration. The step-0 capture found **predecessor
+once per iteration. The plan's `tbhits 0` is absent from the captured reference lines and is
+omitted the same way until Syzygy lands. **Step 4** moved the search onto a
+16 MB worker thread: the loop keeps reading commands while the search runs,
+`stop` sets a shared flag (polled every 1024 nodes, no per-node clock read),
+`quit`/EOF and every state-touching command stop and join first, a stop
+before depth 1 finishes answers `info depth 0 score cp <eval> pv <first
+legal move>` and exactly one `bestmove` per `go` comes from the worker. The
+burst go+quit and one-shot argv semantics were verified against the
+reference binary itself (both engines answer the depth-0 line). The step-0
+capture found **predecessor
 bug 150** (`setoption Hash` above the declared maximum crashed the reference
 via an overflowing `TTable.Resize` allocation); it was fixed in the
 predecessor the same day (commit `acaff1f`, full suite 745/745). KnightByte
 was not affected (spin clamping). The step-2 measurement found **B38**: the
 first table clear after a fresh 1 GB `Hash` resize pays the OS page commit
-(~190–275 ms); step 7's bounded `ucinewgame` fixes it. Next: Phase 5 step 4
-(search thread, stop flag, removal of the per-node clock read).
+(~190–275 ms); step 7's bounded `ucinewgame` fixes it. Next: Phase 5 step 5
+(`go ponder`/`ponderhit`).
 
-Verification status on the last run: all 221 tests pass locally on Windows
+Verification status on the last run: all 228 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
-fmt/clippy clean; all four bench pins exact. Node identity is verified on this
+fmt/clippy clean; all four bench pins exact and `capture_bench.py compare`
+shows every per-position delta at +0. Node identity is verified on this
 Windows host only; macOS and Linux still have to confirm it (migration-plan G6).
 
 ---
@@ -169,15 +179,18 @@ KnightByte-only three.
 Next action: still open is a test that setting each *wired* lever changes the
 search on a probe position (the C# suite has this pattern).
 
-### 2.4 Threading, `stop`, `ponder` are not implemented
+### 2.4 Threading, `stop`, `ponder` — the search thread landed; Lazy SMP and ponder are open
 
-`go infinite` is accepted (the manager runs in infinite mode), but the UCI
-loop is synchronous: `go` blocks until the search returns, and there is no
-way to interrupt it. `Threads` is advertised and accepted but the engine
-always searches on one thread.
+Step 4 (2026-11-18) is done: `go` runs on a 16 MB worker thread, the UCI
+loop keeps reading commands while it searches, `stop` sets a shared flag
+that the search polls every 1024 nodes (the exact `go nodes` limit stays a
+per-node integer comparison), and `quit`/EOF plus every state-touching
+command stop and join a running search first. `Threads` is still validated
+and inert (one thread) until step 8.
 
-Next action (Phase 5): search thread plus stop flag, `stop`/`ponderhit`,
-Lazy SMP workers sharing the TT.
+Next action (Phase 5): step 5 `go ponder`/`ponderhit`, step 6
+`go mate`/`searchmoves`, then step 7 shared tables and step 8 Lazy SMP
+workers.
 
 ### 2.5 Inert public options
 
@@ -230,7 +243,7 @@ Syzygy optional.
 | Repetitions of earlier game positions | fixed (B31); bench could never have shown it |
 | Own book off, ponder off | trivially true: the book and ponder options are accepted and inert |
 | Hash 128/256 MB | the `Hash` option accepts 1-1024 MB (default 256) |
-| Threads | accepted, single-threaded until Phase 5 |
+| Threads | accepted, single-threaded until Phase 5 step 8 |
 | Syzygy | not implemented (optional for CCRL, Phase 6) |
 | Windows x64 zip, README, licence | README and MIT licence exist; the release packaging, a tagged public release and a Linux build are Phase 8 |
 
@@ -251,9 +264,9 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 ## 3. Recommended next steps, in order
 
-**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0 (oracle transcripts), 1 (command surface and parser), 2 (option surface and `setoption` validation) and 3 (`info` line completeness) are complete; **step 4 (search thread, stop flag, removal of the per-node clock read) is next**, the core change of the phase. Details in `migration-plan.md`, Phase 5.
+**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–4 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, and the search thread with the shared stop flag (per-1024-node polling, join-first fallback, the Q8 and stop-before-depth-1 depth-0 answers verified against the reference binary). **Step 5 (`go ponder`/`ponderhit`) is next**, then step 6 (`go mate`/`searchmoves`). Details in `migration-plan.md`, Phase 5.
 
-### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–2 done)
+### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–4 done)
 
 - ~~Step 2: option surface and `setoption` validation~~ — done (2026-11-18):
   full lever catalogue advertised and pinned against `levers.json`,
@@ -270,8 +283,14 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
   KnightByte's (startpos depth 2: `e2e4 c7c5` vs `e2e4 c7c6`) — derived
   reporting the reference refreshes between iterations; the search is
   node-identical.
-- Step 4: search thread with `stop`; step 5: `go ponder`/`ponderhit`;
-  step 6: `go mate`/`searchmoves`.
+- ~~Step 4: search thread with `stop`~~ — done (2026-11-18): 16 MB worker
+  thread, shared stop flag polled every 1024 nodes (no per-node clock read),
+  `quit`/EOF and state-touching commands stop and join first, the Q8
+  single-legal-move fast path, and the stop-before-depth-1 depth-0 answer;
+  the burst go+quit and one-shot argv semantics verified against the
+  reference binary. The former burst-style smoke tests now use the
+  interactive pattern (wait for `bestmove`, then `quit`).
+- Step 5: `go ponder`/`ponderhit`; step 6: `go mate`/`searchmoves`.
 - Steps 7–9: shared tables, Lazy SMP workers, multi-thread stress gates.
 - Steps 10–13: output decision, lever independence, UCI transcript tests
   against the step-0 captures, match gates (1,000 games vs the reference).

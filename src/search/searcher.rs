@@ -134,6 +134,11 @@ pub struct Searcher {
     pub(crate) move_overhead_ms: u64,
     /// Start of the current search, used for the time budgets.
     pub(crate) start: std::time::Instant,
+    /// Cooperative stop flag shared with the UCI loop. The loop sets it on
+    /// `stop` (and on the join-first fallback); the search polls it every
+    /// 1024 nodes and before every iteration. A searcher created without the
+    /// UCI layer owns a flag that is never set.
+    pub(crate) stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Number of completed iterations; the first one always runs to the end.
     pub(crate) completed_depth: i32,
     /// When the trace flag is on, every search node writes one ledger line to
@@ -172,6 +177,7 @@ impl Searcher {
             nodes_per_move: Box::new([0; 64 * 64]),
             move_overhead_ms: crate::search::time_manager::DEFAULT_MOVE_OVERHEAD_MS,
             start: std::time::Instant::now(),
+            stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             completed_depth: 0,
             trace: std::env::var_os("KNIGHTBYTE_TRACE").is_some(),
         }
@@ -354,6 +360,13 @@ impl Searcher {
         let mut last_score = 0;
 
         for depth in 1..=max_depth {
+            // The stop flag is honoured before each iteration too: a `stop`
+            // that arrived between iterations must not start a new one. The
+            // per-node polling in `should_stop` alone could miss it for up
+            // to 1023 nodes into the next iteration.
+            if self.stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
             let Some((score, pv)) = self.search_root(position, depth, last_score) else {
                 break;
             };
@@ -486,8 +499,29 @@ impl Searcher {
         value
     }
 
+    /// Installs a fresh, cleared stop flag and returns its handle.
+    ///
+    /// The UCI loop keeps the handle and sets it on `stop` (and on the
+    /// join-first fallback for protocol-breaking commands); the search polls
+    /// it every 1024 nodes and before every iteration. Arming before every
+    /// `go` also clears any flag left over from a previous search.
+    pub fn arm_stop_flag(&mut self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+        let flag = Arc::new(AtomicBool::new(false));
+        self.stop_flag = Arc::clone(&flag);
+        flag
+    }
+
     /// Returns whether the search must stop before visiting another node.
+    ///
+    /// Two checks stay on every node, and they are plain integer comparisons:
+    /// the exact `go nodes` limit, and the remembered stop decision. The
+    /// expensive inputs — the wall clock and the shared stop flag — are
+    /// polled only every 1024 nodes (the plan's step-4 rule: no clock read
+    /// and no atomic access per node).
     pub(crate) fn should_stop(&mut self) -> bool {
+        use std::sync::atomic::Ordering;
         if self.stopped {
             return true;
         }
@@ -495,11 +529,14 @@ impl Searcher {
             && self.nodes >= limit
         {
             self.stopped = true;
+            return true;
         }
-        // The time manager decides on the hard limit and the effective soft
-        // limit (with the min-depth guard: a soft stop never plays a
-        // shallow blunder).
-        if !self.stopped && self.time_manager.should_stop(self.now_ms()) {
+        // `nodes` was incremented before this call, so the polling window
+        // fires once every 1024 visited nodes.
+        if self.nodes & 1023 == 0
+            && (self.stop_flag.load(Ordering::Relaxed)
+                || self.time_manager.should_stop(self.now_ms()))
+        {
             self.stopped = true;
         }
         self.stopped

@@ -19,7 +19,7 @@ use crate::output::Output;
 use crate::search::lever_table::{LEVERS, LeverSpec};
 use crate::search::limits::Limits;
 use crate::search::options::{OptionKind, PUBLIC_OPTIONS, UciOption, lever, public, set};
-use crate::search::searcher::{MATE_LIMIT, MATE_SCORE, SearchInfo, Searcher};
+use crate::search::searcher::{MATE_LIMIT, MATE_SCORE, SearchInfo, SearchResult, Searcher};
 use crate::search::time_manager::TimeControl;
 use crate::tools::bench;
 use crate::tools::net::NET_SOURCE_NAME;
@@ -82,6 +82,14 @@ pub fn run_with_argv(argv: &[String]) -> io::Result<()> {
 }
 
 /// Runs the UCI event loop over `reader` with preset parameter overrides.
+///
+/// A `go` runs the search on a worker thread (with an explicit 16 MB stack,
+/// so the recursion depth never depends on the platform's main-thread stack);
+/// the loop keeps reading standard input while it runs. `stop` sets a shared
+/// flag and joins, `quit` stops, joins and exits, and every command that
+/// touches the searcher or the position first joins a running search (the
+/// fallback for GUIs that break the protocol; it never prints a second
+/// `bestmove` because the worker prints the only one).
 fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
     let mut output = Output::new();
     // Reference parity (the predecessor's bug-143 fix): the engine starts on
@@ -89,8 +97,15 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
     // something sensible instead of answering a null bestmove. The option
     // stays in the type because the answer path below remains as robustness.
     let mut position: Option<Position> = Some(start_position());
-    let mut searcher = Searcher::new(DEFAULT_TT_MEGABYTES);
-    apply_preset_params(params, &mut searcher, &mut output)?;
+    // The searcher lives here between searches. While one runs on the
+    // worker, it is `None`: it comes back through the join handle.
+    let mut searcher: Option<Searcher> = Some(Searcher::new(DEFAULT_TT_MEGABYTES));
+    apply_preset_params(
+        params,
+        searcher.as_mut().expect("no search started yet"),
+        &mut output,
+    )?;
+    let mut active: Option<ActiveSearch> = None;
 
     let mut debug_mode = false;
     for line in reader.lines() {
@@ -103,8 +118,9 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
         match parser::parse(command) {
             parser::Command::Uci => handshake(&mut output)?,
             // The eval-source line is restated on every `isready` (the step-0
-            // transcript shows it before each `readyok`): a GUI that attaches
-            // late still learns which evaluation the engine will use.
+            // transcript shows it before each `readyok`, including during a
+            // search): a GUI that attaches late still learns which evaluation
+            // the engine will use.
             parser::Command::IsReady => {
                 output.line(&eval_source_line())?;
                 output.line("readyok")?;
@@ -114,30 +130,48 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             // searches the previous game's position. The game history is
             // reset with it: the start position has no earlier positions.
             parser::Command::UciNewGame => {
-                searcher.clear();
+                stop_search(&mut active, &mut searcher);
+                let state = searcher.as_mut().expect("restored by the join");
+                state.clear();
                 position = Some(start_position());
-                searcher.set_game_history(&[]);
+                state.set_game_history(&[]);
             }
-            parser::Command::Bench => bench::run(command, &mut output)?,
-            parser::Command::SetOption => handle_set_option(command, &mut searcher, &mut output)?,
-            parser::Command::Position => match parse_position(command) {
-                Ok((next, earlier_keys)) => {
-                    searcher.set_game_history(&earlier_keys);
-                    position = Some(next);
+            parser::Command::Bench => {
+                stop_search(&mut active, &mut searcher);
+                bench::run(command, &mut output)?
+            }
+            parser::Command::SetOption => {
+                stop_search(&mut active, &mut searcher);
+                handle_set_option(
+                    command,
+                    searcher.as_mut().expect("restored by the join"),
+                    &mut output,
+                )?
+            }
+            parser::Command::Position => {
+                stop_search(&mut active, &mut searcher);
+                let state = searcher.as_mut().expect("restored by the join");
+                match parse_position(command) {
+                    Ok((next, earlier_keys)) => {
+                        state.set_game_history(&earlier_keys);
+                        position = Some(next);
+                    }
+                    // Reference parity (the predecessor's bug-144/145
+                    // decision): a rejected `position` command is reported
+                    // loudly and keeps the previous position, so the engine
+                    // never silently searches a position the GUI did not ask
+                    // for.
+                    Err(error) => output.line(&format!("info string {}", error.message()))?,
                 }
-                // Reference parity (the predecessor's bug-144/145 decision): a
-                // rejected `position` command is reported loudly and keeps the
-                // previous position, so the engine never silently searches a
-                // position the GUI did not ask for.
-                Err(error) => output.line(&format!("info string {}", error.message()))?,
-            },
-            parser::Command::Go => {
-                handle_go(command, position.as_ref(), &mut searcher, &mut output)?
             }
-            // The search runs synchronously until the worker thread lands in
-            // step 4; with no search running a `stop` is a no-op, exactly like
-            // the reference.
-            parser::Command::Stop => {}
+            parser::Command::Go => {
+                stop_search(&mut active, &mut searcher);
+                handle_go(command, position, &mut searcher, &mut active, &mut output)?
+            }
+            // The flag is set and the worker joined: its one `bestmove` is
+            // already on the wire. With no search running a `stop` is a
+            // no-op, exactly like the reference.
+            parser::Command::Stop => stop_search(&mut active, &mut searcher),
             // Ponder support arrives in step 5; without a ponder search a
             // `ponderhit` is ignored, as the step-0 transcript shows.
             parser::Command::PonderHit => {}
@@ -149,7 +183,10 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                     .nth(1)
                     .is_some_and(|value| value.eq_ignore_ascii_case("on"));
             }
-            parser::Command::Perft => handle_perft(command, position.as_ref(), &mut output)?,
+            parser::Command::Perft => {
+                stop_search(&mut active, &mut searcher);
+                handle_perft(command, position.as_ref(), &mut output)?
+            }
             parser::Command::NnueEval => handle_nnue_eval(position.as_ref(), &mut output)?,
             parser::Command::Display => handle_display(position.as_ref(), &mut output)?,
             parser::Command::Eval => handle_eval(position.as_ref(), &mut output)?,
@@ -159,7 +196,12 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             )?,
             parser::Command::SearchStats => output
                 .line("info string searchstats: the search instrumentation is not ported yet")?,
-            parser::Command::Quit => break,
+            // `quit` stops and joins first: the worker finishes its
+            // `bestmove` and the process exits cleanly.
+            parser::Command::Quit => {
+                stop_search(&mut active, &mut searcher);
+                break;
+            }
             parser::Command::Unknown => {
                 // Reference parity: the report names the lowercased command
                 // word, not the whole line.
@@ -172,8 +214,38 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
         }
     }
     let _ = debug_mode;
+    // End of input behaves like `quit`: a still-running search is stopped,
+    // joined and answers its `bestmove` before the process exits.
+    stop_search(&mut active, &mut searcher);
 
     Ok(())
+}
+
+/// A search running on the worker thread.
+struct ActiveSearch {
+    /// The flag the UCI loop sets on `stop`; the search polls it every 1024
+    /// nodes and before every iteration.
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The worker. It prints exactly one `bestmove` and hands the searcher
+    /// back through its return value.
+    worker: std::thread::JoinHandle<Searcher>,
+}
+
+/// Stops a running search and takes the searcher back.
+///
+/// Setting the flag ends the search at the next 1024-node poll; the worker
+/// prints its one `bestmove` and returns the searcher. With no search
+/// running this is a no-op.
+fn stop_search(active: &mut Option<ActiveSearch>, searcher: &mut Option<Searcher>) {
+    if let Some(job) = active.take() {
+        use std::sync::atomic::Ordering;
+        job.stop.store(true, Ordering::Relaxed);
+        *searcher = Some(
+            job.worker
+                .join()
+                .expect("the search worker must return the searcher"),
+        );
+    }
 }
 
 /// Applies `param:Name=Value` startup overrides to the searcher.
@@ -477,11 +549,24 @@ fn parse_go(line: &str) -> GoLimits {
     limits
 }
 
+/// Stack size of the search worker, in bytes.
+///
+/// The Windows main thread has one megabyte, and the recursion depth must
+/// never depend on the platform. The performance audit's figure is used:
+/// 16 MB covers the deepest legal search stacks with a wide margin.
+const SEARCH_STACK_BYTES: usize = 16 * 1024 * 1024;
+
 /// Searches the current position and prints the UCI transcript.
+///
+/// The search runs on a dedicated worker thread with an explicit 16 MB
+/// stack; the searcher moves into the worker and comes back through the
+/// join handle, so its learned tables survive between searches. The UCI
+/// loop keeps reading commands while the worker runs.
 fn handle_go(
     line: &str,
-    position: Option<&Position>,
-    searcher: &mut Searcher,
+    position: Option<Position>,
+    state: &mut Option<Searcher>,
+    active: &mut Option<ActiveSearch>,
     output: &mut Output,
 ) -> io::Result<()> {
     let limits = parse_go(line);
@@ -489,7 +574,7 @@ fn handle_go(
     // `go perft N` runs the node counter instead of a search and prints no
     // `bestmove`, exactly like the reference's HandleGo branch.
     if limits.perft_depth > 0 {
-        return handle_perft_depth(limits.perft_depth, position, output);
+        return handle_perft_depth(limits.perft_depth, position.as_ref(), output);
     }
 
     // Steps 5 and 6 bring the real implementations; until then the fallback
@@ -498,13 +583,33 @@ fn handle_go(
         output.line(
             "info string go ponder/mate/searchmoves: not supported yet, answering a legal move",
         )?;
-        return answer_without_search(position, output);
+        return answer_without_search(position.as_ref(), output);
     }
 
     let Some(position) = position else {
         output.line("info string no position set")?;
         return answer_without_search(None, output);
     };
+
+    // Quirk Q8 (reference parity, not while pondering): with exactly one
+    // legal move there is nothing to consider — the move is answered at once
+    // with a depth-0 info line carrying the static evaluation, and no search
+    // runs.
+    let root_moves = legal(&position);
+    if root_moves.len() == 1 {
+        let only = root_moves.as_slice()[0];
+        output.line(&format!(
+            "info depth 0 score cp {} pv {}",
+            evaluate_position(&position),
+            only.to_uci()
+        ))?;
+        return output.line(&format!("bestmove {}", only.to_uci()));
+    }
+
+    // The worker owns the searcher for the duration of the search; it comes
+    // back through the join handle.
+    let mut searcher = state.take().expect("a finished search restored the state");
+
     if limits.movetime > 0 {
         searcher.init_movetime(limits.movetime);
     } else if limits.has_time_control() {
@@ -539,21 +644,65 @@ fn handle_go(
         search_limits.nodes = Some(limits.nodes);
     }
 
-    let mut write_error: Option<io::Error> = None;
-    let result = searcher.search(position, search_limits, &mut |info| {
-        if write_error.is_some() {
-            return;
-        }
-        let line = format_info(info);
-        if let Err(error) = output.line(&line) {
-            write_error = Some(error);
-        }
-    });
-    if let Some(error) = write_error {
-        return Err(error);
-    }
+    // A fresh flag per `go`: the UCI loop keeps the handle for `stop` and
+    // the join-first fallback, the search polls it every 1024 nodes.
+    let stop = searcher.arm_stop_flag();
+    let worker_stop = std::sync::Arc::clone(&stop);
+    let worker = std::thread::Builder::new()
+        .name("search".to_owned())
+        .stack_size(SEARCH_STACK_BYTES)
+        .spawn(move || {
+            // The worker owns its output writer; both writers lock standard
+            // output per line, so replies never interleave mid-line. When
+            // the reader is gone (a broken pipe), the first failed write
+            // sets the stop flag so the search drains instead of spinning.
+            let mut output = Output::new();
+            let mut write_failed = false;
+            let result = searcher.search(&position, search_limits, &mut |info| {
+                if write_failed {
+                    return;
+                }
+                let line_text = format_info(info);
+                if output.line(&line_text).is_err() {
+                    write_failed = true;
+                    worker_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+            answer_search_result(&position, &result, &mut output);
+            searcher
+        })?;
+    // A spawn failure loses the moved searcher, so it is fatal: the engine
+    // exits with the error instead of continuing without its search state.
+    *active = Some(ActiveSearch { stop, worker });
+    Ok(())
+}
 
-    output.line(&format!("bestmove {}", result.best_move.to_uci()))
+/// Prints the answer every `go` ends with: exactly one `bestmove`.
+///
+/// When no iteration completed (a `stop` before depth 1 finished, or a
+/// position without legal moves) the reference answers the static
+/// evaluation with the first legal move on a depth-0 line (the step-0
+/// capture, scenario b) — unless there is no legal move at all, where the
+/// null move is the protocol's only answer.
+fn answer_search_result(position: &Position, result: &SearchResult, output: &mut Output) {
+    if result.depth == 0 {
+        let first = legal(position).as_slice().first().copied();
+        match first {
+            Some(first) => {
+                let _ = output.line(&format!(
+                    "info depth 0 score cp {} pv {}",
+                    evaluate_position(position),
+                    first.to_uci()
+                ));
+                let _ = output.line(&format!("bestmove {}", first.to_uci()));
+            }
+            None => {
+                let _ = output.line("bestmove 0000");
+            }
+        }
+        return;
+    }
+    let _ = output.line(&format!("bestmove {}", result.best_move.to_uci()));
 }
 
 /// Answers a `go` that cannot be searched (an unsupported limiter, a missing
