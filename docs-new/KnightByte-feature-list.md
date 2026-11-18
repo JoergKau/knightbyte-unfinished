@@ -151,6 +151,13 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
 - [x] Clock-imbalance weighting (two-sided, off by default, supersedes the
       one-sided time-advantage multiplier, which is on).
 - [x] Persistent Lazy SMP workers (step 8, above).
+- [x] Step 9: the multi-thread stress gate — a seeded, replayable 500-cycle
+      walk across `Threads` 1/2/4/8 (`tests/thread_stress.rs`): no panic,
+      exactly one `bestmove` per `go`, every `bestmove` legal for its
+      position (the walk mirrors positions through the engine library). The
+      walk found and fixed B39 (`setoption Hash` after a helper search
+      killed the engine via the resize's exclusive borrow; the reference
+      cannot have it — its .NET references never constrain a resize).
 - [x] Full lever-catalogue surface: all 83 reference levers are advertised
       under their reference names, defaults and ranges (step 2,
       `src/search/lever_table.rs`), plus three KnightByte-only research

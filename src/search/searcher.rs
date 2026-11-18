@@ -593,6 +593,18 @@ impl Searcher {
         self.tables = tables;
     }
 
+    /// Releases the shared tables (bug B39 fix).
+    ///
+    /// A persistent helper must not keep the `SharedTables` clones between
+    /// searches: the clones would keep the transposition table's `Arc` count
+    /// above one forever, and every later `setoption Hash` resize would fail
+    /// its exclusive-borrow check and kill the engine. After a search, the
+    /// helper holds only its own minimal private tables until the next job
+    /// arrives.
+    pub fn release_tables(&mut self) {
+        self.tables = crate::search::tables::SharedTables::new(1);
+    }
+
     /// Attaches the shared node counter of a helper search.
     ///
     /// While attached, the reported node counts are this searcher's exact

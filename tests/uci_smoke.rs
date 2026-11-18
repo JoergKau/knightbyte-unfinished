@@ -928,6 +928,26 @@ fn threads_resizing_is_safe_when_no_search_runs() {
     );
 }
 
+#[test]
+fn a_hash_resize_after_a_helper_search_survives() {
+    // Bug B39 regression (found by the step-9 stress walk): helpers used to
+    // keep their SharedTables clones between searches, which blocked the
+    // exclusive resize borrow and killed the engine on the next
+    // `setoption Hash`. The full sequence must keep the engine alive and
+    // searching.
+    let stdout = run_interactively(
+        b"setoption name Threads value 4\nposition startpos\ngo depth 3\nsetoption name Hash value 16\n",
+    );
+    assert!(stdout.contains("bestmove "), "the first search answered");
+    let stdout = run_engine(
+        b"setoption name Threads value 4\nposition startpos\ngo depth 3\nsetoption name Hash value 16\nisready\nquit\n",
+    );
+    assert!(
+        stdout.contains("readyok"),
+        "the engine died on the resize after a helper search: {stdout}"
+    );
+}
+
 // ----------------------------------------------------------------------
 // Phase 5 step 6: `go mate N` and `go searchmoves`.
 // ----------------------------------------------------------------------

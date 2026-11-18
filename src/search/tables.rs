@@ -3,10 +3,11 @@
 //! Both tables are lock-free inside: probe and store work through `&self`
 //! with atomic operations, so an `Arc` handle is all a worker thread needs.
 //! `resize` and `clear` run only when no search is active — the UCI loop's
-//! join-first rule (step 4) guarantees no thread holds a handle then, which
-//! is what makes the exclusive-borrow resize safe.
+//! join-first rule (step 4) guarantees no live search holds a handle; the
+//! helpers' transient clones drain within milliseconds (see `resize`).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::search::eval_cache::EvalCache;
 use crate::search::tt::TranspositionTable;
@@ -36,14 +37,33 @@ impl SharedTables {
 
     /// Resizes the transposition table to `megabytes`.
     ///
+    /// # The exclusive borrow
+    ///
+    /// The resize needs the table's `Arc` count to be one. Three things can
+    /// transiently hold clones after a search: a helper draining its
+    /// iteration (it aborts at its next 1024-node poll), a helper's final
+    /// publish-and-release, and a queued job in a helper's channel (its stop
+    /// flag is already set, so it aborts at its first poll). All of them
+    /// drain within milliseconds, so the resize waits for them instead of
+    /// failing; the UCI loop's join-first rule guarantees no LIVE search
+    /// holds a clone.
+    ///
     /// # Panics
     ///
-    /// Panics when a search thread still holds a handle. That cannot happen:
-    /// a resize arrives through `setoption`, and the join-first rule has
-    /// already stopped and joined every search thread.
+    /// Panics when the table is still shared after five seconds — that is a
+    /// defect (a handle holder that never releases), and it is named loudly.
     pub fn resize(&mut self, megabytes: usize) {
-        let table = Arc::get_mut(&mut self.tt).expect("a resize must find no other handle holder");
-        table.resize(megabytes);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(table) = Arc::get_mut(&mut self.tt) {
+                table.resize(megabytes);
+                return;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("a resize found a persistent handle holder for five seconds");
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     /// Forgets every entry in both tables.

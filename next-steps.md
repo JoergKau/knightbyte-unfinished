@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-18 (Phase 5 steps 0–8 done — step 8 built the persistent Lazy SMP pool: `Threads` resizes the pool, helpers search the same job with their own persistent state, only the main thread reports the aggregate node counts; `Threads=1` pins unchanged)  
+**Last updated:** 2026-11-18 (Phase 5 steps 0–9 done — step 9 added the seeded 500-cycle multi-thread stress walk, which found and fixed B39: the resize's exclusive borrow vs the persistent helpers' table clones; the reference cannot have this bug — probed and documented)  
 **Rule:** update this document at the end of every working session.
 
 ## 0. Current state in one paragraph
@@ -56,15 +56,24 @@ blocks; only the main thread runs the time manager and reports
 (`reported_nodes` = own exact count + helpers' published blocks; the
 `go nodes` aggregate check happens at the 1024-node poll). Measured:
 `Threads=1` stays exact, `Threads=4` runs ~2.1× the single-threaded NPS on
-the depth-12 startpos search. The step-0
+the depth-12 startpos search. **Step 9** added the seeded 500-cycle
+multi-thread stress walk (`tests/thread_stress.rs`: random
+`position`/`go`/`stop`/`setoption`/`isready` cycles across `Threads`
+1/2/4/8, every `bestmove` checked for legality against the mirrored
+position, the engine's stderr captured). The walk found and fixed **B39**:
+`setoption Hash` after a helper search killed the engine (the helpers held
+their `SharedTables` clones; the resize's exclusive borrow failed). Fixed
+in three layers (helper release + pool idle barrier + bounded resize
+wait); the reference cannot have this bug (its .NET references never
+constrain a resize — probed: it survives a mid-search `Hash` resize with
+`Threads 4` attached). The step-0
 capture found **predecessor
 bug 150** (`setoption Hash` above the declared maximum crashed the reference
 via an overflowing `TTable.Resize` allocation); it was fixed in the
 predecessor the same day (commit `acaff1f`, full suite 745/745). KnightByte
-was not affected (spin clamping). Next: Phase 5 step 9 (helper diversity and
-the multi-thread stress gates).
+was not affected (spin clamping). Next: Phase 5 step 10 (output decision).
 
-Verification status on the last run: all 244 tests pass locally on Windows
+Verification status on the last run: all 247 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
 fmt/clippy clean; all four bench pins exact and `capture_bench.py compare`
 shows every per-position delta at +0. Node identity is verified on this
@@ -287,7 +296,7 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 **State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–7 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag, `go ponder`/`ponderhit`, `go mate`/`searchmoves` (every `go` limiter implemented), and the shared-tables refactor with the parallel-zeroing bounded clear (B38 fixed). **Step 8 (persistent workers and `Threads`, the Lazy SMP core) is next.** Details in `migration-plan.md`, Phase 5.
 
-### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–8 done)
+### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–9 done)
 
 - ~~Step 2: option surface and `setoption` validation~~ — done (2026-11-18):
   full lever catalogue advertised and pinned against `levers.json`,
@@ -336,8 +345,10 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
   only the main thread runs the time manager and reports. Measured:
   `Threads=4` ≈ 2.1× the single-threaded NPS (depth 12 startpos);
   `Threads=1` pins unchanged.
-- Steps 9–13: helper-diversity stress gates, output decision, lever
-  independence, UCI transcript tests, match gates.
+- ~~Step 9: helper diversity and the stress gate~~ — done (2026-11-18): the
+  seeded 500-cycle walk (`tests/thread_stress.rs`) passes; it found and
+  fixed B39 (the resize's exclusive borrow vs the helpers' table clones —
+  no reference counterpart, probed and documented).
 - Steps 10–13: output decision, lever independence, UCI transcript tests
   against the step-0 captures, match gates (1,000 games vs the reference).
 

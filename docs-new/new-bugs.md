@@ -585,6 +585,21 @@ last section lists predecessor quirks that are reproduced on purpose.
 - **Reproduction:** `python tools/time_clear_hash.py target/release/knightbyte.exe` — the "Clear Hash (2nd)" line is the commit-paying first clear.
 - **Status:** fixed 2026-11-18 (Phase 5 step 7) — `TranspositionTable::clear` zeroes in parallel (`std::thread::scope` over bucket chunks above 64 MB, `src/search/tt.rs`), so the parallel first touch divides the page-commit cost: the first clear after a fresh 1 GB resize now measures 59-64 ms (was ~190-275 ms), inside the step-2 threshold. Re-measured with `tools/time_clear_hash.py` (three runs, all bounded); node identity is untouched.
 
+## B39 — `setoption Hash` after a helper search killed the engine (the resize's exclusive borrow)
+
+- **Date:** 2026-11-18
+- **Build / commit:** Phase 5 step 8 working tree; found by the step-9 stress walk (seeded 500-cycle test)
+- **Platform / CPU:** Windows 11, AMD Ryzen 7 260; debug build under test
+- **Command or FEN:** `setoption name Threads value 4` → `position startpos` → `go depth 3` → `setoption name Hash value 16` → the process died before the next `go` was answered
+- **Expected:** a hash resize after any search keeps the engine alive.
+- **Actual:** the persistent helpers kept their `SharedTables` clones between searches, so the transposition table's `Arc` count never returned to one; `SharedTables::resize`'s `Arc::get_mut` failed its `expect` and the panic killed the engine. The stress walk then compared a stale `bestmove` against the wrong position (a second, test-side defect: the walk's wait used a satisfiable cumulative count instead of a snapshot).
+- **Root cause and fix, in three layers:**
+  1. A helper must not hold the handle between searches: `Searcher::release_tables` runs at the end of every helper job (`src/search/pool.rs`).
+  2. The helpers abort their iteration at their next 1024-node poll after the main search's stop flag, which can lag the main worker's join — `stop_search` now waits on the pool's idle barrier (`WorkerPool::wait_until_idle`, a busy counter per helper job).
+  3. A *queued* job in a helper's channel can still hold clones while the busy counter momentarily reads zero; `SharedTables::resize` therefore waits bounded (5 s) for `Arc::get_mut` instead of failing instantly, and panics loudly only if a holder never releases.
+- **Is this bug in the reference? No — it cannot be.** The reference's helpers hold .NET references to the shared `TTable` object, and `TTable.Resize` (the bug-150-fixed one) replaces the bucket array on the shared object with no exclusivity requirement; a garbage-collected reference cannot block a resize, so the crash mode does not exist there. Probed for the record (2026-11-18, publish build): `Threads 4`, `go depth 14`, the `Hash 16` resize sent mid-search — the reference never even stops the search (it completes to depth 14 and answers normally, exit code 0). The defect is a consequence of Rust's ownership rules in KnightByte's handle design, so it is logged here, not in the predecessor's log.
+- **Status:** fixed 2026-11-18 (step 9). The 500-cycle stress walk passes (8 s, seeded and therefore replayable), with per-search bounded waits, the engine's stderr captured to a file, and bestmove legality checked against the walk's mirrored position.
+
 ## Predecessor behaviour
 
 Predecessor quirks are tracked in the local quirk register, which is not part of
@@ -626,7 +641,10 @@ Consequences for KnightByte:
   Q2-Q4 (predecessor bugs 147-149). Node identity with the bug-fixed reference
   holds at every captured depth and position. B38 (the first-clear page
   commit after a large `Hash` resize) was fixed in Phase 5 step 7 with the
-  parallel table zeroing.
+  parallel table zeroing. B39 (the resize's exclusive borrow vs the
+  persistent helpers) was found by the step-9 stress walk and fixed in three
+  layers (release + idle barrier + bounded resize wait); it has no
+  counterpart in the reference (see its entry).
 
 ## Verified platforms
 

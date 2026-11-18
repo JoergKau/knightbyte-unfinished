@@ -136,18 +136,18 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             // searches the previous game's position. The game history is
             // reset with it: the start position has no earlier positions.
             parser::Command::UciNewGame => {
-                stop_search(&mut active, &mut searcher, &mut output);
+                stop_search(&mut active, &mut searcher, &pool, &mut output);
                 let state = searcher.as_mut().expect("restored by the join");
                 state.clear();
                 position = Some(start_position());
                 state.set_game_history(&[]);
             }
             parser::Command::Bench => {
-                stop_search(&mut active, &mut searcher, &mut output);
+                stop_search(&mut active, &mut searcher, &pool, &mut output);
                 bench::run(command, &mut output)?
             }
             parser::Command::SetOption => {
-                stop_search(&mut active, &mut searcher, &mut output);
+                stop_search(&mut active, &mut searcher, &pool, &mut output);
                 handle_set_option(
                     command,
                     searcher.as_mut().expect("restored by the join"),
@@ -156,7 +156,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                 )?
             }
             parser::Command::Position => {
-                stop_search(&mut active, &mut searcher, &mut output);
+                stop_search(&mut active, &mut searcher, &pool, &mut output);
                 let state = searcher.as_mut().expect("restored by the join");
                 match parse_position(command) {
                     Ok((next, earlier_keys)) => {
@@ -172,7 +172,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                 }
             }
             parser::Command::Go => {
-                stop_search(&mut active, &mut searcher, &mut output);
+                stop_search(&mut active, &mut searcher, &pool, &mut output);
                 handle_go(
                     command,
                     position,
@@ -186,7 +186,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             // already on the wire (or, for a ponder search, the Q5 null
             // move is printed by the join). With no search running a `stop`
             // is a no-op, exactly like the reference.
-            parser::Command::Stop => stop_search(&mut active, &mut searcher, &mut output),
+            parser::Command::Stop => stop_search(&mut active, &mut searcher, &pool, &mut output),
             // The ponder promotion: the ponder search's best move is applied
             // to the position and a fresh search starts with the clock
             // beginning at this moment (the step-0 capture, scenario b). A
@@ -207,7 +207,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                     .is_some_and(|value| value.eq_ignore_ascii_case("on"));
             }
             parser::Command::Perft => {
-                stop_search(&mut active, &mut searcher, &mut output);
+                stop_search(&mut active, &mut searcher, &pool, &mut output);
                 handle_perft(command, position.as_ref(), &mut output)?
             }
             parser::Command::NnueEval => handle_nnue_eval(position.as_ref(), &mut output)?,
@@ -223,7 +223,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             // `bestmove`, the helper pool shuts down, and the process exits
             // cleanly.
             parser::Command::Quit => {
-                stop_search(&mut active, &mut searcher, &mut output);
+                stop_search(&mut active, &mut searcher, &pool, &mut output);
                 pool.shutdown();
                 break;
             }
@@ -242,7 +242,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
     // End of input behaves like `quit`: a still-running search is stopped,
     // joined and answers its `bestmove`, and the helper pool is shut down,
     // before the process exits.
-    stop_search(&mut active, &mut searcher, &mut output);
+    stop_search(&mut active, &mut searcher, &pool, &mut output);
     pool.shutdown();
 
     Ok(())
@@ -277,9 +277,14 @@ struct ActiveSearch {
 /// search, which answers nothing itself: a `stop` (or a protocol-breaking
 /// command) without `ponderhit` ends it with the null move, exactly like
 /// the reference (quirk Q5). With no search running this is a no-op.
+///
+/// The pool's idle barrier is waited on in every case: the helpers release
+/// their shared-table handle at their next poll after the stop, which can
+/// lag the main worker's join (the bug-B40 window).
 fn stop_search(
     active: &mut Option<ActiveSearch>,
     searcher: &mut Option<Searcher>,
+    pool: &WorkerPool,
     output: &mut Output,
 ) {
     if let Some(job) = active.take() {
@@ -294,6 +299,7 @@ fn stop_search(
             let _ = output.line("bestmove 0000");
         }
     }
+    pool.wait_until_idle();
 }
 
 /// Applies `param:Name=Value` startup overrides to the searcher.

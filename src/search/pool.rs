@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::{Receiver, Sender};
+use std::time::Duration;
 
 use crate::board::position::Position;
 use crate::search::limits::Limits;
@@ -65,6 +66,9 @@ pub struct WorkerPool {
     helpers: Vec<Helper>,
     /// The requested `Threads` value; the pool holds `threads - 1` helpers.
     threads: usize,
+    /// How many helpers are currently inside a search job. The pool's idle
+    /// barrier waits for this to reach zero.
+    busy: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Default for WorkerPool {
@@ -79,6 +83,7 @@ impl WorkerPool {
         Self {
             helpers: Vec::new(),
             threads: 1,
+            busy: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -102,7 +107,7 @@ impl WorkerPool {
             }
         }
         while self.helpers.len() < wanted {
-            let (commands, thread) = spawn_helper();
+            let (commands, thread) = spawn_helper(self.busy.clone());
             self.helpers.push(Helper { commands, thread });
         }
     }
@@ -121,6 +126,31 @@ impl WorkerPool {
         }
     }
 
+    /// Waits until every helper is back to waiting (bounded).
+    ///
+    /// After a search's stop flag is set, a helper aborts its iteration at
+    /// its next 1024-node poll and releases the shared tables — which can
+    /// lag the main worker's join by a few milliseconds (up to 1024 nodes).
+    /// Every state-touching operation (`setoption Hash`'s exclusive resize
+    /// borrow, `ucinewgame`'s clear) must wait for that drain; this is the
+    /// bug-B39/B40 crash window, closed here in one place.
+    ///
+    /// The wait is bounded to five seconds; a helper that has not returned
+    /// by then is a defect and the panic names it loudly.
+    pub fn wait_until_idle(&self) {
+        use std::sync::atomic::Ordering;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while self.busy.load(Ordering::SeqCst) > 0 {
+            if std::time::Instant::now() > deadline {
+                panic!(
+                    "the helper pool did not drain: {} helper(s) still busy",
+                    self.busy.load(Ordering::SeqCst)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     /// Joins every helper, keeping the requested thread count.
     ///
     /// Called on `quit` and at end of input. After it returns, the pool
@@ -136,13 +166,17 @@ impl WorkerPool {
 /// Spawns one persistent helper thread with its own search state.
 ///
 /// The helper's own transposition table is the smallest allocation: the
-/// searches run on the shared handle that arrives with every job.
-fn spawn_helper() -> (Sender<HelperCommand>, std::thread::JoinHandle<()>) {
+/// searches run on the shared handle that arrives with every job. `busy` is
+/// the pool's idle barrier: one while the helper is inside a search job,
+/// zero while it waits.
+fn spawn_helper(
+    busy: Arc<std::sync::atomic::AtomicU64>,
+) -> (Sender<HelperCommand>, std::thread::JoinHandle<()>) {
     let (sender, receiver) = std::sync::mpsc::channel::<HelperCommand>();
     let thread = std::thread::Builder::new()
         .name("knightbyte-helper".to_owned())
         .stack_size(16 * 1024 * 1024)
-        .spawn(move || helper_loop(Searcher::new(1), receiver))
+        .spawn(move || helper_loop(Searcher::new(1), receiver, busy))
         .expect("a helper thread must spawn");
     (sender, thread)
 }
@@ -151,15 +185,28 @@ fn spawn_helper() -> (Sender<HelperCommand>, std::thread::JoinHandle<()>) {
 ///
 /// The helper's search state persists across jobs; the tables, stop flag and
 /// parameters arrive with every job, so option changes reach every helper.
-fn helper_loop(mut searcher: Searcher, receiver: Receiver<HelperCommand>) {
+fn helper_loop(
+    mut searcher: Searcher,
+    receiver: Receiver<HelperCommand>,
+    busy: Arc<std::sync::atomic::AtomicU64>,
+) {
+    use std::sync::atomic::Ordering;
     while let Ok(command) = receiver.recv() {
         match command {
             HelperCommand::Search(job) => {
+                busy.fetch_add(1, Ordering::SeqCst);
                 *searcher.params_mut() = job.params;
                 searcher.set_tables(job.tables);
                 searcher.use_stop_flag(job.stop);
                 searcher.search(&job.position, job.limits, &mut |_| {});
                 searcher.publish_node_blocks(true);
+                // Bug B39 fix: release the shared-table handle, or the
+                // helper's clones would block every later `setoption Hash`
+                // resize's exclusive borrow.
+                searcher.release_tables();
+                // Back to waiting: the pool's idle barrier (and with it any
+                // state-touching command) may proceed.
+                busy.fetch_sub(1, Ordering::SeqCst);
             }
             HelperCommand::Quit => break,
         }
@@ -217,5 +264,34 @@ mod tests {
         });
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         pool.shutdown();
+    }
+
+    #[test]
+    fn a_helper_releases_the_shared_tables_after_its_search() {
+        // Bug B39 regression: a helper that keeps its SharedTables clones
+        // between searches would block every later `setoption Hash` resize
+        // (the exclusive borrow requires the Arc count to be one). After the
+        // helpers drain their job and are joined, a resize must work — and
+        // while they are alive, the release after each job keeps the count
+        // at one anyway.
+        use std::sync::atomic::AtomicU64;
+        let mut pool = WorkerPool::new();
+        pool.set_threads(2);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let position = crate::board::position::Position::from_fen(crate::board::fen::STARTPOS_FEN)
+            .expect("the built-in start position must parse");
+        pool.launch(SearchJob {
+            position,
+            limits: crate::search::limits::Limits::depth(3),
+            params: crate::search::params::SearchParams::default(),
+            tables: crate::search::tables::SharedTables::new(2),
+            stop: std::sync::Arc::clone(&stop),
+            helper_nodes: std::sync::Arc::new(AtomicU64::new(0)),
+        });
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        pool.shutdown();
+        let mut tables = crate::search::tables::SharedTables::new(2);
+        tables.resize(64);
+        assert_eq!(tables.tt.size_bytes(), 64 * 1024 * 1024);
     }
 }
