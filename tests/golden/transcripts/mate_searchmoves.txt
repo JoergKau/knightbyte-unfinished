@@ -28,8 +28,8 @@ info depth 11 seldepth 17 score cp 30 nodes 184042 nps <nps> hashfull <permille>
 info depth 12 seldepth 19 score cp 30 nodes 305691 nps <nps> hashfull <permille> time <ms> pv e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6
 info depth 13 seldepth 19 score cp 30 nodes 410719 nps <nps> hashfull <permille> time <ms> pv e2e4 c7c5 g1f3 e7e6 d2d4 c5d4 f3d4 b8c6 b1c3 g8f6 d4c6 b7c6 e4e5
 info depth 14 seldepth 23 score cp 21 nodes 740492 nps <nps> hashfull <permille> time <ms> pv e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6
-info currmove h2h4 currmovenumber 19 nodes 1377224
 info depth 15 seldepth 23 score cp 19 nodes 1378049 nps <nps> hashfull <permille> time <ms> pv e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 d2d3 d7d5 e4d5 f6d5 b1c3 c8e6
+info currmove d2d4 currmovenumber 2 nodes 1601694
 info depth 16 seldepth 25 score cp 24 nodes 1857080 nps <nps> hashfull <permille> time <ms> pv e2e4 e7e5 g1f3 b8c6 d2d4 e5d4 f3d4 g8f6 d4c6 b7c6 e4e5 f6e4 d1e2 e4c5 c1e3 c5e6
 > stop
 bestmove e2e4
@@ -37,27 +37,27 @@ bestmove e2e4
 # c) go depth 5 searchmoves e2e4
 > go depth 5 searchmoves e2e4
 info currmove e2e4 currmovenumber 1 nodes 1
-info depth 1 seldepth 1 score cp 24 nodes 3 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 2 seldepth 1 score cp 24 nodes 5 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 3 seldepth 1 score cp 24 nodes 7 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 4 seldepth 1 score cp 24 nodes 9 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 5 seldepth 1 score cp 24 nodes 11 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 1 seldepth 1 score cp 25 nodes 3 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 2 seldepth 1 score cp 25 nodes 5 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 3 seldepth 1 score cp 25 nodes 7 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 4 seldepth 1 score cp 25 nodes 9 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 5 seldepth 1 score cp 25 nodes 11 nps <nps> hashfull <permille> time <ms> pv e2e4
 bestmove e2e4
 # d) go depth 5 searchmoves e2e4 d2d4
 > go depth 5 searchmoves e2e4 d2d4
 info currmove e2e4 currmovenumber 1 nodes 1
-info depth 1 seldepth 1 score cp 24 nodes 5 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 2 seldepth 1 score cp 24 nodes 8 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 3 seldepth 1 score cp 24 nodes 11 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 4 seldepth 1 score cp 24 nodes 14 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 5 seldepth 1 score cp 24 nodes 17 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 1 seldepth 1 score cp 25 nodes 5 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 2 seldepth 1 score cp 25 nodes 8 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 3 seldepth 1 score cp 25 nodes 11 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 4 seldepth 1 score cp 25 nodes 14 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 5 seldepth 1 score cp 25 nodes 17 nps <nps> hashfull <permille> time <ms> pv e2e4
 bestmove e2e4
 # e) go depth 5 searchmoves (no moves given)
 > go depth 5 searchmoves
 info currmove e2e4 currmovenumber 1 nodes 1
-info depth 1 seldepth 1 score cp 24 nodes 41 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 2 seldepth 2 score cp 24 nodes 64 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 3 seldepth 2 score cp 24 nodes 87 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 4 seldepth 2 score cp 24 nodes 110 nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 5 seldepth 2 score cp 24 nodes 133 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 1 seldepth 1 score cp 25 nodes 41 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 2 seldepth 2 score cp 25 nodes 64 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 3 seldepth 2 score cp 25 nodes 87 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 4 seldepth 2 score cp 25 nodes 110 nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 5 seldepth 2 score cp 25 nodes 133 nps <nps> hashfull <permille> time <ms> pv e2e4
 bestmove e2e4

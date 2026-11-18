@@ -33,7 +33,7 @@ bestmove e2e4
 # d) stop after a search has finished
 > go depth 5
 info currmove e2e4 currmovenumber 1 nodes <nodes>
-info depth 1 seldepth 1 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv c2c4
+info depth 1 seldepth 1 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e3
 info depth 2 seldepth 2 score cp 21 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
 info depth 3 seldepth 3 score cp 21 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
 info depth 4 seldepth 5 score cp 21 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4

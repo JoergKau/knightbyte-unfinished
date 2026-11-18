@@ -53,4 +53,4 @@ bestmove d2d4
 > go perft 3
 Nodes: 8902
 Time: 2ms
-NPS: 3664430
+NPS: 3708549

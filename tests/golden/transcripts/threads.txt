@@ -25,19 +25,19 @@ bestmove e2e4
 > setoption name Threads value 4
 # four threads: go depth 12
 > go depth 12
-info currmove e2e4 currmovenumber 1 nodes <nodes>
-info depth 1 seldepth 1 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
+info currmove d2d4 currmovenumber 1 nodes <nodes>
+info depth 1 seldepth 1 score cp 45 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv c2c4
 info depth 2 seldepth 1 score cp 29 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
 info depth 3 seldepth 1 score cp 29 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
-info depth 4 seldepth 3 score cp 37 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
-info depth 5 seldepth 5 score cp 32 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
-info depth 6 seldepth 7 score cp 31 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
-info depth 7 seldepth 8 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 8 seldepth 8 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 9 seldepth 11 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 10 seldepth 14 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 11 seldepth 14 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 12 seldepth 16 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4 c7c5 g1f3
-bestmove e2e4
-# reported nodes at depth 12 with 4 threads: 139035
+info depth 4 seldepth 4 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 5 seldepth 4 score cp 31 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv g1f3
+info depth 6 seldepth 4 score cp 34 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 7 seldepth 4 score cp 34 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 8 seldepth 4 score cp 32 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 9 seldepth 7 score cp 32 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 10 seldepth 8 score cp 32 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 11 seldepth 16 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4 d7d5 e2e3
+info depth 12 seldepth 18 score cp 21 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4 d7d5 c2c4
+bestmove d2d4
+# reported nodes at depth 12 with 4 threads: 392906
 > setoption name Threads value 1

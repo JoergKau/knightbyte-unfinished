@@ -12,6 +12,7 @@
 > setoption name Hash value 0
 # d) unknown option name
 > setoption name NoSuchOption value 5
+info string Unknown option: NoSuchOption
 # e) check option, valid value
 > setoption name Own Book value true
 # f) check option, valid value
