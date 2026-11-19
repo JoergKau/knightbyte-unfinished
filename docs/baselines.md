@@ -489,3 +489,36 @@ over 340,000 walked positions plus four hand-found positions in which the side
 to move has exactly one pseudo-legal move (a random walk never reaches one:
 the king is walled in by its own pieces). Dropping the king from the count
 makes the test fail.
+
+### 7.13 P4a - fused accumulator push (2026-11-19)
+
+The incremental update copied the parent perspective into the child (a 1 KB
+clone per perspective) and then made one load-modify-store pass over the child
+for every changed row (two to four rows per move). `kernels::push_rows` now
+computes `child = parent - sum(subtracted rows) + sum(added rows)` in a single
+pass: each vector chunk is loaded once, updated in a register and stored once,
+whatever the row count. The shape (rows added, rows subtracted) is a const
+generic, so the three shapes moves produce (quiet 1/1, capture or promotion
+1/2, castling 2/2) unroll; any other shape takes the scalar path. `i16`
+wrapping arithmetic is associative, so the result is bit-identical to the old
+copy-then-apply order. Kernels exist for SSE4.1, AVX2 and AVX-512 plus the
+scalar reference; the old per-row `apply_row` helper is gone.
+
+Interleaved A/B, plain release, median of three after a warm-up, previous
+commit (P1c) against this one:
+
+| Run | Before | After | Change |
+| :--- | ---: | ---: | ---: |
+| `bench 16` round 1 | 2,101,342 | 2,329,031 | +10.8 % |
+| `bench 16` round 2 | 2,240,094 | 2,376,201 | +6.1 % |
+| `bench 16` round 3 | 2,227,689 | 2,362,247 | +6.0 % |
+| `bench 16` round 4 | 2,218,911 | 2,252,639 | +1.5 % |
+| `bench 18` round 1 | 2,213,511 | 2,411,782 | +9.0 % |
+| `bench 18` round 2 | 2,363,001 | 2,421,100 | +2.5 % |
+| `bench 18` round 3 | 2,359,765 | 2,444,281 | +3.6 % |
+
+The gain is positive in every round and about 4-6 % typically (the spread is
+the machine state, not the code). Pins exact; every per-depth delta +0.
+`tests/` and the kernel unit tests compare the fused kernels with
+copy-then-apply for the production width, a width that is not a multiple of 32
+and an awkward tail, for every backend the host supports.

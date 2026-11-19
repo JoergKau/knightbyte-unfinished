@@ -172,6 +172,9 @@ pub(crate) fn push_accumulators(
     }
 
     let king_moved = piece_type(moving) == crate::types::piece::KING;
+    let weights = net.feature_weights();
+    let l1 = net.l1();
+    let no_row: &[i16] = &[];
     for perspective in 0..2_usize {
         if king_moved && mover_color == perspective as Color {
             refresh_into(
@@ -181,51 +184,30 @@ pub(crate) fn push_accumulators(
                 &mut child_pair[perspective],
             );
         } else {
-            child_pair[perspective].clone_from(&parent_pair[perspective]);
-            for &(square, piece) in &removed[..removed_count] {
-                apply_row(
-                    net,
-                    &mut child_pair[perspective],
-                    parent,
-                    perspective as Color,
-                    square,
-                    piece,
-                    false,
-                );
+            // One fused pass: the parent perspective is copied into the child
+            // while the changed rows are subtracted and added.
+            let row = |square: Square, piece: Piece| {
+                // The parent is the frame: it defines the region and mirror,
+                // and only an own-king move changes them (a refresh, above).
+                let index = feature_index(net, parent, perspective as Color, square, piece);
+                &weights[index * l1..(index + 1) * l1]
+            };
+            let mut sub_rows = [no_row; 3];
+            for (slot, &(square, piece)) in sub_rows.iter_mut().zip(&removed[..removed_count]) {
+                *slot = row(square, piece);
             }
-            for &(square, piece) in &added[..added_count] {
-                apply_row(
-                    net,
-                    &mut child_pair[perspective],
-                    parent,
-                    perspective as Color,
-                    square,
-                    piece,
-                    true,
-                );
+            let mut add_rows = [no_row; 2];
+            for (slot, &(square, piece)) in add_rows.iter_mut().zip(&added[..added_count]) {
+                *slot = row(square, piece);
             }
+            kernels::push_rows(
+                &mut child_pair[perspective],
+                &parent_pair[perspective],
+                &add_rows[..added_count],
+                &sub_rows[..removed_count],
+            );
         }
     }
-}
-
-/// Adds or subtracts the weight row of the piece on `square` from `acc`, seen
-/// from `perspective`.
-///
-/// `frame` is the position whose king defines the perspective's region and
-/// mirror. For an incremental update it is the parent position: the frame
-/// only changes when the perspective's own king moves, and such a move falls
-/// back to a full refresh instead.
-pub(crate) fn apply_row(
-    net: &Net,
-    accumulator: &mut [i16],
-    frame: &Position,
-    perspective: Color,
-    square: Square,
-    piece: u8,
-    add: bool,
-) {
-    let index = feature_index(net, frame, perspective, square, piece);
-    kernels::add_row(accumulator, net.feature_weights(), index, add);
 }
 
 /// Runs the output head over a ready accumulator pair and returns the

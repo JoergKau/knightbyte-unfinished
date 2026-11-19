@@ -100,6 +100,69 @@ pub(crate) fn add_row(acc: &mut [i16], weights: &[i16], row: usize, add: bool) {
     }
 }
 
+/// Computes `dst = src - sum(subs) + sum(adds)` in one pass.
+///
+/// This is the incremental accumulator update: the parent perspective is
+/// copied into the child while the changed weight rows are applied, so each
+/// 256-bit chunk is loaded once and stored once however many rows change.
+/// `i16` wrapping addition is associative and commutative, so the result is
+/// bit-identical to copying first and applying the rows one by one.
+///
+/// Every slice must be at least `dst.len()` long. The three row-count shapes
+/// that moves produce (quiet move, capture or promotion, castling) have
+/// specialised kernels; anything else takes the scalar path.
+pub(crate) fn push_rows(dst: &mut [i16], src: &[i16], adds: &[&[i16]], subs: &[&[i16]]) {
+    let n = dst.len();
+    assert!(
+        src.len() >= n && adds.iter().chain(subs).all(|row| row.len() >= n),
+        "accumulator rows must cover the destination"
+    );
+
+    #[cfg(target_arch = "x86_64")]
+    macro_rules! by_shape {
+        ($kernel:ident) => {
+            // SAFETY: the backend was selected from the detected (or forced
+            // and verified) instruction set, and every slice covers `n`.
+            match (adds.len(), subs.len()) {
+                (1, 1) => unsafe {
+                    wide::$kernel::<1, 1>(
+                        dst,
+                        src,
+                        adds.try_into().unwrap(),
+                        subs.try_into().unwrap(),
+                    )
+                },
+                (1, 2) => unsafe {
+                    wide::$kernel::<1, 2>(
+                        dst,
+                        src,
+                        adds.try_into().unwrap(),
+                        subs.try_into().unwrap(),
+                    )
+                },
+                (2, 2) => unsafe {
+                    wide::$kernel::<2, 2>(
+                        dst,
+                        src,
+                        adds.try_into().unwrap(),
+                        subs.try_into().unwrap(),
+                    )
+                },
+                _ => scalar::push_rows(dst, src, adds, subs),
+            }
+        };
+    }
+
+    match kernel() {
+        KernelKind::Scalar => scalar::push_rows(dst, src, adds, subs),
+        #[cfg(target_arch = "x86_64")]
+        KernelKind::Sse41 => by_shape!(push_rows_sse41),
+        #[cfg(target_arch = "x86_64")]
+        KernelKind::Avx2 => by_shape!(push_rows_avx2),
+        #[cfg(target_arch = "x86_64")]
+        KernelKind::Avx512 => by_shape!(push_rows_avx512),
+    }
+}
 /// Runs the SCReLU output head over a ready accumulator pair and returns the
 /// scaled evaluation in centipawns from the side-to-move perspective.
 pub(crate) fn evaluate_head(
@@ -156,6 +219,19 @@ pub(crate) mod scalar {
         }
     }
 
+    /// `dst = src - sum(subs) + sum(adds)` with wrapping `i16` arithmetic.
+    pub(crate) fn push_rows(dst: &mut [i16], src: &[i16], adds: &[&[i16]], subs: &[&[i16]]) {
+        for index in 0..dst.len() {
+            let mut value = src[index];
+            for row in subs {
+                value = value.wrapping_sub(row[index]);
+            }
+            for row in adds {
+                value = value.wrapping_add(row[index]);
+            }
+            dst[index] = value;
+        }
+    }
     /// The SCReLU output head: `sum` accumulates the exact `i64` products.
     pub(crate) fn evaluate_head(
         stm: Color,
@@ -435,6 +511,86 @@ pub(crate) mod wide {
         total + fold_lanes512(lanes)
     }
 
+    /// Generates one fused row-update kernel: `dst = src - sum(subs) + sum(adds)`.
+    ///
+    /// The shape (`A` rows added, `S` rows subtracted) is a const generic so
+    /// the row loops unroll. Each vector chunk is loaded once, updated in a
+    /// register and stored once; a scalar loop finishes any tail narrower than
+    /// one vector.
+    macro_rules! push_rows_kernel {
+        ($name:ident, $feature:literal, $lanes:expr, $load:ident, $store:ident,
+         $add:ident, $sub:ident, $vector:ty) => {
+            /// # Safety
+            ///
+            /// The host CPU must support the instruction set named in the
+            /// attribute, and `src` and every row must hold at least
+            /// `dst.len()` elements.
+            #[target_feature(enable = $feature)]
+            pub(super) unsafe fn $name<const A: usize, const S: usize>(
+                dst: &mut [i16],
+                src: &[i16],
+                adds: &[&[i16]; A],
+                subs: &[&[i16]; S],
+            ) {
+                let n = dst.len();
+                let mut offset = 0;
+                while offset + $lanes <= n {
+                    unsafe {
+                        let mut value = $load(src.as_ptr().add(offset) as *const $vector);
+                        for row in subs {
+                            value = $sub(value, $load(row.as_ptr().add(offset) as *const $vector));
+                        }
+                        for row in adds {
+                            value = $add(value, $load(row.as_ptr().add(offset) as *const $vector));
+                        }
+                        $store(dst.as_mut_ptr().add(offset) as *mut $vector, value);
+                    }
+                    offset += $lanes;
+                }
+                for index in offset..n {
+                    let mut value = src[index];
+                    for row in subs {
+                        value = value.wrapping_sub(row[index]);
+                    }
+                    for row in adds {
+                        value = value.wrapping_add(row[index]);
+                    }
+                    dst[index] = value;
+                }
+            }
+        };
+    }
+
+    push_rows_kernel!(
+        push_rows_sse41,
+        "sse4.1",
+        8,
+        _mm_loadu_si128,
+        _mm_storeu_si128,
+        _mm_add_epi16,
+        _mm_sub_epi16,
+        __m128i
+    );
+    push_rows_kernel!(
+        push_rows_avx2,
+        "avx2",
+        16,
+        _mm256_loadu_si256,
+        _mm256_storeu_si256,
+        _mm256_add_epi16,
+        _mm256_sub_epi16,
+        __m256i
+    );
+    push_rows_kernel!(
+        push_rows_avx512,
+        "avx512f,avx512bw,avx512vl",
+        32,
+        _mm512_loadu_si512,
+        _mm512_storeu_si512,
+        _mm512_add_epi16,
+        _mm512_sub_epi16,
+        __m512i
+    );
     /// Horizontal sum of the sixteen `i32` lanes into the `i64` total.
     fn fold_lanes512(lanes: __m512i) -> i64 {
         let mut out = [0_i32; 16];
@@ -459,7 +615,7 @@ pub(crate) mod wide {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_row, evaluate_head, scalar};
+    use super::{add_row, evaluate_head, push_rows, scalar};
     use crate::eval::nnue::net::{EVAL_SCALE_MUL, EVAL_SCALE_SHIFT};
     use crate::types::color::{BLACK, WHITE};
 
@@ -520,6 +676,88 @@ mod tests {
                 dispatched, scaled,
                 "the head diverges for side {stm}: dispatched {dispatched}, reference {reference}"
             );
+        }
+    }
+
+    /// Builds `count` random rows of width `n`.
+    fn random_rows(rng: &mut Lcg, count: usize, n: usize) -> Vec<Vec<i16>> {
+        (0..count)
+            .map(|_| (0..n).map(|_| rng.i16()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn the_fused_row_update_matches_copy_then_apply() {
+        let mut rng = Lcg(0xFACE);
+        // Widths cover the production size, a multiple of 16 that is not a
+        // multiple of 32, and an awkward tail.
+        for n in [512, 48, 37] {
+            for (add_count, sub_count) in [(1, 1), (1, 2), (2, 2), (0, 1), (3, 3)] {
+                let src: Vec<i16> = (0..n).map(|_| rng.i16()).collect();
+                let adds = random_rows(&mut rng, add_count, n);
+                let subs = random_rows(&mut rng, sub_count, n);
+                let add_refs: Vec<&[i16]> = adds.iter().map(Vec::as_slice).collect();
+                let sub_refs: Vec<&[i16]> = subs.iter().map(Vec::as_slice).collect();
+
+                // The obviously-correct oracle: copy, then one row at a time.
+                let mut expected = src.clone();
+                for row in &subs {
+                    for (value, weight) in expected.iter_mut().zip(row) {
+                        *value = value.wrapping_sub(*weight);
+                    }
+                }
+                for row in &adds {
+                    for (value, weight) in expected.iter_mut().zip(row) {
+                        *value = value.wrapping_add(*weight);
+                    }
+                }
+
+                let mut dispatched = vec![0_i16; n];
+                push_rows(&mut dispatched, &src, &add_refs, &sub_refs);
+                assert_eq!(
+                    dispatched, expected,
+                    "dispatched n={n} {add_count}/{sub_count}"
+                );
+
+                let mut reference = vec![0_i16; n];
+                scalar::push_rows(&mut reference, &src, &add_refs, &sub_refs);
+                assert_eq!(reference, expected, "scalar n={n} {add_count}/{sub_count}");
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn every_supported_fused_kernel_matches_the_scalar_reference() {
+        use super::wide;
+        let mut rng = Lcg(0xBEEF);
+        for n in [512, 48, 37, 16] {
+            let src: Vec<i16> = (0..n).map(|_| rng.i16()).collect();
+            let rows = random_rows(&mut rng, 4, n);
+            let (a1, a2) = (rows[0].as_slice(), rows[1].as_slice());
+            let (s1, s2) = (rows[2].as_slice(), rows[3].as_slice());
+            let mut expected = vec![0_i16; n];
+            scalar::push_rows(&mut expected, &src, &[a1, a2], &[s1, s2]);
+
+            // Each kernel runs only on a host that supports it.
+            if is_x86_feature_detected!("sse4.1") {
+                let mut out = vec![0_i16; n];
+                unsafe { wide::push_rows_sse41::<2, 2>(&mut out, &src, &[a1, a2], &[s1, s2]) };
+                assert_eq!(out, expected, "sse4.1 n={n}");
+            }
+            if is_x86_feature_detected!("avx2") {
+                let mut out = vec![0_i16; n];
+                unsafe { wide::push_rows_avx2::<2, 2>(&mut out, &src, &[a1, a2], &[s1, s2]) };
+                assert_eq!(out, expected, "avx2 n={n}");
+            }
+            if is_x86_feature_detected!("avx512f")
+                && is_x86_feature_detected!("avx512bw")
+                && is_x86_feature_detected!("avx512vl")
+            {
+                let mut out = vec![0_i16; n];
+                unsafe { wide::push_rows_avx512::<2, 2>(&mut out, &src, &[a1, a2], &[s1, s2]) };
+                assert_eq!(out, expected, "avx512 n={n}");
+            }
         }
     }
 }
