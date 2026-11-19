@@ -13,13 +13,12 @@ from ctypes import wintypes
 
 ap = argparse.ArgumentParser()
 ap.add_argument("profile"); ap.add_argument("exe"); ap.add_argument("--top", type=int, default=40)
+ap.add_argument("--main-only", action="store_true", help="only the busiest thread")
 args = ap.parse_args()
 
 p = json.load(gzip.open(args.profile))
-thread = max(p["threads"], key=lambda t: t["samples"]["length"])
 libs = p["libs"]
-frames, funcs, stacks, res = thread["frameTable"], thread["funcTable"], thread["stackTable"], thread["resourceTable"]
-strings = thread["stringArray"]
+threads = [t for t in p["threads"] if t["samples"]["length"] > 50]
 
 import os
 _sdk = r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\dbghelp.dll"
@@ -80,24 +79,26 @@ def resolve(addr):
     return (name, name)
 # Which lib index is the exe?
 exe_lib = [i for i, l in enumerate(libs) if l["name"].lower().startswith("knightbyte")][0]
-self_t = collections.Counter(); outer_t = collections.Counter(); total = 0
-for s in thread["samples"]["stack"]:
-    if s is None: continue
-    f = stacks["frame"][s]
-    addr = frames["address"][f]
-    fn = frames["func"][f]
-    r = funcs["resource"][fn]
-    total += 1
-    if r is not None and res["lib"][r] == exe_lib and addr >= 0:
-        inner, outer = resolve(BASE + addr)
-    else:
-        inner = outer = "(other) " + strings[funcs["name"][fn]]
-    self_t[inner] += 1; outer_t[outer] += 1
+if args.main_only:
+    threads = [max(threads, key=lambda t: t["samples"]["length"])]
+self_t = collections.Counter(); total = 0
+for thread in threads:
+    frames, funcs, stacks, res = thread["frameTable"], thread["funcTable"], thread["stackTable"], thread["resourceTable"]
+    strings = thread["stringArray"]
+    for s in thread["samples"]["stack"]:
+        if s is None: continue
+        f = stacks["frame"][s]
+        addr = frames["address"][f]
+        fn = frames["func"][f]
+        r = funcs["resource"][fn]
+        total += 1
+        if r is not None and r >= 0 and res["lib"][r] == exe_lib and addr >= 0:
+            name = resolve(BASE + addr)[0]
+        else:
+            lib = libs[res["lib"][r]]["name"] if r is not None and r >= 0 else "?"
+            name = f"({lib}) " + strings[funcs["name"][fn]]
+        self_t[name] += 1
 
-def show(title, c):
-    print(f"\n== {title} (total samples {total})")
-    for name, n in c.most_common(args.top):
-        print(f"{100*n/total:6.2f}%  {n:6d}  {name[:110]}")
-show("self time by (inlined) function", self_t)
-show("self time by machine function (inlines folded in)", outer_t)
-
+print(f"{len(threads)} thread(s), total samples {total}")
+for name, n in self_t.most_common(args.top):
+    print(f"{100*n/total:6.2f}%  {n:6d}  {name[:110]}")

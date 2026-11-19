@@ -664,6 +664,13 @@ Consequences for KnightByte:
     `bench 12` median 799-833 K -> 847-863 K NPS (about +3-4 %, three
     interleaved five-run pairs).
 
+- **B44 - multi-thread node accounting: the helpers never published and the main thread published itself (found 2026-11-19 while chasing the "thread collapse"; fixed same day).**
+  - Build / commit: `6fe6d19`, Windows 11, AMD Ryzen 7 260.
+  - Command: `setoption name Threads value 4`, `go movetime 4000` on the start position.
+  - Expected: the reported `nodes`/`nps` are the sum over all threads.
+  - Actual: the helper searchers were never given the shared counter (`attach_helpers` was only called on the main searcher), so `publish_node_blocks` was a no-op for them; the main searcher, which holds the counter to read from it, published its **own** blocks into it from the 1024-node poll and then reported `own + counter`, i.e. about **twice its own count and no helper nodes**. A direct probe (per-helper node print) showed each helper searching at 2.6 M nodes/s while the reported total looked like a collapse. The documented "thread scaling collapse" (1 T 810 K, 4 T 1.42 M, 8 T 895 K; 6-8 T below 1 T) was largely this reporting defect (plus B43's contended environment lookups, which cost ~45 % of the samples in an 8-thread run). `go nodes N` with Threads > 1 was also enforced on the wrong aggregate.
+  - Status: **fixed 2026-11-19 (P7.0)**. Helpers attach as publishers (`Searcher::attach_publisher`, `publishes_nodes`), the main searcher only reads the counter. Regression test: `helpers_publish_their_nodes_and_the_main_searcher_does_not` (`src/search/pool.rs`). `Threads = 1` is untouched (pins exact). Measured with `perf_test.py --depth 18`: 1 T 2.32 M, 2 T 4.79 M (2.07x), 4 T 9.29 M (4.01x), 8 T 16.4 M (7.08x); predecessor 1.34 M / 2.58 M / 5.04 M / 7.68 M.
+
 - **B43 - the move picker read the environment on every node and every scored quiet move (found by the first sampling profile, 2026-11-19; fixed same day).**
   - Build / commit: `a867fbe` (release-with-debug), Windows 11, AMD Ryzen 7 260.
   - Command: `samply record --save-only --unstable-presymbolicate ... knightbyte.exe bench 18`, aggregated per function with `tools/profile_report.py`.

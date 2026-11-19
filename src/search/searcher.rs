@@ -171,11 +171,17 @@ pub struct Searcher {
     /// for the current search. Empty means no restriction. Set once per
     /// search in [`Searcher::search`], read at every root node.
     pub(crate) root_filter: Vec<Move>,
-    /// Step 8 (Lazy SMP): the shared node counter the HELPER threads publish
-    /// to, while helpers are attached. The main thread never publishes — its
-    /// own count stays exact, which is what keeps the `Threads=1` node pins
-    /// bit-identical. `None` = no helpers (the single-threaded path).
+    /// Step 8 (Lazy SMP): the shared node counter of a multi-threaded search.
+    /// The main thread only READS it (its own count stays exact, which is
+    /// what keeps the `Threads=1` node pins bit-identical); each helper
+    /// thread WRITES its blocks to it (see `publishes_nodes`). `None` = no
+    /// helpers (the single-threaded path).
     pub(crate) helper_nodes: Option<Arc<AtomicU64>>,
+    /// Whether this searcher is a helper that publishes its node blocks to
+    /// `helper_nodes` (bug B44: the main searcher used to publish its own
+    /// count into the counter it reports from, and the helpers never
+    /// published at all).
+    pub(crate) publishes_nodes: bool,
     /// This searcher's node count already published to the shared counter
     /// (the block frontier; only helpers publish).
     pub(crate) published_nodes: u64,
@@ -229,6 +235,7 @@ impl Searcher {
             stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             root_filter: Vec::new(),
             helper_nodes: None,
+            publishes_nodes: false,
             published_nodes: 0,
             currmove_reported: false,
             completed_depth: 0,
@@ -767,6 +774,14 @@ impl Searcher {
     /// reporting).
     pub fn detach_helpers(&mut self) {
         self.helper_nodes = None;
+        self.publishes_nodes = false;
+    }
+
+    /// Makes this searcher a HELPER that publishes its node blocks to
+    /// `counter` (the counter the main searcher reports from).
+    pub fn attach_publisher(&mut self, counter: Arc<AtomicU64>) {
+        self.helper_nodes = Some(counter);
+        self.publishes_nodes = true;
     }
 
     /// Publishes this searcher's unpublished node block to the shared
@@ -777,6 +792,9 @@ impl Searcher {
     /// their search ends, which flushes the final partial block. The main
     /// thread never publishes (its count stays exact).
     pub fn publish_node_blocks(&mut self, force: bool) {
+        if !self.publishes_nodes {
+            return;
+        }
         if let Some(counter) = &self.helper_nodes {
             let unpublished = self.nodes - self.published_nodes;
             if unpublished > 0 && (force || unpublished >= 2048) {
@@ -820,14 +838,14 @@ impl Searcher {
         if self.nodes & 1023 == 0 {
             // Step 8: helpers publish their counts in blocks; with helpers
             // attached, the node limit is enforced on the aggregate here.
-            if self.helper_nodes.is_some() {
+            if self.publishes_nodes {
                 self.publish_node_blocks(false);
-                if let Some(limit) = self.limits.nodes
-                    && self.reported_nodes() >= limit
-                {
-                    self.stopped = true;
-                    return true;
-                }
+            } else if self.helper_nodes.is_some()
+                && let Some(limit) = self.limits.nodes
+                && self.reported_nodes() >= limit
+            {
+                self.stopped = true;
+                return true;
             }
             if self.stop_flag.load(Ordering::Relaxed)
                 || self.time_manager.should_stop(self.now_ms())

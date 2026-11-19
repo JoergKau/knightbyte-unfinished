@@ -197,6 +197,7 @@ fn helper_loop(
                 busy.fetch_add(1, Ordering::SeqCst);
                 *searcher.params_mut() = job.params;
                 searcher.set_tables(job.tables);
+                searcher.attach_publisher(job.helper_nodes);
                 searcher.use_stop_flag(job.stop);
                 searcher.search(&job.position, job.limits, &mut |_| {});
                 searcher.publish_node_blocks(true);
@@ -293,5 +294,45 @@ mod tests {
         let mut tables = crate::search::tables::SharedTables::new(2);
         tables.resize(64);
         assert_eq!(tables.tt.size_bytes(), 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn helpers_publish_their_nodes_and_the_main_searcher_does_not() {
+        // Bug B44 regression: the helpers never published their node blocks,
+        // and the main searcher published its OWN count into the counter it
+        // reports from, so a multi-threaded search reported about twice the
+        // main thread's nodes instead of the sum over all threads.
+        use crate::search::limits::Limits;
+        use crate::search::searcher::Searcher;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let mut pool = WorkerPool::new();
+        pool.set_threads(3);
+        let position = crate::board::position::Position::from_fen(crate::board::fen::STARTPOS_FEN)
+            .expect("the built-in start position must parse");
+        let mut main = Searcher::new(8);
+        let stop = main.arm_stop_flag();
+        let counter = std::sync::Arc::new(AtomicU64::new(0));
+        pool.launch(SearchJob {
+            position,
+            limits: Limits::depth(9),
+            params: *main.params(),
+            tables: main.tables().clone(),
+            stop: std::sync::Arc::clone(&stop),
+            helper_nodes: std::sync::Arc::clone(&counter),
+        });
+        main.attach_helpers(std::sync::Arc::clone(&counter));
+        main.search(&position, Limits::depth(9), &mut |_| {});
+        // The helpers run until the stop flag; let them publish their final
+        // blocks (the job ends with a forced publish), then count.
+        stop.store(true, Ordering::Relaxed);
+        pool.wait_until_idle();
+        let helpers = counter.load(Ordering::Relaxed);
+        assert!(helpers > 0, "the helpers must publish their nodes");
+        assert_eq!(
+            main.published_nodes, 0,
+            "the main searcher must not publish"
+        );
+        assert_eq!(main.reported_nodes(), main.nodes + helpers);
+        pool.shutdown();
     }
 }

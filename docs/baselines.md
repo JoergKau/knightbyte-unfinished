@@ -415,3 +415,28 @@ once per scored quiet move, about **18-20 % of all samples** (bug B43).
 This passes the same-session form of milestone R3 (>= 1.60 M, i.e. 1.5x the
 predecessor) and is at the formal 2.43 M mark. R4 (thread scaling) and R5
 (Apple Silicon) remain open.
+
+### 7.10 P7.0 - thread scaling was a node-accounting defect (B44, 2026-11-19)
+
+With B43 fixed the 8-thread NPS still looked collapsed. Independent
+searchers in one process (a throw-away probe), with and without a shared TT,
+scaled almost perfectly (8 threads: 13-15 M nodes/s), and a per-helper node
+print showed each helper at ~2.6 M nodes/s while the reported total was low.
+Cause: bug B44 (helpers never published their blocks; the main searcher
+published itself into the counter it reports from). The earlier
+"saturation/pool/TT" hypotheses of P7 were wrong; no change to the pool, the
+TT or the eval cache was needed.
+
+`perf_test.py --depth 18 --threads 1,2,4,8 --hash 256` (same session,
+identical positions, aggregate NPS over all threads):
+
+| Threads | KnightByte NPS | Speedup | PawnForge NPS | Speedup |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 2,316,332 | 1.00x | 1,337,563 | 1.00x |
+| 2 | 4,792,734 | 2.07x | 2,578,258 | 1.93x |
+| 4 | 9,286,033 | 4.01x | 5,044,434 | 3.77x |
+| 8 | 16,393,170 | **7.08x** | 7,683,494 | 5.74x |
+
+Extra (`go movetime` on the start position, reported NPS): 12 threads
+20.6 M, 16 threads 23.3 M (SMT region). R4 (>= 5x at 8 threads on 8 cores) is
+reached. The 1-thread pins are unchanged.

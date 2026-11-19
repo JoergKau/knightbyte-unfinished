@@ -245,6 +245,11 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       Profiling rig: `samply` + `tools/profile_report.py`. Same-session
       depth-20 ratio vs the predecessor: ~1.7 (2.4 M NPS). Incremental
       occupancy was measured (no gain) and not merged; make/unmake rejected.
+- [x] P7.0 (2026-11-19): B44 fixed - multi-thread node accounting (helpers
+      publish their blocks, the main thread only reads the counter). Reported
+      `nodes`/`nps` and the `go nodes` limit now cover all threads. Measured
+      scaling 2.07x / 4.01x / 7.08x at 2/4/8 threads (aggregate NPS 16.4 M at
+      8 threads).
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).

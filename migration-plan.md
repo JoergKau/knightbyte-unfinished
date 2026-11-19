@@ -701,7 +701,11 @@ depth-20 ratio against the predecessor went 0.629 -> 1.08-1.11 (KnightByte
 P3 then found by profile that the move picker read an environment variable per
 node (B43, 18-20 % of samples; fixed): depth-20 ratio **1.69-1.73** (2.38-2.43 M
 vs 1.41 M NPS); incremental occupancy measured no gain and was reverted, and
-make/unmake was rejected by the profile (`make_move` 3.7 %).
+make/unmake was rejected by the profile (`make_move` 3.7 %). **P7.0** then showed that
+the documented multi-thread "collapse" was a node-accounting bug (B44: helpers never
+published their blocks, the main thread counted itself twice): with it fixed the
+scaling is 2.07x / 4.01x / 7.08x at 2 / 4 / 8 threads (aggregate 16.4 M NPS at 8
+threads; the predecessor reaches 5.74x on the same host).
 Full numbers and the composition table are in `docs/baselines.md` section 7.
 
 **Measurement protocol**
