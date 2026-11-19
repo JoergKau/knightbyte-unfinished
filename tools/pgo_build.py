@@ -16,7 +16,7 @@ Requires the llvm-tools component:  rustup component add llvm-tools-preview
 
 Usage:
     python tools/pgo_build.py
-    python tools/pgo_build.py --target-cpu x86-64-v3 --work-dir pgo-work-v3 \\
+    python tools/pgo_build.py --target-cpu x86-64-v3 --work-dir target/pgo-work/v3 \\
         --output target/pgo/knightbyte-v3.exe
     python tools/pgo_build.py --target-cpu x86-64-v4 --target-features +avx512vnni
 
@@ -87,8 +87,19 @@ def bench_nodes(binary, depth):
     raise RuntimeError(f"bench {depth} printed no node total")
 
 
-def build_pgo(work_dir="pgo-work", output="target/pgo/knightbyte.exe", target_cpu="", target_features=""):
-    """Builds the PGO binary, verifies the pins and copies it to `output`."""
+def build_pgo(
+    work_dir="target/pgo-work/default",
+    output="target/pgo/knightbyte.exe",
+    target_cpu="",
+    target_features="",
+    keep_work=True,
+):
+    """Builds the PGO binary, verifies the pins and copies it to `output`.
+
+    The scratch folder holds two complete cargo builds (about 120 MB). It lives
+    under target/ (git-ignored, removed by `cargo clean`) and is deleted after a
+    successful build unless `keep_work` is set.
+    """
     host, sysroot = host_triple_and_sysroot()
     suffix = ".exe" if os.name == "nt" else ""
     profdata = sysroot / "lib" / "rustlib" / host / "bin" / f"llvm-profdata{suffix}"
@@ -133,17 +144,20 @@ def build_pgo(work_dir="pgo-work", output="target/pgo/knightbyte.exe", target_cp
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(binary, destination)
     print(f"PGO binary: {destination} (pins exact)")
+    if not keep_work:
+        shutil.rmtree(work, ignore_errors=True)
     return destination
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--work-dir", default="pgo-work", help="scratch directory (git-ignored)")
+    parser.add_argument("--work-dir", default="target/pgo-work/default", help="scratch directory (under target/)")
+    parser.add_argument("--clean", action="store_true", help="delete the scratch directory after a successful build")
     parser.add_argument("--output", default="target/pgo/knightbyte.exe", help="where the binary is copied")
     parser.add_argument("--target-cpu", default="", help="for example x86-64-v3 (empty: portable build)")
     parser.add_argument("--target-features", default="", help="for example +avx512vnni")
     args = parser.parse_args()
-    build_pgo(args.work_dir, args.output, args.target_cpu, args.target_features)
+    build_pgo(args.work_dir, args.output, args.target_cpu, args.target_features, keep_work=not args.clean)
 
 
 if __name__ == "__main__":

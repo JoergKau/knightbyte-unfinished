@@ -99,6 +99,7 @@ def main():
     parser.add_argument("--out-dir", default="dist")
     parser.add_argument("--variants", nargs="+", default=["v2", "v3", "v4-vnni"], choices=sorted(VARIANTS))
     parser.add_argument("--skip-lever-gate", action="store_true", help="skip the lever effect gate")
+    parser.add_argument("--keep-work", action="store_true", help="keep the scratch builds under target/pgo-work")
     args = parser.parse_args()
 
     cargo_toml = (REPO / "Cargo.toml").read_text(encoding="utf8")
@@ -123,7 +124,8 @@ def main():
         print(f"=== variant {variant} (target-cpu {spec['cpu']} {spec['features']})")
         exe = staging / f"knightbyte-{variant}.exe"
         pgo_build.build_pgo(
-            work_dir=f"pgo-work-{variant}",
+            work_dir=f"target/pgo-work/{variant}",
+            keep_work=args.keep_work,
             output=str(exe),
             target_cpu=spec["cpu"],
             target_features=spec["features"],

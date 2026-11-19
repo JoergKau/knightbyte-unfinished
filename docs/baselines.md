@@ -449,7 +449,7 @@ reached. The 1-thread pins are unchanged.
   profile runs, `llvm-profdata merge`, `-Cprofile-use` rebuild, node pins
   verified): `bench 16` median 2.16-2.21 M -> 2.36-2.42 M (+7-12 %). Pins
   exact at 6/12/16/18. The profile is per host and is never checked in
-  (`*.profdata` / `*.profraw` and `pgo-work/` are git-ignored).
+  (`*.profdata` / `*.profraw` and `target/pgo-work/` are git-ignored).
 
 Same-session depth 20 (identical 18,662,358 nodes, interleaved):
 
