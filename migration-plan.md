@@ -254,12 +254,12 @@ A phase is not done because the code compiles. It is done when its gate passes:
 - [x] Capture UCI handshake and the unknown-command behaviour in `tests/golden/uci.json`. The full `go`/`stop`/`ponderhit` transcript capture is part of Phase 5.
 - [x] Add `tools/oracle_capture.py` and `tools/capture_levers.py`; both take the local reference binary/source as arguments and write derived JSON only.
 - [x] Run the updated performance harness against the C# binary and reproduce the recorded M4 node counts for three of four positions; the fourth stopped one iteration early because of timing variance (documented in `docs/baselines.md`).
-- [ ] Finish the harness modernization. Remaining:
+- [ ] Finish the harness modernization (reconciled 2026-11-19: `tools/capture_bench.py compare` gives the per-depth node-identity diff and `tools/perf_bench.py` the five-run median with the pin check; the fake-engine fixture and the stable JSON schema are still missing). Remaining:
   - `--baseline` diff mode: exact node identity, depth/EBF delta, NPS ratio, PASS/FAIL;
   - robust timeouts and process cleanup so a silent engine cannot hang CI;
   - extract the duplicated UCI session code into one shared helper and add a fake-UCI-engine fixture so the harness itself is tested;
   - a stable JSON schema/version and a baseline directory.
-- [ ] Build `tools/uci_oracle.py`: runs two engine binaries with the same script and diffs node counts, best moves, eval lines and option sets.
+- [ ] Build `tools/uci_oracle.py`: runs two engine binaries with the same script and diffs node counts, best moves, eval lines and option sets. (Not built. The two-engine differential tools that exist are `tools/tb_compare.py` and `tools/book_compare.py`; the UCI surface is covered by `tests/uci_transcripts.rs` against the re-captured transcripts.)
 - [ ] Build `tools/time_to_depth.py`: a fixed 20-position set (openings, middlegames, endgames, tactics), fixed time controls, depth and NPS per position.
 - [x] Record the initial golden values; the C# tree itself stays in the migration folder outside the repository.
 
@@ -281,8 +281,8 @@ A phase is not done because the code compiles. It is done when its gate passes:
 - [x] `board/perft.rs` plus the `perft` UCI command.
 - [x] Ported perft tests and move-generation tests; added the shared `fen_verified` helper and test-time FEN verification.
 - [x] Integration gate `tests/perft.rs`: startpos d4, Kiwipete d3, position3 d4, position4 d3, position5 d3 all match the reference and the external verifier.
-- [ ] Zobrist keys (piece, castling, en passant, side, pawn/non-pawn) â€” needed for the transposition table in Phase 4.
-- [ ] SEE and full draw detection (repetition, fifty-move, insufficient material) â€” needed by the search.
+- [x] Zobrist keys (piece, castling, en passant, side, pawn/non-pawn) (done in Phase 4a: `src/board/zobrist.rs`) â€” needed for the transposition table in Phase 4.
+- [x] SEE and full draw detection (repetition, fifty-move, insufficient material) (done in Phase 4: `src/search/see.rs`, `Searcher::is_draw`) â€” needed by the search.
 - [x] No heap allocation in move generation: `MoveList` is a fixed 256-entry stack array and `Position` is `Copy`.
 
 **Exit gate G1:** all standard perft counts match at the tested depths; FENs are externally verified at test time; `Position` and `Move` sizes are asserted. Zobrist, SEE and draw detection are explicitly carried into the search phase.
@@ -300,9 +300,10 @@ A phase is not done because the code compiles. It is done when its gate passes:
 - [x] Scalar reference path is the production path for correctness. The 15 captured FENs evaluate **bit-identically** to the reference values.
 - [x] Negative loader tests: bad magic, unsupported version, checksum mismatch and truncation.
 - [x] `nnueeval` diagnostic command in the engine.
-- [ ] Incremental accumulator with dirty-piece tracking and lazy own-king refresh â€” needed by search; deferred to the performance phase with the search/evaluator integration.
-- [ ] NEON/DotProd, AVX2, AVX-VNNI and AVX-512-VNNI kernels â€” deferred to Phase 7; the scalar path is the bit-exact oracle they must match.
-- [ ] `EvalFile` override â€” deferred until the UCI option layer lands.
+- [x] Incremental accumulator with dirty-piece tracking and lazy own-king refresh (done 2026-11-19, Phase 7: per-ply accumulator pairs, a full refresh only when the own king moves) â€” needed by search; deferred to the performance phase with the search/evaluator integration.
+- [x] AVX2 and AVX-512 kernels (done 2026-11-19: the `v3`, `v3-vnni` and `v4-vnni` rungs, node identity across backends pinned by `tests/kernels_backends.rs`)
+- [ ] NEON/DotProd and AVX-VNNI kernels (P4b; the VNNI dot-product instruction is not used yet, the `v3-vnni` rung runs the AVX2 kernel) â€” deferred to Phase 7; the scalar path is the bit-exact oracle they must match.
+- [ ] `EvalFile` override (reconciled 2026-11-19: the UCI option layer has landed, the option is advertised but still inert) â€” deferred until the UCI option layer lands.
 - [ ] Expanded evaluation vector set and incremental-vs-refresh identity tests â€” the 15-position curated set is in place.
 
 **Exit gate G2:** zero-cp differences on the 15 captured vectors; a corrupted net is rejected with a clear error. SIMD and incremental paths remain performance-phase work and are explicitly not part of this stop point.
@@ -341,8 +342,8 @@ counts of depths 1-8; the audit record is `docs/audit/migration-audit.md`.
 - [x] `search/time_manager.rs` (full port): move-time and clock allocation with soft/hard budgets and move overhead, tournament ten-move cap, sudden-death increment, tactical floor, safety buffer, panic mode, the legacy PV-stability multipliers, the stable-TM three-signal scaler (best-move ladder, score ladder, node-fraction term), the five-iteration minimum-depth guard, one-sided time advantage, two-sided clock imbalance and per-move node attribution.
 - [x] `search/options.rs`: declarative catalogue for the 12 public options and the 39 wired research levers; generates the handshake and drives `setoption`.
 - [ ] Port the remaining levers (47 of 83 are not exposed yet). They gate reference features that ship off or are not ported (ProbCut, SEE-reach, LMR v2 and its terms, quiescence checks, book, tablebases); expose each one when its feature lands. A test that setting each lever changes the search on a probe position is still open. *(Update 2026-11-18, step 2: all 83 reference levers are now advertised — the 47 unported ones as validated, accepted, inert `wired: false` rows in `src/search/lever_table.rs` — so the handshake surface is complete; wiring a lever's feature remains the work item.)* *(Update 2026-11-18, step 11: the node-count lever test is dropped by decision of the project owner — lever strength is measured after the migration, one lever at a time with SPRT on the final fast engine.)*
-- [ ] Port the C# search tests: mate tests, PVS, LMR tables, futility, history, singular, extension cap, TT, root TT cutoff, repetition, time compliance, lever independence. *(Update 2026-11-18, step 11: the lever-independence test is dropped — lever strength is measured after the migration with SPRT, one lever at a time.)*
-- [ ] Build `docs/SEARCH-PARITY.md`: every C# search feature, its Rust module, its lever name, its test.
+- [ ] Port the C# search tests: mate tests, PVS, LMR tables, futility, history, singular, extension cap, TT, root TT cutoff, repetition, time compliance, lever independence. *(Reconciled 2026-11-19: tests exist for mate, LMR, futility, history, killers, TT, correction, repetition and time; no test names singular, extension cap, PVS or root TT cutoff, so those stay open.)* *(Update 2026-11-18, step 11: the lever-independence test is dropped — lever strength is measured after the migration with SPRT, one lever at a time.)*
+- [x] Build `docs/SEARCH-PARITY.md` (exists; component map in section 6): every C# search feature, its Rust module, its lever name, its test.
 - [x] Deterministic `bench [depth]` and `go depth|nodes`, with search tests (mate in one/two, playable PV, reproducible node totals, node limit).
 
 **Exit gate G3 + G4 (search part):** **passed** with exact node identity
@@ -598,15 +599,15 @@ Ptnml(0-2): [4, 13, 23, 10, 0], WL/DD Ratio: 0.64
 
 **Scope checklist** (each item is delivered by the step named in the plan above):
 
-- [ ] `uci/parser.rs`: full command set, case-insensitive tokens, `position startpos|fen`, `moves`, all `go` limiters (`depth`, `movetime`, `wtime/btime/winc/binc`, `movestogo`, `nodes`, `mate`, `infinite`, `ponder`), `stop`, `ponderhit`, `quit`, `setoption`, `ucinewgame`, `isready`, `bench`, `perft`. (Steps 1, 4, 5, 6)
-- [ ] `uci/options.rs`: visible catalog, `option` handshake, `setoption` dispatch, button options (`Clear Hash`), type validation. (Steps 2, 7)
-- [ ] `uci/output.rs`: dedicated writer thread with a bounded channel; build lines once; coalesce/drop optional `info currmove` under back-pressure; flush correctly for GUIs. (Step 10, decision recorded in ADR-0007)
-- [ ] Persistent Lazy SMP worker pool: start/stop signaling, `Threads` changes without rebuilding state, per-thread node counters padded to the cache line, main-thread aggregation, shared TT and read-only net. (Steps 7, 8, 9)
-- [ ] Search control: stop flag, ponderhit, time-up checks every N nodes, no `Instant::now()` per node, no shared atomic per node. (Steps 4, 5)
-- [ ] `bench` command: deterministic four-position set, per-position output, total nodes and NPS; same defaults as C#. (Verified in every search step; output unchanged in step 3)
-- [ ] `info` line parity: depth, seldepth, multipv? (single PV only, as C#), score cp/mate, nodes, nps, hashfull, tbhits, time, pv. (Step 3)
+- [x] `uci/parser.rs`: full command set, case-insensitive tokens, `position startpos|fen`, `moves`, all `go` limiters (`depth`, `movetime`, `wtime/btime/winc/binc`, `movestogo`, `nodes`, `mate`, `infinite`, `ponder`), `stop`, `ponderhit`, `quit`, `setoption`, `ucinewgame`, `isready`, `bench`, `perft`. (Steps 1, 4, 5, 6)
+- [x] `uci/options.rs`: visible catalog (delivered in `src/search/options.rs` and `src/search/lever_table.rs`, dispatch in `src/uci/mod.rs`), `option` handshake, `setoption` dispatch, button options (`Clear Hash`), type validation. (Steps 2, 7)
+- [x] `uci/output.rs`: dedicated writer thread (decided otherwise in ADR-0007: the synchronous writer stays, no writer thread or channel; `info currmove` is emitted) with a bounded channel; build lines once; coalesce/drop optional `info currmove` under back-pressure; flush correctly for GUIs. (Step 10, decision recorded in ADR-0007)
+- [x] Persistent Lazy SMP worker pool (`src/search/pool.rs`; 500-cycle stress gate `tests/thread_stress.rs`): start/stop signaling, `Threads` changes without rebuilding state, per-thread node counters padded to the cache line, main-thread aggregation, shared TT and read-only net. (Steps 7, 8, 9)
+- [x] Search control: stop flag, ponderhit, time-up checks every N nodes, no `Instant::now()` per node, no shared atomic per node. (Steps 4, 5)
+- [x] `bench` command: deterministic four-position set, per-position output, total nodes and NPS; same defaults as C#. (Verified in every search step; output unchanged in step 3)
+- [ ] `info` line parity (reconciled 2026-11-19: everything except `tbhits` is done and byte-identical to the reference; `tbhits` is deliberately omitted because the reference never prints it, decision still open): depth, seldepth, multipv? (single PV only, as C#), score cp/mate, nodes, nps, hashfull, tbhits, time, pv. (Step 3)
 - [x] UCI transcript tests against the captured C# transcripts (all 11 captures plus `bench 6`, `tests/uci_transcripts.rs`). (Steps 0 and 12)
-- [ ] `fastchess` + `cutechess-cli` harness: 1,000 games vs C# at a fixed control, plus 1/2/4/8-thread smoke matches. Check legality, crashes, time losses and clean `quit`/`stop` handling. (Step 13)
+- [ ] (Not run yet. Existing evidence: `fastchess --compliance` passes for both engines, 904 finished games of the singular-extension experiment with no illegal move, time loss or crash, and 3 x 100 games from the project owner.) `fastchess` + `cutechess-cli` harness: 1,000 games vs C# at a fixed control, plus 1/2/4/8-thread smoke matches. Check legality, crashes, time losses and clean `quit`/`stop` handling. (Step 13)
 
 **Exit gate G4 + G5:** no illegal moves, no crashes, no time losses; `Threads` scaling is sane; `ucinewgame` is fast (no multi-GB TT clear); every option is visible and functional. The UCI half of G4 is automated by the step-12 transcript suite; the game-safety half closes with step 13.
 
@@ -745,8 +746,8 @@ Full numbers and the composition table are in `docs/baselines.md` section 7.
   PEXT tables, the incremental accumulator and the x86-64 SIMD kernels are
   already implemented (2026-11-19); the next open step is the measurement rig
   (P0) followed by the one-pass move path (P1).
-- [ ] Profile the parity build; identify the top three costs. Do not guess.
-- [ ] Zero-allocation audit: counting allocator in tests; no `Vec` growth, `String` formatting, `Box` or `format!` in search/eval.
+- [x] Profile the parity build; identify the top three costs. (Done 2026-11-19: `tools/profile_report.py`, first profile in `docs/baselines.md` 7.9.) Do not guess.
+- [ ] (No counting allocator exists yet.) Zero-allocation audit: counting allocator in tests; no `Vec` growth, `String` formatting, `Box` or `format!` in search/eval.
 - [ ] Position representation: benchmark copy-make vs make/unmake on M4 and x86; pick the faster, document the ADR.
 - [ ] TT: prefetch, allocation strategy, generation aging, bucket probe order, hashfull behavior.
 - [ ] NNUE: incremental update validation, kernel selection per host, alignment, `loadu` vs aligned, accumulator layout.
@@ -984,4 +985,4 @@ KnightByte 1.0 is done when:
 - [ ] The net is embedded, checksum-verified and bit-identical to the C# evaluation.
 - [ ] `docs-new/KnightByte-feature-list.md` and `docs-new/new-bugs.md` are current.
 - [ ] The CCRL package is built, tested and ready to announce.
-- [ ] No source file references an unpublished internal tree, and no reference-engine/author names appear in the code.
+- [ ] (Checked 2026-11-19: `src`, `tests` and `tools` contain no engine, author or tree names. The CI workflow installs the FEN verifier package by name, which is needed; left open until the owner confirms that is acceptable.) No source file references an unpublished internal tree, and no reference-engine/author names appear in the code.
