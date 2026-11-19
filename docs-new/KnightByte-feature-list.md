@@ -271,7 +271,12 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
 - [x] P4e (2026-11-19): SEE computes pins lazily per colour and uses the shared
       `between` table: +1.9-3.4 % balanced, pins exact. P4 is closed (the
       contiguous accumulator pair and the dispatch hoist are dropped, see
-      docs/baselines.md 7.16). Whole session since the pre-P1c build: see 7.17.
+      docs/baselines.md 7.16). Whole session since the pre-P1c build: +17.3 %
+      balanced (7.17); PGO rebuild of the new code +6.4 % more (7.18).
+- [x] Match gate (2026-11-19, docs/baselines.md 7.19): 500 games, 1 thread, PGO
+      build vs the predecessor at 8+0.08: 75.1 % (+191.8 Elo), no time loss,
+      illegal move, disconnect or crash. The 2/4/8-thread matches were run by
+      the project owner: no errors reported (figures to be added).
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).

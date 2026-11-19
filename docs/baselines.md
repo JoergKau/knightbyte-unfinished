@@ -655,3 +655,63 @@ P1c +1.1 %, P4a +5.1 %, P4c +4.6 %, P4d +1.8 %, P4e +3.4 %.
 
 Open on this host: the match gate and a PGO build of the new code (the PGO
 profile of 7.11 was recorded before these changes).
+
+
+
+### 7.18 PGO rebuild of the new code (2026-11-19)
+
+`tools/pgo_build.ps1` was re-run on the code after P1c and P4 (the profile of 7.11
+predates the fused kernels and the madd head; profiles are per host and per
+build, never reused). Pins verified exact by the script.
+
+| Comparison | Runs | A | B | Change |
+| :--- | ---: | ---: | ---: | ---: |
+| plain P4e -> PGO, `bench 16`, balanced ABBA | 8 + 8 | 2,416,331 | 2,571,762 | **+6.4 %** |
+
+Same-session depth 20, identical tree (18,662,358 nodes), `perf_test.py --depth 20
+--threads 1 --hash 256`, interleaved K P P K K P P K:
+
+| Engine | Runs (NPS) |
+| :--- | :--- |
+| KnightByte, PGO | 2,318,749 / 2,313,811 / 2,352,137 / 2,322,170 |
+| predecessor | 743,134 / 744,401 / 1,034,139 / 1,026,176 |
+
+The predecessor's first two runs are slow outliers (a different machine state or
+JIT warm-up in that stretch; its later pair is 1.03 M), so the steadier pair gives
+**2.25x**, the outlier pair 3.1x. Compare within a session only; the plan's R3
+mark (>= 2.43 M against the recorded 1.569 M baseline) is met in the same-session
+form (>= 1.60 M) by a wide margin.
+
+
+
+### 7.19 Match gate on Zen 4 (2026-11-19)
+
+**1 thread, PGO build (7.18), 500 games vs the predecessor.** `fastchess` 1.8.3,
+`8+0.08`, `Hash` 128 MB for both, UHO opening set (`order=random`, games
+repeated in colour pairs), resign `movecount=3 score=600`, draw `movenumber=34
+movecount=8 score=20`, 6 concurrent games, KnightByte 1 thread against the
+single-threaded predecessor. Command and PGN are kept with the project notes
+(`Step-14-match-gate/1-thread`).
+
+| Result | Value |
+| :--- | :--- |
+| Games finished | 500 of 500 |
+| Wins / losses / draws (KnightByte) | 281 / 30 / 189 |
+| Score | 375.5 / 500 = **75.1 %** |
+| Elo | **+191.8 +/- 20.6** (nElo +346 +/- 30), LOS 100 % |
+| Pentanomial (0-2) | [0, 6, 45, 141, 58] |
+| Time losses, illegal moves, disconnects, crashes | **none** (no such line in the output, empty log) |
+| Total time | 32 min 38 s |
+
+Endings: 306 wins by adjudication, 5 mates, 108 threefold repetitions, 40 draws
+by adjudication, 24 by the fifty-move rule, 17 by insufficient material. The
+same match before the move-path and eval work (3 x 100 games recorded in the
+plan) scored 25 %: the speed work and B43/B44/B49/B50 fixes show up in play.
+The score belongs to the PGO build of this session's code; it is a regression
+and safety gate, not a strength measurement for the rating list.
+
+**2, 4 and 8 threads.** The project owner ran the multi-thread matches against
+the same predecessor and reports **no errors** in any configuration (no illegal
+moves, time losses or crashes) and a strong result; the figures and PGNs stay
+with the owner and are to be added here when supplied. A run that was started
+here for the 2-thread case was stopped on the owner's instruction and discarded.

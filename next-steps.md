@@ -9,7 +9,7 @@ repository or archive any more; everything lives in the repository above.
 ## ORDER OF WORK (decided 2026-11-19)
 
 1. ~~**Phase 6: Syzygy (3-4-5 piece) and the opening book**~~ — **complete 2026-11-19** (see the session note below).
-2. **Finish `knightbyte_perf_diagnosis.md`** on Zen 4: ~~P1c (early-exit forced-reply count)~~ done 2026-11-19 (+1.1 %), P4 eval path ~~(fused push, madd head, fused refresh, lazy-pin SEE)~~ done 2026-11-19 (docs/baselines.md 7.13-7.16), the match gate (legality, time losses, 1/2/4/8 threads, same time control against the predecessor).
+2. **Finish `knightbyte_perf_diagnosis.md`** on Zen 4: ~~P1c (early-exit forced-reply count)~~ done 2026-11-19 (+1.1 %), P4 eval path ~~(fused push, madd head, fused refresh, lazy-pin SEE)~~ done 2026-11-19 (docs/baselines.md 7.13-7.16), ~~the match gate~~ done (500 games at 1 thread: 75.1 %, no errors; multi-thread matches run by the owner: no errors, docs/baselines.md 7.19) (legality, time losses, 1/2/4/8 threads, same time control against the predecessor).
 3. **macOS / Linux / M4 validation** (P4b NEON, P8, the universal Windows build against the variants) - deliberately last of the engineering work.
 4. **Last step: search tuning for a lower effective branching factor** (`docs-new/enhancements-for-knightbyte.md` 1.9): EBF comparison on Zen 4 showed KnightByte at 2.01 vs 1.79 for a top engine of its class (identical to the predecessor at a fixed depth, so no gain yet); SPRT-gated experiments (LMR constants, pruning margins, singular extensions retest, the features that ship off, SPSA) on the frozen and pinned baseline. Then tag and submit to CCRL.
 
