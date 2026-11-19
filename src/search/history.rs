@@ -47,24 +47,17 @@ pub const CAPTURE_MAX: i32 = 8_488;
 pub const LMR_UNIT: i32 = 1_024;
 /// Combined quiet score is clamped to this before the term is applied.
 pub const LMR_HISTORY_CLAMP: i32 = 8_033;
-/// Divisor of the quiet history term, in 1024ths of a ply.
-const LMR_QUIET_HISTORY_DIV: i32 = 3_419;
-/// Divisor of the noisy history term (unused: captures are never reduced by
-/// history in the live schedule).
-const LMR_NOISY_HISTORY_DIV: i32 = 3_257;
+/// Default divisor of the quiet history term, in 1024ths of a ply (the
+/// `LmrHistoryDivisor` lever).
+pub const LMR_QUIET_HISTORY_DIV: i32 = 3_419;
 
 /// Returns the late-move-reduction history contribution in 1024ths of a ply.
 ///
 /// The combined history score is clamped to +/-8,033 first; the `precise` form
 /// multiplies before dividing so ordinary history scores keep their sub-ply
 /// fraction instead of truncating to zero.
-pub fn lmr_history_term_1024(combined_history: i32, quiet: bool, precise: bool) -> i32 {
+pub fn lmr_history_term_1024(combined_history: i32, divisor: i32, precise: bool) -> i32 {
     let history = combined_history.clamp(-LMR_HISTORY_CLAMP, LMR_HISTORY_CLAMP);
-    let divisor = if quiet {
-        LMR_QUIET_HISTORY_DIV
-    } else {
-        LMR_NOISY_HISTORY_DIV
-    };
     if precise {
         history * LMR_UNIT / divisor
     } else {
@@ -115,12 +108,26 @@ pub type Continuations = [Option<Square>; 4];
 /// countermove term is keyed by the piece type and the destination.
 pub type Previous = (Piece, Square, Square);
 
+/// Scales a history bonus or malus: `min(scale * depth, cap)` with both the
+/// per-ply scale and the cap taken `percent` percent of their base values.
+/// At 100 percent the result is exactly `min(scale * depth, cap)`.
+#[inline]
+fn scaled_change(scale: i32, cap: i32, percent: i32, depth: i32) -> i32 {
+    (scale * percent / 100 * depth).min(cap * percent / 100)
+}
+
 /// Butterfly, capture, continuation and countermove tables.
 pub struct History {
     butterfly: Box<[i16]>,
     capture: Box<[i16]>,
     continuation: Box<[i16]>,
     counter: Box<[Move]>,
+    /// History bonuses in percent of their base values (the `HistoryBonusScale`
+    /// lever).
+    bonus_percent: i32,
+    /// History maluses in percent of their base values (the
+    /// `HistoryMalusScale` lever).
+    malus_percent: i32,
 }
 
 impl Default for History {
@@ -137,7 +144,26 @@ impl History {
             capture: zeros(CAPTURE_LEN),
             continuation: zeros(CONTINUATION_LEN * CONTINUATION_DISTANCES.len()),
             counter: vec![Move::NONE; COUNTER_LEN].into_boxed_slice(),
+            bonus_percent: 100,
+            malus_percent: 100,
         }
+    }
+
+    /// Sets the bonus and malus scales, in percent of the base values.
+    pub fn set_scales(&mut self, bonus_percent: i32, malus_percent: i32) {
+        self.bonus_percent = bonus_percent;
+        self.malus_percent = malus_percent;
+    }
+
+    /// Returns the (scaled) butterfly bonus for a node of remaining `depth`.
+    #[inline]
+    pub fn butterfly_bonus(&self, depth: i32) -> i32 {
+        scaled_change(
+            BUTTERFLY_BONUS_SCALE,
+            BUTTERFLY_BONUS_MAX,
+            self.bonus_percent,
+            depth,
+        )
     }
 
     /// Returns the allocated size in bytes.
@@ -247,20 +273,35 @@ impl History {
         bad_quiets: &[Move],
         cont: &Continuations,
     ) {
-        let bonus = (BUTTERFLY_BONUS_SCALE * depth).min(BUTTERFLY_BONUS_MAX);
+        let bonus = self.butterfly_bonus(depth);
         let slot = butterfly_index(color, mv);
         gravity(&mut self.butterfly[slot], bonus, BUTTERFLY_MAX);
 
         for (table, _) in CONTINUATION_DISTANCES.iter().enumerate() {
             if let Some(previous_to) = cont[table] {
                 let slot = continuation_index(color, table, previous_to, mv);
-                let bonus = (CONTINUATION_BONUS_SCALE * depth).min(CONTINUATION_BONUS_MAX);
+                let bonus = scaled_change(
+                    CONTINUATION_BONUS_SCALE,
+                    CONTINUATION_BONUS_MAX,
+                    self.bonus_percent,
+                    depth,
+                );
                 gravity(&mut self.continuation[slot], bonus, CONTINUATION_MAX);
             }
         }
 
-        let malus = (BUTTERFLY_MALUS_SCALE * depth).min(BUTTERFLY_MALUS_MAX);
-        let cont_malus = (CONTINUATION_MALUS_SCALE * depth).min(CONTINUATION_MALUS_MAX);
+        let malus = scaled_change(
+            BUTTERFLY_MALUS_SCALE,
+            BUTTERFLY_MALUS_MAX,
+            self.malus_percent,
+            depth,
+        );
+        let cont_malus = scaled_change(
+            CONTINUATION_MALUS_SCALE,
+            CONTINUATION_MALUS_MAX,
+            self.malus_percent,
+            depth,
+        );
         for &bad in bad_quiets {
             let slot = butterfly_index(color, bad);
             gravity(&mut self.butterfly[slot], -malus, BUTTERFLY_MAX);
@@ -278,7 +319,12 @@ impl History {
     /// Only the capture history is written: captures never touch the
     /// butterfly or continuation tables, which are quiet-move signals.
     pub fn update_capture(&mut self, attacker: usize, mv: Move, victim: usize, depth: i32) {
-        let bonus = (CAPTURE_BONUS_SCALE * depth).min(CAPTURE_BONUS_MAX);
+        let bonus = scaled_change(
+            CAPTURE_BONUS_SCALE,
+            CAPTURE_BONUS_MAX,
+            self.bonus_percent,
+            depth,
+        );
         let slot = capture_index(attacker, mv, victim);
         gravity(&mut self.capture[slot], bonus, CAPTURE_MAX);
     }

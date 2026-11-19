@@ -299,17 +299,40 @@ fn compress(lines: &[String]) -> Vec<String> {
 
 /// Checks that every expected line occurs in order in the actual output.
 fn assert_transcript(name: &str, actual: &[String]) {
-    let expected = golden(name);
+    let mut expected = golden(name);
     let mut actual_shapes: Vec<String> = actual.iter().filter_map(|line| normalize(line)).collect();
     if name == "handshake" {
-        // The research levers are KnightByte's documented option superset
-        // (step 2); the public option set itself must match exactly.
-        let public: Vec<String> = expected
-            .iter()
-            .filter(|line| line.starts_with("option name "))
-            .cloned()
-            .collect();
-        actual_shapes.retain(|line| !line.starts_with("option name ") || public.contains(line));
+        // The ten public options must match the capture line for line. The
+        // predecessor's capture also lists `EvalFile`, `Contempt` and its own
+        // research levers; KnightByte advertises sixty levers of its own
+        // instead (ADR-0014), so those option lines are compared by neither
+        // side, and the removed public options must not appear.
+        const PUBLIC: [&str; 10] = [
+            "Hash",
+            "Threads",
+            "Move Overhead",
+            "Clear Hash",
+            "Own Book",
+            "Book File",
+            "Book Depth",
+            "SyzygyPath",
+            "SyzygyRootProbe",
+            "Syzygy50MoveRule",
+        ];
+        let compared = |line: &String| match line.strip_prefix("option name ") {
+            None => true,
+            Some(rest) => PUBLIC.contains(&rest.split(" type ").next().unwrap_or_default()),
+        };
+        expected.retain(compared);
+        actual_shapes.retain(compared);
+        for removed in ["EvalFile", "Contempt"] {
+            assert!(
+                !actual
+                    .iter()
+                    .any(|line| line.starts_with(&format!("option name {removed} "))),
+                "{removed} must not be advertised"
+            );
+        }
     }
 
     let expected_bestmoves = expected

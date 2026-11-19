@@ -95,7 +95,7 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       to Zen 5 / Intel 512-bit-datapath hosts). Bench 12 0.556 → 0.863 MNPS.
       NEON lands with the macOS validation phase; VNNI remains documented as
       inapplicable to the SCReLU per-element semantics.
-- [ ] `EvalFile` override.
+- [x] `EvalFile` override: decided 2026-11-19 (ADR-0014) not to offer one. The network is embedded by project rule; the option is removed instead of advertised and ignored.
 
 ### Board and rules
 
@@ -195,7 +195,7 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       is emitted exactly as the step-0 transcripts show it (before the
       depth-1 line, never when the search stops before iteration 1's move
       loop). A report only — the node pins are unchanged.
-- [x] Full lever-catalogue surface: all 83 reference levers are advertised
+- [x] **Superseded 2026-11-19 (ADR-0014): the visible surface is now exactly sixty levers, all functional, plus ten public options (`docs/LEVERS.md`); the two inert public options and the 47 inert reference levers are gone.** Historical record of step 2: all 83 reference levers are advertised
       under their reference names, defaults and ranges (step 2,
       `src/search/lever_table.rs`), plus three KnightByte-only research
       levers. 36 reference levers are wired into the search; the other 47
@@ -484,8 +484,17 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       present (`KNIGHTBYTE_BOOK_PATH` or the git-ignored `books/` directory)
       and skip silently otherwise; a name-scan unit test registers one dummy
       file per material family so CI covers the scan without the large tables.
-- [ ] `EvalFile` net override and `Contempt` remain inert (outside Phase 6's
-      scope; carried in the feature-compliance list).
+- [x] `EvalFile` and `Contempt`: removed 2026-11-19 (ADR-0014), neither is advertised or accepted.
+- [x] The sixty levers (2026-11-19, ADR-0014, `docs/LEVERS.md`): 26 reference levers,
+      23 hard-coded constants exposed with defaults equal to their old values (null
+      move, RFP damping, razor, futility, LMP, history pruning, SEE margins,
+      hindsight, IIR, the LMR divisor, depth and move gates and history divisor,
+      history bonus and malus scales), 3 KnightByte ablation switches and 8 ported
+      features that ship off (ProbCut with margin and depth, the table extension,
+      bad-noisy pruning, the quiescence correction). Bench pins unchanged;
+      `tests/lever_effect.rs` proves every lever changes the search;
+      `tests/ported_features.rs` and a 60-game self-play check show the ported
+      features are safe to switch on.
 
 ### Packaging
 

@@ -13,7 +13,9 @@
        runtime (a plain Windows 10 machine does not have it),
     4. records the SHA-256 of the file.
   It then writes SHA256SUMS.txt and manifest.json and packs the executables with
-  README.md, LICENSE and THIRD-PARTY-NOTICES.md into one zip.
+  README.md, LICENSE and THIRD-PARTY-NOTICES.md into one zip. Before the first
+  build it runs the lever effect gate (every advertised lever must change the
+  search).
 
   Profiles describe one host: run this on the machine whose CPU supports the
   most capable variant (the v4-vnni build is profiled by running it).
@@ -68,6 +70,13 @@ function Count-Nodes([string]$exe, [hashtable]$environment) {
     }
     return [int64]($line.ToString().Split(":")[1].Trim())
 }
+
+# Gate before any artifact is built: every advertised lever must change the
+# search (ADR-0014). It takes seconds and catches a lever that was advertised
+# but wired to nothing.
+Write-Host "=== lever effect gate"
+& cargo test --release --test lever_effect
+if ($LASTEXITCODE -ne 0) { throw "the lever effect gate failed" }
 
 $entries = @()
 foreach ($variant in $Variants) {

@@ -167,6 +167,61 @@ pub struct SearchParams {
     /// searched so the real mate can be announced. The default is the measured
     /// stronger policy; the off state exists for the mechanism's tests.
     pub allow_syzygy_cutoff_on_pv_nodes: bool,
+    /// Divisor of the evaluation surplus (`eval - beta`) in the null-move
+    /// reduction bonus.
+    pub nmp_eval_divisor: i32,
+    /// Largest evaluation bonus of the null-move reduction, in plies.
+    pub nmp_eval_bonus_max: i32,
+    /// Shallowest remaining depth at which the null move is tried.
+    pub nmp_min_depth: i32,
+    /// Divisor of the overshoot a reverse-futility cutoff hands back
+    /// (`beta + (eval - beta) / divisor`).
+    pub rfp_damping: i32,
+    /// Razoring margins in percent of their base values (86 and 353).
+    pub razor_margin_scale: i32,
+    /// Futility margins in percent of their base table.
+    pub futility_scale: i32,
+    /// Late-move-pruning quiet-move limits in percent of their base table.
+    pub lmp_scale: i32,
+    /// Butterfly-history score below which a quiet move is searched one ply
+    /// shallower (the threshold is the negative of this value).
+    pub neg_ext_history_threshold: i32,
+    /// Shallowest remaining depth of internal iterative reduction.
+    pub iir_min_depth: i32,
+    /// Combined-evaluation threshold of the hindsight depth pair: a reduced
+    /// parent whose evaluation sum exceeds it loses a ply.
+    pub hindsight_margin: i32,
+    /// Divisor of the late-move-reduction table, in hundredths
+    /// (`1 + ln(depth) * ln(move) / (divisor / 100)`).
+    pub lmr_divisor: i32,
+    /// Shallowest remaining depth at which late moves are reduced.
+    pub lmr_min_depth: i32,
+    /// Moves searched at full depth before late-move reduction starts.
+    pub lmr_min_moves: i32,
+    /// Divisor of the history term of late-move reduction, in 1024ths of a
+    /// ply: a larger divisor lets the history reduce fewer plies.
+    pub lmr_history_divisor: i32,
+    /// History bonuses (scale and cap) in percent of their base values.
+    pub history_bonus_scale: i32,
+    /// History maluses (scale and cap) in percent of their base values.
+    pub history_malus_scale: i32,
+    /// Whether ProbCut runs: a shallow search that proves a likely beta
+    /// cutoff before the full search.
+    pub use_probcut: bool,
+    /// ProbCut beta margin above `beta`, in centipawns.
+    pub probcut_margin: i32,
+    /// Shallowest remaining depth at which ProbCut is tried.
+    pub probcut_min_depth: i32,
+    /// Whether a transposition-table entry that disagrees with the window
+    /// extends the node by one ply.
+    pub use_tt_extension: bool,
+    /// Deepest node (before extension) that the table extension may extend.
+    pub tt_extension_max_depth: i32,
+    /// Whether the first losing capture of a hopeless node ends the move
+    /// loop.
+    pub use_bad_noisy_pruning: bool,
+    /// Bad-noisy pruning applies below this remaining depth.
+    pub bnp_depth: i32,
 }
 
 impl Default for SearchParams {
@@ -231,6 +286,29 @@ impl Default for SearchParams {
             clock_imbalance_behind_scale: 50,
             use_syzygy_dtz_root_ranking: true,
             allow_syzygy_cutoff_on_pv_nodes: true,
+            nmp_eval_divisor: 191,
+            nmp_eval_bonus_max: 4,
+            nmp_min_depth: 3,
+            rfp_damping: 3,
+            razor_margin_scale: 100,
+            futility_scale: 100,
+            lmp_scale: 100,
+            neg_ext_history_threshold: 3_000,
+            iir_min_depth: 4,
+            hindsight_margin: 62,
+            lmr_divisor: 175,
+            lmr_min_depth: 3,
+            lmr_min_moves: 3,
+            lmr_history_divisor: 3_419,
+            history_bonus_scale: 100,
+            history_malus_scale: 100,
+            use_probcut: false,
+            probcut_margin: 235,
+            probcut_min_depth: 5,
+            use_tt_extension: false,
+            tt_extension_max_depth: 6,
+            use_bad_noisy_pruning: false,
+            bnp_depth: 6,
         }
     }
 }
@@ -299,5 +377,36 @@ mod tests {
         assert!(!params.use_clock_imbalance);
         assert_eq!(params.clock_imbalance_ahead_scale, 50);
         assert_eq!(params.clock_imbalance_behind_scale, 50);
+    }
+
+    #[test]
+    fn the_former_constants_default_to_the_values_they_replaced() {
+        // Each of these used to be a literal in the search; a different
+        // default would change every node count.
+        let params = SearchParams::default();
+        assert_eq!(params.nmp_eval_divisor, 191);
+        assert_eq!(params.nmp_eval_bonus_max, 4);
+        assert_eq!(params.nmp_min_depth, 3);
+        assert_eq!(params.rfp_damping, 3);
+        assert_eq!(params.razor_margin_scale, 100);
+        assert_eq!(params.futility_scale, 100);
+        assert_eq!(params.lmp_scale, 100);
+        assert_eq!(params.neg_ext_history_threshold, 3_000);
+        assert_eq!(params.iir_min_depth, 4);
+        assert_eq!(params.hindsight_margin, 62);
+        assert_eq!(params.lmr_divisor, 175);
+        assert_eq!(params.lmr_min_depth, 3);
+        assert_eq!(params.lmr_min_moves, 3);
+        assert_eq!(params.lmr_history_divisor, 3_419);
+        assert_eq!(params.history_bonus_scale, 100);
+        assert_eq!(params.history_malus_scale, 100);
+        // The ported features ship off.
+        assert!(!params.use_probcut);
+        assert!(!params.use_tt_extension);
+        assert!(!params.use_bad_noisy_pruning);
+        assert_eq!(params.probcut_margin, 235);
+        assert_eq!(params.probcut_min_depth, 5);
+        assert_eq!(params.tt_extension_max_depth, 6);
+        assert_eq!(params.bnp_depth, 6);
     }
 }

@@ -1488,8 +1488,8 @@ fn spin_value_is_valid(spec_min: Option<i64>, spec_max: Option<i64>, value: &str
 /// Applies one public option with full validation.
 ///
 /// The functional options resize the table (`Hash`), clear it (`Clear Hash`)
-/// or resize the helper pool (`Threads`); the book, tablebase, `EvalFile` and
-/// `Contempt` names are accepted and inert until their phases land. An
+/// or resize the helper pool (`Threads`); the book and tablebase options load
+/// or switch their feature and report the resulting state. An
 /// out-of-range or unparsable spin value is rejected silently and the
 /// previous value is kept; a check option accepts only `true`/`false`.
 fn apply_public_option(
@@ -1539,8 +1539,8 @@ fn apply_public_option(
 ///
 /// A check lever accepts only `true`/`false`; a spin lever only an integer in
 /// its declared range. Anything else is rejected silently and the previous
-/// value is kept. An unwired lever passes validation and is accepted without
-/// effect (see [`crate::search::lever_table`]).
+/// value is kept. Every lever of [`crate::search::lever_table`] drives a
+/// search parameter.
 fn apply_lever(spec: &LeverSpec, value: &str, searcher: &mut Searcher) {
     let parsed = match spec.kind {
         OptionKind::Check => {
@@ -1769,15 +1769,15 @@ mod tests {
     #[test]
     fn a_check_option_accepts_only_true_and_false() {
         // Valid values are applied.
-        let (reply, state) = applied("UseEvalCache", Some("true"));
+        let (reply, state) = applied("UseQsNarrowing", Some("true"));
         assert_eq!(reply, None);
         assert_eq!(state, 1);
         // Anything else is rejected silently and the previous value is kept.
-        let (reply, kept) = applied_after("UseEvalCache", &["true", "maybe"]);
+        let (reply, kept) = applied_after("UseQsNarrowing", &["true", "maybe"]);
         assert_eq!(reply, None, "a check rejection is silent");
         assert_eq!(kept, 1, "the previous value was not kept");
         // `false` is accepted again.
-        let (reply, state) = applied("UseEvalCache", Some("false"));
+        let (reply, state) = applied("UseQsNarrowing", Some("false"));
         assert_eq!(reply, None);
         assert_eq!(state, 0);
     }
@@ -1857,31 +1857,54 @@ mod tests {
     }
 
     #[test]
-    fn reserved_reference_levers_validate_without_effect() {
-        // `UseProbCut` ships off and is not ported yet: it is accepted like
-        // any other option, but the search state does not change.
-        let spec = lever("UseProbCut").expect("the catalogue holds the reserved lever");
-        assert!(!spec.wired);
+    fn a_ported_feature_lever_takes_effect() {
+        // `UseProbCut` ships off; switching it on reaches the search state.
+        let spec = lever("UseProbCut").expect("the catalogue holds the ported lever");
+        assert_eq!(spec.default, 0);
         let (reply, state) = applied("UseProbCut", Some("true"));
         assert_eq!(reply, None);
-        assert_eq!(state, spec.default, "a reserved lever must stay inert");
+        assert_eq!(state, 1, "the lever must change the search parameters");
+    }
+
+    #[test]
+    fn levers_the_catalogue_dropped_are_unknown_options() {
+        // The reference's inert, duplicated and negative levers, and the two
+        // removed public options, are not advertised and not accepted.
+        let mut searcher = Searcher::new(2);
+        let mut pool = WorkerPool::new();
+        for name in [
+            "UseLmrV2",
+            "UseSeeReach",
+            "UseFormulaRfp",
+            "EvalFile",
+            "Contempt",
+        ] {
+            let reply = apply_option(
+                &format!("setoption name {name} value 1"),
+                &mut searcher,
+                &mut pool,
+            );
+            assert!(
+                reply
+                    .as_deref()
+                    .is_some_and(|reply| reply.contains("Unknown option")),
+                "{name} must be unknown, got {reply:?}"
+            );
+        }
     }
 
     #[test]
     fn public_options_outside_the_search_are_known_and_validated() {
         let mut searcher = Searcher::new(2);
         let mut pool = WorkerPool::new();
-        // The book, tablebase, EvalFile and Contempt names are advertised. The
-        // functional book/tablebase options report their resulting state; the
-        // still-inert names stay silent. None of them may be reported as
-        // unknown.
+        // The book and tablebase names are advertised. The functional
+        // book/tablebase options report their resulting state. None of them may
+        // be reported as unknown.
         for line in [
             "setoption name Own Book value true",
             "setoption name Book Depth value 8",
             "setoption name SyzygyRootProbe value false",
             "setoption name Syzygy50MoveRule value false",
-            "setoption name EvalFile value other.nnue",
-            "setoption name Contempt value -10",
         ] {
             let reply = apply_option(line, &mut searcher, &mut pool);
             assert!(

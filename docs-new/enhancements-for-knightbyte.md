@@ -92,7 +92,7 @@ gains:
 - **Likely sources:** a mild late-move-reduction schedule
   (`1 + ln(depth) * ln(move) / 1.75`), singular extensions that never fire (Q1,
   see 1.2), reference features that are off or not ported yet (1.6; 47 of the 83
-  levers are still inert), and margins tuned for a less accurate evaluation. The
+  levers were still inert; **since 2026-11-19 (ADR-0014) the lever surface is the sixty functional levers of `docs/LEVERS.md`**), and margins tuned for a less accurate evaluation. The
   network is fixed by the project rules, so its share of the gap cannot be closed.
 - **Why it is not a migration task:** every change here moves the node pins. And
   EBF/depth is not strength: depth is counted differently by every engine and

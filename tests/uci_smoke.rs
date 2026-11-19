@@ -564,13 +564,37 @@ fn argv_param_overrides_fail_fast_on_unknown_names() {
 /// The step-0 handshake transcript, with its header comments.
 const HANDSHAKE_TRANSCRIPT: &str = include_str!("golden/transcripts/handshake.txt");
 
+/// The ten public options KnightByte advertises. The predecessor's capture also
+/// lists `EvalFile`, `Contempt` and its own levers; KnightByte offers sixty
+/// levers of its own instead (ADR-0014), so only these ten are compared.
+const PUBLIC_OPTION_NAMES: [&str; 10] = [
+    "Hash",
+    "Threads",
+    "Move Overhead",
+    "Clear Hash",
+    "Own Book",
+    "Book File",
+    "Book Depth",
+    "SyzygyPath",
+    "SyzygyRootProbe",
+    "Syzygy50MoveRule",
+];
+
+/// Returns the option name of an `option name <name> type ...` line.
+fn option_name(line: &str) -> Option<&str> {
+    line.strip_prefix("option name ")
+        .and_then(|rest| rest.split(" type ").next())
+}
+
 #[test]
 fn the_handshake_matches_the_step_zero_transcript() {
     // Every engine line of the captured handshake appears, in order, in
-    // KnightByte's reply. KnightByte additionally advertises its research
-    // levers between the public options and the info lines, so the expected
-    // lines are matched as an ordered subsequence. Placeholders: the identity
-    // lines and the eval-source net name are checked structurally.
+    // KnightByte's reply, except the option lines the catalogue deliberately
+    // does not advertise (see PUBLIC_OPTION_NAMES). KnightByte additionally
+    // advertises its research levers between the public options and the info
+    // lines, so the expected lines are matched as an ordered subsequence.
+    // Placeholders: the identity lines and the eval-source net name are
+    // checked structurally.
     let expected: Vec<String> = HANDSHAKE_TRANSCRIPT
         .lines()
         .filter(|line| {
@@ -578,6 +602,7 @@ fn the_handshake_matches_the_step_zero_transcript() {
                 && !line.starts_with('#')
                 && !line.starts_with('>')
                 && !line.starts_with('<')
+                && option_name(line).is_none_or(|name| PUBLIC_OPTION_NAMES.contains(&name))
         })
         .map(|line| match line {
             "id name <engine>" => "id name KnightByte".to_owned(),
@@ -599,6 +624,21 @@ fn the_handshake_matches_the_step_zero_transcript() {
             .unwrap_or_else(|| panic!("handshake line '{want}' missing or out of order"));
         cursor += found + 1;
     }
+
+    // The advertised surface: ten public options plus exactly sixty levers
+    // (ADR-0014), none of them the removed `EvalFile` or `Contempt`.
+    let options: Vec<&str> = actual.iter().filter_map(|line| option_name(line)).collect();
+    assert_eq!(options.len(), 70, "ten public options and sixty levers");
+    for removed in ["EvalFile", "Contempt"] {
+        assert!(
+            !options.contains(&removed),
+            "{removed} must not be advertised"
+        );
+    }
+    let mut unique = options.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), options.len(), "an option is advertised twice");
 }
 
 #[test]

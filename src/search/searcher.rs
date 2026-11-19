@@ -227,6 +227,11 @@ pub struct Searcher {
     pub(crate) collect_stats: bool,
     /// This searcher's `searchstats` counters for the current search.
     pub(crate) stats: crate::tools::diagnostics::SearchStats,
+    /// The late-move-reduction base table for the current `LmrDivisor`.
+    pub(crate) lmr_table: Box<crate::search::negamax::LmrTable>,
+    /// The divisor `lmr_table` was built from; a changed lever rebuilds it at
+    /// the start of the next search.
+    lmr_table_divisor: i32,
 }
 
 impl Searcher {
@@ -276,6 +281,8 @@ impl Searcher {
             accumulator_stack: Self::accumulator_stack(),
             collect_stats: false,
             stats: crate::tools::diagnostics::SearchStats::new(),
+            lmr_table: crate::search::negamax::build_lmr_table(175),
+            lmr_table_divisor: 175,
         }
     }
 
@@ -434,6 +441,10 @@ impl Searcher {
         limits: Limits,
         observer: &mut dyn FnMut(SearchEvent),
     ) -> SearchResult {
+        if self.lmr_table_divisor != self.params.lmr_divisor {
+            self.lmr_table = crate::search::negamax::build_lmr_table(self.params.lmr_divisor);
+            self.lmr_table_divisor = self.params.lmr_divisor;
+        }
         self.collect_stats = crate::tools::diagnostics::search_stats_enabled();
         if self.collect_stats {
             self.stats = crate::tools::diagnostics::SearchStats::new();
@@ -483,6 +494,10 @@ impl Searcher {
         // so history and correction history never survive a search (B41).
         // Only the transposition table persists.
         self.history.clear();
+        self.history.set_scales(
+            self.params.history_bonus_scale,
+            self.params.history_malus_scale,
+        );
         self.correction.clear();
         self.reset_stacks();
         *self.nodes_per_move = [0; 64 * 64];

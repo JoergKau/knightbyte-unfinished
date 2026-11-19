@@ -16,7 +16,7 @@ repository or archive any more; everything lives in the repository above.
 
 ## NEXT SESSION: macOS / Linux / M4 (P4b NEON, P8); the Windows part is finished
 
-**2026-11-19 (Windows finish):** the performance plan is complete on Zen 4 (P1c, P4a-P4e, PGO, the match gate: docs/baselines.md 7.12-7.20; whole session +17.3 % balanced, then PGO +6.4 %; same-session depth 20 about 2.25x the predecessor; 500 games at 1 thread 75.1 % with no time loss, illegal move or crash). `tools/ab_bench.py` is the balanced A/B tool (a back-to-back pair is biased by 2-4 %). The Windows release is built by `tools/build_release.ps1` (ADR-0011). `nnueregions`/`searchstats` are real now (ADR-0012) and the allocation audit is done (docs/baselines.md 7.21). `tbhits` is decided and done (ADR-0013: printed only while tablebases are in use). The remaining feature items: `EvalFile`/`Contempt` inert, 47 unported levers.
+**2026-11-19 (Windows finish):** the performance plan is complete on Zen 4 (P1c, P4a-P4e, PGO, the match gate: docs/baselines.md 7.12-7.20; whole session +17.3 % balanced, then PGO +6.4 %; same-session depth 20 about 2.25x the predecessor; 500 games at 1 thread 75.1 % with no time loss, illegal move or crash). `tools/ab_bench.py` is the balanced A/B tool (a back-to-back pair is biased by 2-4 %). The Windows release is built by `tools/build_release.ps1` (ADR-0011). `nnueregions`/`searchstats` are real now (ADR-0012) and the allocation audit is done (docs/baselines.md 7.21). `tbhits` is decided and done (ADR-0013: printed only while tablebases are in use). **The lever surface is decided and done (ADR-0014): `EvalFile` and `Contempt` are removed and exactly sixty levers are visible, all functional (`docs/LEVERS.md`); the owner tests them next.** No feature item is left on the Windows list.
 
 **2026-11-19 (Phase 6):** Syzygy and the opening book are ported and tested.
 WDL/DTZ probing for 3-4-5 piece sets (and larger material names up to seven
@@ -400,12 +400,13 @@ Next action (Phase 5): steps 9 and 10 are done (stress gate, ADR-0007) and step
 12 (transcript replay) is done; step 13 (match gates) is tracked in
 `migration-plan.md`.
 
-### 2.5 Inert public options
+### 2.5 Public options
 
-`EvalFile` and `Contempt` are advertised and accepted but do nothing. This is
-documented on purpose; do not report them as working. The book and tablebase
-options (`Own Book`, `Book File`, `Book Depth`, `SyzygyPath`, `SyzygyRootProbe`,
-`Syzygy50MoveRule`) are functional since Phase 6.
+**Resolved 2026-11-19 (ADR-0014):** `EvalFile` and `Contempt` were removed; no
+inert option is advertised any more. The ten public options (`Hash`, `Threads`,
+`Move Overhead`, `Clear Hash`, `Own Book`, `Book File`, `Book Depth`,
+`SyzygyPath`, `SyzygyRootProbe`, `Syzygy50MoveRule`) are all functional, and the
+sixty research levers are listed in `docs/LEVERS.md`.
 
 ### 2.6 Performance (Phase 7) — decomposition after the incremental accumulator and the SIMD kernels
 

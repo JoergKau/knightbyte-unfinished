@@ -387,7 +387,7 @@ then the full table.
 
 ## 7. Lever inventory
 
-* All 83 catalogued levers exist in the reference source; none of the catalogue
+* **Superseded 2026-11-19 (ADR-0014): KnightByte now advertises sixty functional levers of its own; this note describes the earlier 83-lever surface.** All 83 catalogued levers exist in the reference source; none of the catalogue
   names is stale.
 * The reference exposes 82 further internal search properties that are not in
   the catalogue. They still shape node counts, so the parity pass reads the

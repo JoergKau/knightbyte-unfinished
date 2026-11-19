@@ -131,6 +131,21 @@ impl Searcher {
                 stand = Self::probe_score(&entry, ply);
             }
 
+            // Correction history in quiescence (off by default, lever
+            // `UseQsCorrectionHistory`): the stand-pat gets the same learned
+            // offset the main search applies, so the score does not jump by the
+            // correction at the boundary. The cached evaluation (`static_eval`)
+            // stays raw, and a node that has a table move gets no correction,
+            // exactly like the main search.
+            if self.params.use_qs_correction_history
+                && self.params.use_correction_history
+                && self.params.use_ref_correction_history
+                && !tt_probe.is_some_and(|entry| !entry.mv.is_none())
+            {
+                let correction = self.correction.correction(position, previous);
+                stand = self.correction.corrected_eval(stand, correction);
+            }
+
             if stand >= beta {
                 let returned = if self.params.use_micro_riders {
                     stand

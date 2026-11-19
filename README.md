@@ -22,8 +22,8 @@ with root DTZ ranking, and a `.ctg` opening book (off by default).
 Exact node-count parity with the reference implementation holds at every
 captured depth and position (`bench 6/12/16/18` = 15,528 / 456,308 / 2,815,799 /
 6,892,874, `docs/SEARCH-PARITY.md`). Performance work and cross-platform
-validation are tracked in `next-steps.md`. `EvalFile` and `Contempt` remain
-accepted-but-inert options.
+validation are tracked in `next-steps.md`. Every advertised option does
+something: ten public options and sixty research levers.
 
 The production network is embedded in the binary from `net/jokausch.nnue`.
 There is no external network file at runtime.
@@ -107,17 +107,21 @@ The engine answers `uci` with its option list. The public options are:
 | `SyzygyPath` | empty | directories of Syzygy tablebase files (`;` separates them on Windows, `:` elsewhere) |
 | `SyzygyRootProbe` | false | rank root moves with DTZ when the position is in the tables |
 | `Syzygy50MoveRule` | true | honour the 50-move rule in tablebase values |
-| `EvalFile` | empty | accepted but ignored: the network is embedded |
-| `Contempt` | 0 | accepted but ignored |
 
 The `info` lines carry `tbhits <n>` (between `hashfull` and `time`) only while a
 tablebase set is in use; without tablebases they are exactly
 `depth seldepth score nodes nps hashfull time pv`.
 
-Pondering is not advertised. Every other option is a search-tuning lever named
-after the feature it controls (`Nmp...`, `Rfp...`, `Lmr...`); the defaults are
-the shipped configuration and changing them is for tuning experiments. A lever
-whose feature has not been ported is accepted and has no effect.
+Pondering is not advertised. The network is embedded, so there is no `EvalFile`,
+and the engine has no `Contempt` option.
+
+Every other option is one of exactly **sixty research levers**, named after the
+feature they control (`Nmp...`, `Rfp...`, `Lmr...`, `Qs...`). All sixty act on the
+search: the defaults are the shipped configuration, changing one is a tuning
+experiment, and a name that is not one of the sixty is rejected as an unknown
+option. `docs/LEVERS.md` lists every lever with its default, range, origin and
+effect, and `docs/decisions/ADR-0014-the-sixty-levers.md` records how the set was
+chosen.
 
 Besides the standard commands the engine understands `bench [depth]` (the
 deterministic node-count benchmark), `perft <depth>`, `nnueeval` and `d`, and
@@ -131,10 +135,12 @@ two hidden developer diagnostics, both off by default:
 
 ## Known limitations
 
-* `EvalFile` and `Contempt` do nothing; the network cannot be replaced at run
-  time.
-* Some research levers are accepted but not wired (the features they would
-  switch on are not part of the shipped search).
+* The network cannot be replaced at run time (it is embedded) and there is no
+  contempt setting.
+* Features of the reference that measured flat or negative (LMR v2, SEE reach,
+  quiescence checks, verified null move, the extension trio) are not offered as
+  levers; singular extensions never fire (a documented reference quirk) and have
+  no lever.
 * `go infinite` ends on its own at the engine's depth cap (128) or on a proven
   mate, instead of waiting for `stop`; this only happens in positions that are
   trivially drawn or already decided.
