@@ -691,6 +691,16 @@ disagreed before versus 0 of 315 (400 samples each) after.
 - **Actual:** the default MSVC build links the C runtime dynamically and imported `VCRUNTIME140.dll` (and the `api-ms-win-crt-*` forwarders). A machine without the Visual C++ redistributable, which a tester's clean installation or a virtual machine often is, refuses to start the engine with a "VCRUNTIME140.dll was not found" dialog and no UCI output. On a development machine the DLL is always present, so no test could notice.
 - **Status:** fixed 2026-11-19. The C runtime is linked statically (`-Ctarget-feature=+crt-static` in `.cargo/config.toml`, repeated in `tools/pgo_build.py` because `RUSTFLAGS` replaces the config). The executable now imports only `KERNEL32`, `ntdll`, `bcryptprimitives` and the `api-ms-win-core-synch` forwarder. `tools/build_release.py` fails when any other DLL appears. Speed unchanged (+0.3 %, inside the noise). Not verified on a machine without the redistributable (none available here); the import table is the evidence.
 
+## B52 - the AArch64 target did not compile, so the "scalar fallback" never existed
+
+- **Date:** 2026-11-20
+- **Build / commit:** `4476865`, found when starting the macOS release work on the M4.
+- **Platform / CPU:** macOS 27.2.1, Apple M4, rustc 1.100.0.
+- **Command:** `cargo build --release` on `aarch64-apple-darwin`.
+- **Expected:** a release build and a working scalar fallback, as the module documentation and the feature list claimed.
+- **Actual:** three rustc E0004 errors in `src/eval/nnue/kernels.rs`: `KernelKind` still declared `Sse41`, `Avx2` and `Avx512`, but their dispatch arms were behind `cfg(target_arch = "x86_64")`, so the matches were non-exhaustive on AArch64. The `is_x86_feature_detected!` calls in `tests/kernels_backends.rs` and the PEXT table static in `src/board/attacks.rs` were also x86-only but unguarded, and two test helpers were dead code once the PEXT test was gated. No macOS binary could be built from this tree.
+- **Status:** fixed 2026-11-20 (ADR-0015). The kernel enum and dispatch arms are now gated per target, a real NEON backend replaces the never-reachable scalar claim, the x86-only test and PEXT static are gated, and `cargo build`, `cargo test --all-targets` (192 library tests plus the integration suite), `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all -- --check` pass on the M4. Bench pins exact on NEON and forced scalar; the release script verifies both on the packaged binary.
+
 ## Predecessor behaviour
 
 Predecessor quirks are tracked in the local quirk register, which is not part of
@@ -798,6 +808,14 @@ Consequences for KnightByte:
   `cargo fmt --all -- --check` all pass. UCI smoke test returns `uciok`,
   `readyok`, `Nodes: 8902` for `perft 3` and `nnueeval 27`.
   No portability issues found.
+- **2026-11-20 — macOS 27.2.1, Apple M4 (Apple Silicon arm64):**
+  rustc 1.100.0 / cargo 1.100.0. `cargo build --release`,
+  `cargo test --all-targets` (with `KNIGHTBYTE_FEN_VERIFIER=/opt/homebrew/bin/stockfish`),
+  `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all -- --check`
+  pass. Bench 6/12/16/18 = 15,528 / 456,308 / 2,815,799 / 6,892,874 with NEON
+  and with `KNIGHTBYTE_FORCE_ISA=scalar`; `perft 3` = 8,902 and `nnueeval` = 27.
+  The release artifact is arm64-only and passes the same checks
+  (`tools/build_release_macos.py`). B52 was the only portability defect found.
 
 ## Template
 

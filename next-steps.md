@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-19 (Phase 6 complete: Syzygy WDL/DTZ + root DTZ ranking + `.ctg` opening book, 318 tests, bench pins unchanged; next: finish the performance plan, P4/P4b/P8, then search tuning)
+**Last updated:** 2026-11-20 (macOS Apple Silicon complete: AArch64 build fixed, NEON kernels, one `apple-m1` release binary and the tag workflow, ADR-0015; next: Linux x64 release, then search tuning)
 **Rule:** update this document at the end of every working session.
 
 ## ORDER OF WORK (decided 2026-11-19)
@@ -11,10 +11,12 @@ repository or archive any more; everything lives in the repository above.
 1. ~~**Phase 6: Syzygy (3-4-5 piece) and the opening book**~~ — **complete 2026-11-19** (see the session note below).
 2. **Finish `knightbyte_perf_diagnosis.md`** on Zen 4: ~~P1c (early-exit forced-reply count)~~ done 2026-11-19 (+1.1 %), P4 eval path ~~(fused push, madd head, fused refresh, lazy-pin SEE)~~ done 2026-11-19 (docs/baselines.md 7.13-7.16), ~~the match gate~~ done (500 games at 1 thread: 75.1 %, no errors; multi-thread matches run by the owner: no errors, docs/baselines.md 7.19) (legality, time losses, 1/2/4/8 threads, same time control against the predecessor).
 2a. **Windows release engineering - done 2026-11-19** (ADR-0011): three PGO executables built, checked and zipped by `tools/build_release.py`; the universal-build gate measured on the Zen 4 host; static C runtime (B51); start-up guard; README. Open on Windows only what needs another machine: the second Windows host (i7-10750H: `v3` against `v2`, smoke test, baseline), a clean Windows 10 machine, and the owner's multi-thread match figures.
-3. **macOS / Linux / M4 validation** (P4b NEON, P8, the macOS and Linux release scripts and CI release workflow) - deliberately last of the engineering work.
+3. ~~**macOS validation and release**~~ — **complete 2026-11-20** (AArch64 build fixed under B52, NEON kernels, one `apple-m1` binary for M1-M5, `tools/build_release_macos.py`, tag workflow; ADR-0015). Remaining here: **Linux x64** release (P8) only.
 4. **Last step: search tuning for a lower effective branching factor** (`docs-new/enhancements-for-knightbyte.md` 1.9): EBF comparison on Zen 4 showed KnightByte at 2.01 vs 1.79 for a top engine of its class (identical to the predecessor at a fixed depth, so no gain yet); SPRT-gated experiments (LMR constants, pruning margins, singular extensions retest, the features that ship off, SPSA) on the frozen and pinned baseline. Then tag and submit to CCRL.
 
-## NEXT SESSION: macOS / Linux / M4 (P4b NEON, P8); the Windows part is finished
+## NEXT SESSION: Linux x64 release (P8), then search tuning; Windows and macOS are finished
+
+**2026-11-20 (macOS Apple Silicon finish):** the AArch64 target did not compile at all (B52: per-target `KernelKind` variants left the dispatch non-exhaustive), so the macOS work started with a portability fix. The NEON backend (`KernelKind::Neon`) is now the single AArch64 kernel set — 128-bit row, refresh and SCReLU-head kernels, bit-exact against scalar and selected through `KNIGHTBYTE_FORCE_ISA=neon|scalar`. On the M4, bench 12/16/18 rose from 0.43-0.44 MNPS (scalar) to **1.72-1.89 MNPS** (3.9-4.4x) with all four bench pins exact. The release is deliberately one binary: `aarch64-apple-darwin` with `-Ctarget-cpu=apple-m1`, which runs on every Apple M processor (M1-M5); Intel Macs are unsupported and there are no per-chip variants (ADR-0015). PGO is on by default (`--no-pgo` for the plain build): interleaved three-run pairs on the M4 give **+6.0 / +7.2 / +7.5 %** at bench 12/16/18 (1.95-2.01 MNPS PGO against 1.84-1.87 plain), pins exact. `tools/build_release_macos.py` runs the lever gate, verifies `uciok`, the four pins, the forced scalar/NEON identity and the arm64-only slice, and packs the `tar.gz` with `SHA256SUMS.txt` and `manifest.json`; `.github/workflows/release.yml` does it on every `v*` tag. Verified on the M4: `cargo test --all-targets` (with the Stockfish verifier), fmt/clippy clean, `perft 3` = 8,902, `nnueeval` = 27, release archive unpacked and re-run. The M5 Pro smoke test and Linux x64 remain open.
 
 **2026-11-19 (Windows finish):** the performance plan is complete on Zen 4 (P1c, P4a-P4e, PGO, the match gate: docs/baselines.md 7.12-7.20; whole session +17.3 % balanced, then PGO +6.4 %; same-session depth 20 about 2.25x the predecessor; 500 games at 1 thread 75.1 % with no time loss, illegal move or crash). `tools/ab_bench.py` is the balanced A/B tool (a back-to-back pair is biased by 2-4 %). The Windows release is built by `tools/build_release.py` (ADR-0011). `nnueregions`/`searchstats` are real now (ADR-0012) and the allocation audit is done (docs/baselines.md 7.21). `tbhits` is decided and done (ADR-0013: printed only while tablebases are in use). **The lever surface is decided and done (ADR-0014): `EvalFile` and `Contempt` are removed and exactly sixty levers are visible, all functional (`docs/LEVERS.md`); the owner tests them next.** No feature item is left on the Windows list. The tests of the sixty levers are prepared in `docs/audit-tests-KB.md` (60 arms, measured pre-flight totals, `tools/lever_campaign.py`); the campaign is the owner's and has not been run.
 
@@ -250,8 +252,9 @@ pass locally on Windows (the full-set DTZ-ranking tests skip when
 `KNIGHTBYTE_SYZYGY_PATH` is unset) using the Stockfish verifier from
 `C:\dev\c#-chess-engines\stockfish`; fmt/clippy clean; all four bench pins
 exact and `capture_bench.py compare` shows every per-position delta at +0.
-Node identity is verified on this Windows host only; macOS and Linux still have
-to confirm it (migration-plan G6).
+Node identity is verified on Windows and, since 2026-11-20, on macOS Apple
+Silicon (NEON, forced scalar and the release binary all report the four pins
+exactly, ADR-0015). Linux still has to confirm it (migration-plan G6).
 
 ---
 
@@ -675,9 +678,12 @@ and staged generation only if the post-P1 profile still justifies them.
 ply; an exact `madd_epi16` head variant; hoist the kernel dispatch. Gate:
 the 15 vectors, the random-walk identity, the bench pins.
 
-**P4b - AArch64 NEON (2-3 days, M4 gate).** The Apple build still evaluates
-in scalar. Add the row and head kernels, run the same parity gates on the M4.
-This is required for the >= 2.48 MNPS M4 goal.
+**P4b - AArch64 NEON — done 2026-11-20 (ADR-0015).** The Apple build no longer
+evaluates in scalar: the row, refresh and SCReLU-head kernels run on 128-bit
+NEON (the AArch64 baseline), with the same parity gates on the M4. Bench 12-18
+1.72-1.89 MNPS against 0.43-0.44 MNPS scalar. PGO, now the default for the
+macOS release, adds +6.0-7.5 % (1.95-2.01 MNPS at bench 12-18). The >= 2.48
+MNPS M4 goal is not reached yet; it remains search-tuning work.
 
 **P5 - TT and caches (1 day).** Prefetch after every make and null move;
 advance the shared generation once per `go` in the main thread; keep the
@@ -724,15 +730,16 @@ cargo fmt --all -- --check
 cargo build --release
 ```
 
-### macOS
+### macOS (Apple Silicon)
 
 ```bash
-cd ~/dev/KnightByte
+cd ~/dev/knightbyte-unfinished
 git pull --rebase
 KNIGHTBYTE_FEN_VERIFIER=/opt/homebrew/bin/stockfish cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 cargo build --release
+python3 tools/build_release_macos.py   # release archive, pins verified
 ```
 
 ### Parity measurement

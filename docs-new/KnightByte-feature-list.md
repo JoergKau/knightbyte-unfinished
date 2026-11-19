@@ -43,7 +43,8 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
 - [x] Runtime x86 feature detection and the `v2 → v3 → v3-vnni → v4-vnni`
       selection ladder.
 - [x] Slow-BMI2 detection for AMD families that microcode PEXT/PDEP.
-- [x] AArch64 detection path.
+- [x] AArch64 path: the NEON kernels are the single AArch64 backend (NEON is
+      part of the baseline), plus the ARM64-only macOS release pipeline.
 - [x] x86 selector code-path cross-check compiled for `x86_64-apple-darwin`
       and run under Rosetta (development check only).
 - [x] Universal-Windows build direction recorded in `docs/decisions/`.
@@ -86,15 +87,20 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       advantage lies elsewhere. The first version deadlocked (the fill
       re-entered the `pext_tables()` initialisation) — fixed by filling from
       the ray walks directly.
-- [x] NEON/DotProd, AVX2, AVX-VNNI and AVX-512-VNNI kernels — **x86-64 part
-      done (2026-11-19)**: SSE4.1 (128-bit) and AVX2 (256-bit) kernels for
-      the accumulator row arithmetic and the SCReLU head, dispatched once per
-      process with the ADR-0001 `KNIGHTBYTE_FORCE_ISA` override; the 512-bit
-      AVX-512 kernels for the `v4-vnni` rung measure identically to AVX2 on
-      the Zen 4 host (double-pumped datapath — the real 512-bit gain belongs
-      to Zen 5 / Intel 512-bit-datapath hosts). Bench 12 0.556 → 0.863 MNPS.
-      NEON lands with the macOS validation phase; VNNI remains documented as
-      inapplicable to the SCReLU per-element semantics.
+- [x] SIMD kernels for the accumulator row arithmetic and the SCReLU head —
+      **x86-64 part done (2026-11-19)**: SSE4.1 (128-bit) and AVX2 (256-bit)
+      kernels, dispatched once per process with the ADR-0001
+      `KNIGHTBYTE_FORCE_ISA` override; the 512-bit AVX-512 kernels for the
+      `v4-vnni` rung measure identically to AVX2 on the Zen 4 host
+      (double-pumped datapath — the real 512-bit gain belongs to Zen 5 / Intel
+      512-bit-datapath hosts). Bench 12 0.556 → 0.863 MNPS. **AArch64 part
+      done (2026-11-20)**: 128-bit NEON is the single AArch64 backend (NEON is
+      part of the baseline, so no runtime probe and no per-chip variant),
+      bit-exact against the scalar oracle, selected through the same
+      `KNIGHTBYTE_FORCE_ISA` surface (`neon`/`scalar`). On the M4 bench 12-18
+      rose from about 0.43-0.44 to 1.72-1.89 MNPS (3.9-4.4x) with the node
+      pins unchanged. VNNI remains documented as inapplicable to the SCReLU
+      per-element semantics.
 - [x] `EvalFile` override: decided 2026-11-19 (ADR-0014) not to offer one. The network is embedded by project rule; the option is removed instead of advertised and ignored.
 
 ### Board and rules
@@ -499,7 +505,13 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
 
 ### Packaging
 
-- [ ] macOS Apple Silicon release.
+- [x] macOS Apple Silicon release (2026-11-20): one `aarch64-apple-darwin`
+      binary compiled with `-Ctarget-cpu=apple-m1` (runs on M1-M5; Intel Macs
+      unsupported), **PGO by default** (`tools/pgo_build.py`, +6.0-7.5 % at
+      bench 12-18 on the M4; `--no-pgo` for the plain build), built, verified
+      and packed by `tools/build_release_macos.py` with a `tar.gz`,
+      `SHA256SUMS.txt` and `manifest.json`; CI workflow on `v*` tags
+      (ADR-0015).
 - [ ] Ubuntu x64 release.
 - [ ] Windows universal executable with per-variant PGO.
 - [ ] CCRL submission package.

@@ -338,6 +338,7 @@ fn pext_index_software(occupancy: u64, mask: u64) -> usize {
     index
 }
 
+#[cfg(target_arch = "x86_64")]
 static PEXT_TABLES: std::sync::OnceLock<Option<PextTables>> = std::sync::OnceLock::new();
 
 /// Returns the PEXT tables when the host can run them, or `None` when the
@@ -415,7 +416,9 @@ mod tests {
         bishop_attacks, king_attacks, knight_attacks, pawn_attacks, queen_attacks, rook_attacks,
     };
     use crate::types::color::{BLACK, WHITE};
-    use crate::types::square::{Square, from_algebraic};
+    #[cfg(target_arch = "x86_64")]
+    use crate::types::square::Square;
+    use crate::types::square::from_algebraic;
 
     #[cfg(target_arch = "x86_64")]
     #[test]
@@ -491,6 +494,8 @@ mod tests {
 
     /// Every PEXT lookup must match the ray-walking attacks for the same
     /// subset occupancy: the fill and the lookup are pinned together.
+    /// PEXT tables only exist on x86-64; AArch64 always uses the ray walk.
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn pext_lookups_match_the_ray_walk_for_every_relevant_subset() {
         let tables = super::pext_tables().expect("this host must expose BMI2 for the test");
@@ -540,6 +545,7 @@ mod tests {
     }
 
     /// The ray-walking attacks (the table-fill oracle, same file).
+    #[cfg(target_arch = "x86_64")]
     fn rook_ray(square: Square, occupancy: u64) -> u64 {
         super::ray(square, 1, 0, occupancy)
             | super::ray(square, -1, 0, occupancy)
@@ -548,6 +554,7 @@ mod tests {
     }
 
     /// The ray-walking bishop attacks (the table-fill oracle, same file).
+    #[cfg(target_arch = "x86_64")]
     fn bishop_ray(square: Square, occupancy: u64) -> u64 {
         super::ray(square, 1, 1, occupancy)
             | super::ray(square, 1, -1, occupancy)

@@ -16,12 +16,22 @@ const BENCH6_NODES: &str = "15528";
 fn every_forced_backend_reports_the_identical_bench_total() {
     // The 512-bit rung needs the host feature at RUNTIME: the universal
     // executable contains all backends regardless of the build features.
-    let avx512_host = cfg!(target_arch = "x86_64")
-        && std::arch::is_x86_feature_detected!("avx512f")
-        && std::arch::is_x86_feature_detected!("avx512bw")
-        && std::arch::is_x86_feature_detected!("avx512vl");
-    let backends: [(&str, bool); 4] = [
+    // The cfg blocks keep the x86-only macro out of AArch64 builds.
+    let avx512_host = {
+        #[cfg(target_arch = "x86_64")]
+        {
+            std::arch::is_x86_feature_detected!("avx512f")
+                && std::arch::is_x86_feature_detected!("avx512bw")
+                && std::arch::is_x86_feature_detected!("avx512vl")
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            false
+        }
+    };
+    let backends: [(&str, bool); 5] = [
         ("scalar", true),
+        ("neon", cfg!(target_arch = "aarch64")),
         ("v2", cfg!(target_arch = "x86_64")),
         ("v3", cfg!(target_arch = "x86_64")),
         ("v4-vnni", avx512_host),

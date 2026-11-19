@@ -2,8 +2,8 @@
 
 > **Work in progress.** This repository is an unfinished engine. The search is
 > functional, tested and node-identical to the reference implementation; the
-> Windows work (speed, release builds, match gates) is done, and what remains
-> is macOS and Linux validation and search tuning (`next-steps.md`). History
+> Windows and macOS release work (speed, kernels, packaging) is done, and what
+> remains is Linux validation and search tuning (`next-steps.md`). History
 > begins with the public snapshot of 2026-11-17.
 
 KnightByte is a UCI chess engine written in Rust. It is a headless engine: it
@@ -30,7 +30,7 @@ There is no external network file at runtime.
 
 ## Supported platforms
 
-* macOS on Apple Silicon
+* macOS on Apple Silicon (M1-M5); Intel Macs are not supported
 * Ubuntu x64
 * Windows 10 and 11 x64
 
@@ -47,7 +47,13 @@ Inside each file the SIMD kernels and the sliding-attack method are still
 chosen once at start-up. A build started on a CPU that lacks the instructions
 it was compiled for prints which features are missing and exits; it does not
 crash. The executables are plain files (no installer, no packer) and need no
-Visual C++ runtime. The macOS and Linux releases are single generic builds.
+Visual C++ runtime.
+
+The macOS release is one **Apple Silicon** binary: `aarch64-apple-darwin` built
+with `-Ctarget-cpu=apple-m1`, which is the baseline of every Apple M processor
+(M1-M5). NEON is part of the AArch64 baseline, so there is no per-chip variant
+and no start-up feature selection. Intel Macs are **not** supported and no
+x86_64 slice is produced. The Linux release is still open.
 
 ## Build
 
@@ -70,6 +76,27 @@ python tools\build_release.py
 
 The Rust toolchain is pinned in `rust-toolchain.toml` (stable 1.100.0); the PGO
 step additionally needs `rustup component add llvm-tools-preview`.
+
+The macOS Apple Silicon artifact is produced by one script, which builds with
+`-Ctarget-cpu=apple-m1` (profile-guided by default), runs the lever effect
+gate, verifies the four bench node pins and the scalar/NEON kernel identity,
+checks that the file is `arm64`-only, and writes the `tar.gz` with
+`SHA256SUMS.txt` and `manifest.json`. It must run on an arm64 Mac; PGO needs
+the LLVM tools once per machine:
+
+```bash
+rustup target add aarch64-apple-darwin      # once per machine
+rustup component add llvm-tools-preview     # once per machine (PGO)
+python3 tools/build_release_macos.py        # PGO build (default)
+python3 tools/build_release_macos.py --no-pgo
+```
+
+PGO gives about +6-7.5 % on the M4 with the node pins unchanged; the profile
+is generated on the build host and is never committed.
+
+The archive is ad-hoc signed by the toolchain but not notarized, so macOS may
+ask you to allow the downloaded binary once (System Settings → Privacy &
+Security, or remove the quarantine attribute).
 
 ## Run
 
@@ -144,9 +171,9 @@ two hidden developer diagnostics, both off by default:
 * `go infinite` ends on its own at the engine's depth cap (128) or on a proven
   mate, instead of waiting for `stop`; this only happens in positions that are
   trivially drawn or already decided.
-* Only the Windows x64 builds have been validated for the release; macOS and
-  Linux builds exist and pass the tests but have not been through the release
-  validation yet.
+* The Windows x64 builds and the macOS Apple Silicon build have been through
+  the release validation (build, node pins, forced-backend identity, packaging).
+  The Linux build exists and passes the tests but has no release validation yet.
 
 ## Repository workflow
 
@@ -169,7 +196,7 @@ copying directories.
   Releases rather than copied between machines.
 * The source and the MIT licence are already public, which is what CCRL
   requires of a submission; what remains is a tagged release with the Windows
-  x64 zip.
+  x64 zip and the macOS Apple Silicon archive.
 
 ## Development workflow
 

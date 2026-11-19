@@ -99,8 +99,9 @@ gains:
   aggressive pruning can lose Elo. EBF, node counts and best-move agreement are
   guard rails only; **Elo under SPRT is the criterion**.
 - **When:** after phase 6, after the performance plan is finished and after the
-  macOS/Linux/M4 validation, with the baseline frozen and pinned on every
-  platform. It is the last step of the project before the CCRL submission.
+  platform validation (Windows and macOS Apple Silicon are done; Linux x64
+  remains), with the baseline frozen and pinned on every platform. It is the
+  last step of the project before the CCRL submission.
 - **Method:** `Threads = 1`, short fast games (for example 8+0.08, many games per
   hour at the current speed), one change at a time; every accepted change gets a
   new set of bench pins, a line in `docs/baselines.md`, an ADR and a feature-list

@@ -9,12 +9,15 @@
 //!
 //! The backend is selected once per process from [`crate::platform::cpu`]
 //! (`Isa`), with the ADR-0001 `KNIGHTBYTE_FORCE_ISA` override for tests and
-//! CI. The ladder currently maps `v3`, `v3-vnni` and `v4-vnni` to the 256-bit
-//! AVX2 kernels: the SCReLU head squares each element before the dot product,
+//! CI. The x86 ladder maps `v3`, `v3-vnni` and `v4-vnni` to the 256-bit AVX2
+//! kernels: the SCReLU head squares each element before the dot product,
 //! which cannot use the VNNI dot-product instruction without changing the
 //! per-element semantics, and Zen 4 executes 256-bit AVX2 natively. AArch64
-//! keeps the scalar fallback until the NEON kernels land with the macOS
-//! validation phase.
+//! (Apple Silicon) has exactly one compile-time backend: 128-bit NEON, which
+//! is part of the AArch64 baseline and therefore safe on every Apple M chip.
+//!
+//! Selection is per process, not per call: the hot path pays one enum match
+//! and then runs the chosen kernel without a feature test per node.
 
 use std::sync::OnceLock;
 
@@ -27,16 +30,26 @@ use crate::types::color::Color;
 use crate::platform::cpu::{Isa, detect_isa};
 
 /// The instruction-set backend chosen once per process.
+///
+/// Only the variants that exist on the compile target are defined, so the
+/// dispatch matches stay exhaustive on every platform without a catch-all
+/// arm that could silently downgrade a kernel.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum KernelKind {
-    /// Pure Rust loops (non-x86 builds and the forced test fallback).
+    /// Pure Rust loops (the forced test fallback and non-SIMD builds).
     Scalar,
     /// 128-bit kernels over the x86-64 SSE4.1/SSE4.2 baseline.
+    #[cfg(target_arch = "x86_64")]
     Sse41,
     /// 256-bit AVX2 kernels (the ladder's v3 and above).
+    #[cfg(target_arch = "x86_64")]
     Avx2,
     /// 512-bit AVX-512 kernels (the ladder's v4-vnni rung).
+    #[cfg(target_arch = "x86_64")]
     Avx512,
+    /// 128-bit NEON kernels (the AArch64 baseline, Apple Silicon).
+    #[cfg(target_arch = "aarch64")]
+    Neon,
 }
 
 static KERNEL: OnceLock<KernelKind> = OnceLock::new();
@@ -45,22 +58,31 @@ static KERNEL: OnceLock<KernelKind> = OnceLock::new();
 fn kernel() -> KernelKind {
     *KERNEL.get_or_init(|| {
         // ADR-0001: the override pins a backend so every variant can be
-        // exercised on one machine in tests and CI.
-        if let Ok(force) = std::env::var("KNIGHTBYTE_FORCE_ISA") {
-            let pinned = match force.as_str() {
-                "scalar" => Some(KernelKind::Scalar),
-                "v2" | "sse41" => Some(KernelKind::Sse41),
-                "v3" | "avx2" => Some(KernelKind::Avx2),
-                "v3-vnni" => Some(KernelKind::Avx2),
-                "v4-vnni" | "avx512" => Some(KernelKind::Avx512),
-                _ => None,
-            };
-            if let Some(kernel) = pinned {
-                return kernel;
-            }
+        // exercised on one machine in tests and CI. Names that do not exist
+        // on this target are ignored, so the same CI script can set them.
+        if let Ok(force) = std::env::var("KNIGHTBYTE_FORCE_ISA")
+            && let Some(kernel) = forced_kernel(&force)
+        {
+            return kernel;
         }
         detected_kernel()
     })
+}
+
+/// Maps a `KNIGHTBYTE_FORCE_ISA` value to a backend on this target.
+fn forced_kernel(name: &str) -> Option<KernelKind> {
+    match name {
+        "scalar" => Some(KernelKind::Scalar),
+        #[cfg(target_arch = "x86_64")]
+        "v2" | "sse41" => Some(KernelKind::Sse41),
+        #[cfg(target_arch = "x86_64")]
+        "v3" | "avx2" | "v3-vnni" => Some(KernelKind::Avx2),
+        #[cfg(target_arch = "x86_64")]
+        "v4-vnni" | "avx512" => Some(KernelKind::Avx512),
+        #[cfg(target_arch = "aarch64")]
+        "neon" | "aarch64" | "v8" => Some(KernelKind::Neon),
+        _ => None,
+    }
 }
 
 /// Maps the detected instruction set to the backend (x86-64 hosts).
@@ -74,18 +96,18 @@ fn detected_kernel() -> KernelKind {
     }
 }
 
-/// AArch64 hosts have a single compile-time feature set (scalar until the
-/// NEON kernels land).
+/// AArch64 hosts have exactly one backend: the AArch64 baseline includes
+/// NEON, so every Apple M processor runs the same kernels.
 #[cfg(target_arch = "aarch64")]
 fn detected_kernel() -> KernelKind {
-    KernelKind::Scalar
+    KernelKind::Neon
 }
 
 /// Computes `dst = src - sum(subs) + sum(adds)` in one pass.
 ///
 /// This is the incremental accumulator update: the parent perspective is
 /// copied into the child while the changed weight rows are applied, so each
-/// 256-bit chunk is loaded once and stored once however many rows change.
+/// vector chunk is loaded once and stored once however many rows change.
 /// `i16` wrapping addition is associative and commutative, so the result is
 /// bit-identical to copying first and applying the rows one by one.
 ///
@@ -99,14 +121,13 @@ pub(crate) fn push_rows(dst: &mut [i16], src: &[i16], adds: &[&[i16]], subs: &[&
         "accumulator rows must cover the destination"
     );
 
-    #[cfg(target_arch = "x86_64")]
+    // SAFETY: the backend was selected from the detected (or forced and
+    // verified) instruction set, and every slice covers `n`.
     macro_rules! by_shape {
-        ($kernel:ident) => {
-            // SAFETY: the backend was selected from the detected (or forced
-            // and verified) instruction set, and every slice covers `n`.
+        ($module:ident, $kernel:ident) => {
             match (adds.len(), subs.len()) {
                 (1, 1) => unsafe {
-                    wide::$kernel::<1, 1>(
+                    $module::$kernel::<1, 1>(
                         dst,
                         src,
                         adds.try_into().unwrap(),
@@ -114,7 +135,7 @@ pub(crate) fn push_rows(dst: &mut [i16], src: &[i16], adds: &[&[i16]], subs: &[&
                     )
                 },
                 (1, 2) => unsafe {
-                    wide::$kernel::<1, 2>(
+                    $module::$kernel::<1, 2>(
                         dst,
                         src,
                         adds.try_into().unwrap(),
@@ -122,7 +143,7 @@ pub(crate) fn push_rows(dst: &mut [i16], src: &[i16], adds: &[&[i16]], subs: &[&
                     )
                 },
                 (2, 2) => unsafe {
-                    wide::$kernel::<2, 2>(
+                    $module::$kernel::<2, 2>(
                         dst,
                         src,
                         adds.try_into().unwrap(),
@@ -137,11 +158,13 @@ pub(crate) fn push_rows(dst: &mut [i16], src: &[i16], adds: &[&[i16]], subs: &[&
     match kernel() {
         KernelKind::Scalar => scalar::push_rows(dst, src, adds, subs),
         #[cfg(target_arch = "x86_64")]
-        KernelKind::Sse41 => by_shape!(push_rows_sse41),
+        KernelKind::Sse41 => by_shape!(wide, push_rows_sse41),
         #[cfg(target_arch = "x86_64")]
-        KernelKind::Avx2 => by_shape!(push_rows_avx2),
+        KernelKind::Avx2 => by_shape!(wide, push_rows_avx2),
         #[cfg(target_arch = "x86_64")]
-        KernelKind::Avx512 => by_shape!(push_rows_avx512),
+        KernelKind::Avx512 => by_shape!(wide, push_rows_avx512),
+        #[cfg(target_arch = "aarch64")]
+        KernelKind::Neon => by_shape!(neon, push_rows),
     }
 }
 /// Computes `dst = bias + sum(rows)` in one pass.
@@ -169,6 +192,10 @@ pub(crate) fn refresh_rows(dst: &mut [i16], bias: &[i16], rows: &[&[i16]]) {
         KernelKind::Avx2 => unsafe { wide::refresh_rows_avx2(dst, bias, rows) },
         #[cfg(target_arch = "x86_64")]
         KernelKind::Avx512 => unsafe { wide::refresh_rows_avx512(dst, bias, rows) },
+        // SAFETY: NEON is part of the AArch64 baseline, so the selected
+        // backend always runs on the host; every slice covers `n`.
+        #[cfg(target_arch = "aarch64")]
+        KernelKind::Neon => unsafe { neon::refresh_rows(dst, bias, rows) },
     }
 }
 /// Runs the SCReLU output head over a ready accumulator pair and returns the
@@ -197,6 +224,10 @@ pub(crate) fn evaluate_head(
         KernelKind::Avx512 => unsafe {
             wide::evaluate_head_avx512(stm, pair, output_weights, output_bias)
         },
+        // SAFETY: NEON is part of the AArch64 baseline, and the accumulator
+        // pair and the output weights were validated by the caller.
+        #[cfg(target_arch = "aarch64")]
+        KernelKind::Neon => unsafe { neon::evaluate_head(stm, pair, output_weights, output_bias) },
     };
     ((sum * EVAL_SCALE_MUL) >> EVAL_SCALE_SHIFT) as i32
 }
@@ -579,6 +610,173 @@ pub(crate) mod wide {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+pub(crate) mod neon {
+    //! The 128-bit AArch64 kernels.
+    //!
+    //! NEON is part of the AArch64 baseline, so every Apple M processor runs
+    //! these kernels and no runtime feature test is needed. The row kernels
+    //! use the same fused loop shape as the x86 kernels: one load of the
+    //! source chunk, the row additions/subtractions in registers, one store.
+    //! Wrapping `i16` addition is associative and commutative, so the result
+    //! is bit-identical to the scalar oracle.
+    //!
+    //! The head reproduces the scalar chain exactly: the clamped activation is
+    //! squared in 16-bit lanes (its maximum 255^2 = 65,025 still fits an
+    //! unsigned 16-bit lane), shifted right by eight bits (leaving at most
+    //! 254), widened with `vmlal_s16` and accumulated in `i32` lanes. The
+    //! lanes fold into the `i64` total every 16 vectors, which bounds every
+    //! partial sum far below `i32` overflow, so the total equals the scalar
+    //! `i64` sum exactly.
+
+    use core::arch::aarch64::*;
+
+    use super::{output, screlu};
+    use crate::types::color::Color;
+
+    /// Number of `i16` lanes in one 128-bit NEON vector.
+    const LANES: usize = 8;
+
+    /// Vectors accumulated in the `i32` lanes before folding into the `i64`
+    /// total. Two perspectives contribute per iteration, so each lane sees at
+    /// most `2 * 2 * FOLD_EVERY` products of `254 * 32768`, about `2^29`:
+    /// far below `i32` overflow.
+    const FOLD_EVERY: u32 = 16;
+
+    /// `dst = src - sum(subs) + sum(adds)`, eight lanes at a time.
+    ///
+    /// # Safety
+    ///
+    /// `src` and every row must hold at least `dst.len()` elements.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn push_rows<const A: usize, const S: usize>(
+        dst: &mut [i16],
+        src: &[i16],
+        adds: &[&[i16]; A],
+        subs: &[&[i16]; S],
+    ) {
+        let n = dst.len();
+        let mut offset = 0;
+        while offset + LANES <= n {
+            unsafe {
+                let mut value = vld1q_s16(src.as_ptr().add(offset));
+                for row in subs {
+                    value = vsubq_s16(value, vld1q_s16(row.as_ptr().add(offset)));
+                }
+                for row in adds {
+                    value = vaddq_s16(value, vld1q_s16(row.as_ptr().add(offset)));
+                }
+                vst1q_s16(dst.as_mut_ptr().add(offset), value);
+            }
+            offset += LANES;
+        }
+        for index in offset..n {
+            let mut value = src[index];
+            for row in subs {
+                value = value.wrapping_sub(row[index]);
+            }
+            for row in adds {
+                value = value.wrapping_add(row[index]);
+            }
+            dst[index] = value;
+        }
+    }
+
+    /// `dst = bias + sum(rows)`, eight lanes at a time.
+    ///
+    /// # Safety
+    ///
+    /// `bias` and every row must hold at least `dst.len()` elements.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn refresh_rows(dst: &mut [i16], bias: &[i16], rows: &[&[i16]]) {
+        let n = dst.len();
+        let mut offset = 0;
+        while offset + LANES <= n {
+            unsafe {
+                let mut value = vld1q_s16(bias.as_ptr().add(offset));
+                for row in rows {
+                    value = vaddq_s16(value, vld1q_s16(row.as_ptr().add(offset)));
+                }
+                vst1q_s16(dst.as_mut_ptr().add(offset), value);
+            }
+            offset += LANES;
+        }
+        for index in offset..n {
+            let mut value = bias[index];
+            for row in rows {
+                value = value.wrapping_add(row[index]);
+            }
+            dst[index] = value;
+        }
+    }
+
+    /// The SCReLU output head over both perspectives.
+    ///
+    /// # Safety
+    ///
+    /// `output_weights` must hold at least twice the accumulator width.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn evaluate_head(
+        stm: Color,
+        pair: &[Vec<i16>; 2],
+        output_weights: &[i16],
+        output_bias: i32,
+    ) -> i64 {
+        let stm_acc = &pair[stm as usize];
+        let ntm_acc = &pair[(stm ^ 1) as usize];
+        let l1 = stm_acc.len();
+        let zero = vdupq_n_s16(0);
+        let qa = vdupq_n_s16(crate::eval::nnue::net::QA as i16);
+        let mut total = i64::from(output_bias);
+        let mut lanes = vdupq_n_s32(0);
+        let mut pending = 0_u32;
+        let mut offset = 0;
+        while offset + LANES <= l1 {
+            // The two perspectives read their own half of the output weights.
+            for (accumulator, weight_base) in [(stm_acc, offset), (ntm_acc, l1 + offset)] {
+                unsafe {
+                    let a = vld1q_s16(accumulator.as_ptr().add(offset));
+                    let clamped = vminq_s16(vmaxq_s16(a, zero), qa);
+                    // The clamped square is at most 65,025, so the unsigned
+                    // 16-bit product is exact and the shift leaves <= 254.
+                    let squared = vreinterpretq_s16_u16(vshrq_n_u16::<8>(vreinterpretq_u16_s16(
+                        vmulq_s16(clamped, clamped),
+                    )));
+                    let w = vld1q_s16(output_weights.as_ptr().add(weight_base));
+                    lanes = vmlal_s16(lanes, vget_low_s16(squared), vget_low_s16(w));
+                    lanes = vmlal_s16(lanes, vget_high_s16(squared), vget_high_s16(w));
+                }
+            }
+            offset += LANES;
+            pending += 1;
+            if pending == FOLD_EVERY {
+                total += fold_lanes(lanes);
+                lanes = vdupq_n_s32(0);
+                pending = 0;
+            }
+        }
+        total += fold_lanes(lanes);
+        for index in offset..l1 {
+            let a = stm_acc[index];
+            if a > 0 {
+                total += i64::from(output(screlu(a))) * i64::from(output_weights[index]);
+            }
+            let b = ntm_acc[index];
+            if b > 0 {
+                total += i64::from(output(screlu(b))) * i64::from(output_weights[l1 + index]);
+            }
+        }
+        total
+    }
+
+    /// Horizontal sum of the four `i32` lanes into the `i64` total.
+    fn fold_lanes(lanes: int32x4_t) -> i64 {
+        let mut out = [0_i32; 4];
+        unsafe { vst1q_s32(out.as_mut_ptr(), lanes) };
+        out.iter().map(|value| i64::from(*value)).sum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{evaluate_head, push_rows, refresh_rows, scalar};
@@ -816,6 +1014,63 @@ mod tests {
                         assert_eq!(out, expected, "avx512 n={n} rows={row_count}");
                     }
                 }
+            }
+        }
+    }
+
+    /// The NEON backend must match the scalar oracle at production widths,
+    /// at widths with a tail narrower than one vector, and in the worst case
+    /// for the 32-bit head lanes (saturated activations and extreme weights).
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn the_neon_kernels_match_the_scalar_reference() {
+        use super::neon;
+
+        let mut rng = Lcg(0x0A11);
+        for n in [512, 48, 37, 8] {
+            let src: Vec<i16> = (0..n).map(|_| rng.i16()).collect();
+            let rows = random_rows(&mut rng, 4, n);
+            let (a1, a2) = (rows[0].as_slice(), rows[1].as_slice());
+            let (s1, s2) = (rows[2].as_slice(), rows[3].as_slice());
+
+            let mut expected = vec![0_i16; n];
+            scalar::push_rows(&mut expected, &src, &[a1, a2], &[s1, s2]);
+            let mut out = vec![0_i16; n];
+            unsafe { neon::push_rows::<2, 2>(&mut out, &src, &[a1, a2], &[s1, s2]) };
+            assert_eq!(out, expected, "neon push_rows n={n}");
+
+            // The full refresh over a row count that crosses the vector width.
+            let mut expected = vec![0_i16; n];
+            scalar::refresh_rows(&mut expected, &src, &[a1, a2, s1, s2, s1]);
+            let mut out = vec![0_i16; n];
+            unsafe { neon::refresh_rows(&mut out, &src, &[a1, a2, s1, s2, s1]) };
+            assert_eq!(out, expected, "neon refresh_rows n={n}");
+        }
+
+        // The head: random contents first, then the extreme cases.
+        for l1 in [8, 16, 48, 512, 1040, 2048] {
+            let pair = [
+                (0..l1).map(|_| rng.i16()).collect::<Vec<i16>>(),
+                (0..l1).map(|_| rng.i16()).collect::<Vec<i16>>(),
+            ];
+            let weights: Vec<i16> = (0..2 * l1).map(|_| rng.i16()).collect();
+            for stm in [WHITE, BLACK] {
+                let expected = scalar::evaluate_head(stm, &pair, &weights, -777);
+                let got = unsafe { neon::evaluate_head(stm, &pair, &weights, -777) };
+                assert_eq!(got, expected, "neon head l1={l1} side={stm}");
+            }
+        }
+        for weight in [i16::MAX, i16::MIN] {
+            let l1 = 2048;
+            let pair = [vec![300_i16; l1], vec![255_i16; l1]];
+            let weights = vec![weight; 2 * l1];
+            for stm in [WHITE, BLACK] {
+                let expected = scalar::evaluate_head(stm, &pair, &weights, -777);
+                let got = unsafe { neon::evaluate_head(stm, &pair, &weights, -777) };
+                assert_eq!(
+                    got, expected,
+                    "neon head worst case weight={weight} side={stm}"
+                );
             }
         }
     }

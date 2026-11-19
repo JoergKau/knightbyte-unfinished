@@ -795,3 +795,51 @@ The runtime-checked version of `searchstats` cost -2.7 % at `bench 16`; the
 second-instantiation design of ADR-0012 costs nothing measurable (-0.07 % at
 `bench 18`, 16 runs each, balanced ABBA). The counters are byte-identical to the
 predecessor's on four positions.
+
+### 7.23 P4b - the AArch64 NEON kernels and the macOS release (2026-11-20, Apple M4)
+
+The macOS side starts from a build defect, not a performance number: the
+AArch64 target did not compile (non-exhaustive `KernelKind` matches; bug B52),
+so the documented scalar fallback had never run on an Apple machine. The NEON
+backend (ADR-0015) is selected at start-up because NEON is part of the AArch64
+baseline; one binary therefore covers every Apple M processor.
+
+Host: MacBook Air M4, Apple M4, macOS 27.2.1, rustc 1.100.0, release profile.
+`bench 12/16/18`, one thread, compiled defaults; 5 (12) or 3 (16/18) interleaved
+runs per backend, NEON selected and `KNIGHTBYTE_FORCE_ISA=scalar` forced.
+
+| Bench | Scalar median NPS | NEON median NPS | Ratio |
+| :--- | ---: | ---: | ---: |
+| 12 | 440,027 | 1,721,916 | 3.91x |
+| 16 | 435,612 | 1,888,530 | 4.33x |
+| 18 | 427,412 | 1,875,611 | 4.39x |
+
+Node identity is exact for every backend: `bench 6/12/16/18` =
+**15,528 / 456,308 / 2,815,799 / 6,892,874** with NEON, with the forced scalar
+kernels, and in the release artifact. `perft 3` on startpos is 8,902 and
+`nnueeval` on startpos is 27, as on Windows.
+
+The release artifact (`tools/build_release_macos.py`, ADR-0015) is
+`aarch64-apple-darwin` built with `-Ctarget-cpu=apple-m1`; the script checks
+`uciok`, all four pins, the forced-scalar and forced-NEON identity and the
+arm64-only Mach-O slice, then packs a `tar.gz` with `SHA256SUMS.txt` and
+`manifest.json`. Measured for reference on the M4: 1.72-1.89 MNPS at bench
+12-18, above the recorded C# M4 baseline (1.66 MNPS) but below the 2.48 MNPS
+stretch goal, which remains search-tuning work.
+
+**PGO on macOS (2026-11-20).** `tools/pgo_build.py` is host-independent, so the
+same four-step build (instrumented run of `bench 12` + `bench 16`,
+`llvm-profdata merge`, profile-use rebuild, pin verification) runs on the M4.
+The macOS release uses it by default; `--no-pgo` gives the plain build. Same
+session, interleaved three-run pairs:
+
+| Bench | Plain NPS | PGO NPS | Gain |
+| :--- | ---: | ---: | ---: |
+| 12 | 1,839,951 | 1,950,034 | +6.0 % |
+| 16 | 1,868,479 | 2,002,701 | +7.2 % |
+| 18 | 1,867,987 | 2,008,998 | +7.5 % |
+
+That is the same order as the Windows PGO result (+6.4 % in 7.18), and the
+four pins stay exact. The profile is generated on the build host, is never
+committed and does not change the instruction baseline: the binary still runs
+on M1-M5.

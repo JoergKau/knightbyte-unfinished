@@ -1,0 +1,46 @@
+name: Release
+
+# The macOS artifact is one Apple Silicon binary (aarch64, `apple-m1` baseline):
+# it runs on every Apple M processor, Intel Macs are not supported. The Windows
+# artifacts are built on a Windows host (`tools/build_release.py`); this
+# workflow covers the macOS side of a tagged release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos-arm64:
+    name: macOS Apple Silicon release
+    # Every macOS runner label except the `-intel` ones is arm64.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+          components: llvm-tools-preview
+      - name: Add the Apple Silicon target
+        run: rustup target add aarch64-apple-darwin
+      - name: Build, verify and package
+        run: python3 tools/build_release_macos.py
+      - name: Upload the artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: knightbyte-macos-arm64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256

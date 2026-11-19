@@ -19,6 +19,7 @@ Usage:
     python tools/pgo_build.py --target-cpu x86-64-v3 --work-dir target/pgo-work/v3 \\
         --output target/pgo/knightbyte-v3.exe
     python tools/pgo_build.py --target-cpu x86-64-v4 --target-features +avx512vnni
+    python3 tools/pgo_build.py --target-cpu apple-m1 --output target/pgo/knightbyte-macos
 
 `--target-cpu` builds a dedicated variant (for example x86-64-v3); without it
 the executable is the portable build whose SIMD backend is chosen at run time
@@ -153,7 +154,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--work-dir", default="target/pgo-work/default", help="scratch directory (under target/)")
     parser.add_argument("--clean", action="store_true", help="delete the scratch directory after a successful build")
-    parser.add_argument("--output", default="target/pgo/knightbyte.exe", help="where the binary is copied")
+    default_output = "target/pgo/knightbyte.exe" if os.name == "nt" else "target/pgo/knightbyte"
+    parser.add_argument("--output", default=default_output, help="where the binary is copied")
     parser.add_argument("--target-cpu", default="", help="for example x86-64-v3 (empty: portable build)")
     parser.add_argument("--target-features", default="", help="for example +avx512vnni")
     args = parser.parse_args()
