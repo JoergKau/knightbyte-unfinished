@@ -663,6 +663,16 @@ disagreed before versus 0 of 315 (400 samples each) after.
     compares the same board with and without the square and covers the own-pawn
     case.
 
+## B49 - a present but corrupt DTZ file disables WDL probing for the same material
+
+- **Date:** 2026-11-19
+- **Build / commit:** `acb2bb5` (Phase 6 port; inherited from predecessor Bug 151)
+- **Command or FEN:** `8/8/8/8/8/1Q6/8/K6k w - - 0 1`, `SyzygyPath` = a directory with a good `KQvK.rtbw` and a `KQvK.rtbz` whose first four bytes are zero, `go depth 4`.
+- **Expected:** `score cp 29900` (the WDL table is healthy; only DTZ is unavailable, so root ranking is skipped).
+- **Actual:** `score cp 783`: the failed DTZ load marked the material's single error flag, and every later WDL probe answered "not covered". An absent DTZ file is fine (`cp 29900`).
+- **Cause:** one error flag per material slot (reproduced as quirk Q9, ADR-0009).
+- **Status:** open. Decided 2026-11-19 to fix in both engines with one error flag per table kind (predecessor Bug 151); the fix, a regression test and the re-measurement follow in the next step.
+
 ## Predecessor behaviour
 
 Predecessor quirks are tracked in the local quirk register, which is not part of
