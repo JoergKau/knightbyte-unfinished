@@ -226,6 +226,20 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       `tools/perf_bench.py` (five-run median and node-pin check) and the
       same-session baseline in `docs/baselines.md` section 7. The counters
       found B42 (eval-cache stores while the cache is disabled).
+- [x] P1.0 (2026-11-19): B42 fixed - the static-evaluation store is gated by
+      `UseEvalCache` like the probe, so the default configuration never
+      touches the shared cache. Node counts unchanged.
+- [x] P1 (2026-11-19): make-free legality (`board/legality.rs`): checkers and
+      pinned pieces are computed once per node and every pseudo-legal move is
+      tested without being made; `legal_by_making` stays as the reference and
+      `tests/legality.rs` proves move-for-move equality on long random walks.
+      The search makes and pushes a move only after its pruning blocks.
+      Same-session depth-20 speed ratio vs the predecessor: 0.63 -> ~0.9.
+- [x] P2 + P5 prefetch (2026-11-19): slider index by the BMI2 `pext`
+      instruction (inline asm behind the CPU gate, software fallback kept;
+      non-x86 targets build without the x86 feature macro) and a TT bucket
+      prefetch after every make and null move. Node counts unchanged;
+      same-session depth-20 ratio vs the predecessor: ~1.08-1.11.
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).
@@ -351,3 +365,4 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
 - [ ] Ubuntu x64 release.
 - [ ] Windows universal executable with per-variant PGO.
 - [ ] CCRL submission package.
+

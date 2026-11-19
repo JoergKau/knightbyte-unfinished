@@ -693,8 +693,12 @@ engines in the same session. The new `node-stats` feature shows that **89.8 %
 of all `make_move` calls are the legality filter** (97.7 M filter makes vs
 11.1 M search makes in `bench 20`), and the filter is ~55 % of the
 same-session gap. The counters also found **B42** (the eval cache stores every
-evaluation while `UseEvalCache` is off). Full numbers and the composition table
-are in `docs/baselines.md` section 7.
+evaluation while `UseEvalCache` is off); **fixed in P1.0 (2026-11-19)**, about
++3.8 % on `bench 12`, pins exact. **P1** (make-free legality, 2026-11-19), **P2**
+(hardware `pext`) and the **P5 prefetch** followed the same day: the same-session
+depth-20 ratio against the predecessor went 0.629 -> 1.08-1.11 (KnightByte
+1.54-1.57 M vs 1.42-1.43 M NPS, identical 18,662,358-node tree), every pin exact.
+Full numbers and the composition table are in `docs/baselines.md` section 7.
 
 **Measurement protocol**
 

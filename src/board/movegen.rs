@@ -1,14 +1,14 @@
 //! Pseudo-legal and legal move generation.
 //!
-//! Phase 2 generates pseudo-legal moves and filters them by making each move
-//! on a copy and checking the moving side's king. This is the simplest
-//! correctness-oriented design; it handles pins, discovered checks, en
-//! passant and castling without a separate pin-detection layer. A later
-//! performance phase can switch to staged legal generation behind the same
-//! public functions.
+//! Pseudo-legal moves are generated first and then filtered for legality
+//! with the make-free [`Legality`] test (checkers and pinned pieces computed
+//! once per node). The slow "make every move and test the king" filter is
+//! kept as [`legal_by_making`], the reference the fast filter is tested
+//! against move for move.
 
 use crate::board::attacks::{attacks, pawn_attacks};
 use crate::board::bitboard::bits;
+use crate::board::legality::Legality;
 use crate::board::position::{CASTLE_BK, CASTLE_BQ, CASTLE_WK, CASTLE_WQ, Position};
 use crate::types::color::{WHITE, flip};
 use crate::types::r#move::{Move, MoveList, flags};
@@ -39,13 +39,17 @@ pub fn pseudo_legal(position: &Position) -> MoveList {
 }
 
 /// Generates all legal moves for the side to move.
+///
+/// The pseudo-legal list is filtered with the make-free [`Legality`] test
+/// (checkers and pins computed once), so no move is made. The result keeps
+/// the generation order and is identical to [`legal_by_making`].
 pub fn legal(position: &Position) -> MoveList {
     crate::node_stat!(LegalMoveGens);
     let pseudo = pseudo_legal(position);
+    let context = Legality::new(position);
     let mut moves = MoveList::new();
     for &mv in pseudo.as_slice() {
-        let next = position.make_move(mv);
-        if !next.in_check(position.side()) {
+        if context.is_legal(position, mv) {
             moves.push(mv);
         } else {
             crate::node_stat!(IllegalMoves);
@@ -54,16 +58,31 @@ pub fn legal(position: &Position) -> MoveList {
     moves
 }
 
-/// Returns whether the side to move has at least one legal move.
-pub fn has_legal_move(position: &Position) -> bool {
+/// Generates all legal moves by making each pseudo-legal move and testing the
+/// mover's king.
+///
+/// This is the slow, obviously-correct reference that [`legal`] must match
+/// move for move; it is kept for the differential tests.
+pub fn legal_by_making(position: &Position) -> MoveList {
     let pseudo = pseudo_legal(position);
+    let mut moves = MoveList::new();
     for &mv in pseudo.as_slice() {
         let next = position.make_move(mv);
         if !next.in_check(position.side()) {
-            return true;
+            moves.push(mv);
         }
     }
-    false
+    moves
+}
+
+/// Returns whether the side to move has at least one legal move.
+pub fn has_legal_move(position: &Position) -> bool {
+    let pseudo = pseudo_legal(position);
+    let context = Legality::new(position);
+    pseudo
+        .as_slice()
+        .iter()
+        .any(|&mv| context.is_legal(position, mv))
 }
 
 fn generate_pawns(position: &Position, us: u8, them: u8, moves: &mut MoveList) {

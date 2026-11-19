@@ -407,6 +407,7 @@ impl Searcher {
                 reduction = depth - 1;
             }
             let next = position.make_null();
+            self.tables.tt.prefetch(next.key());
             self.copy_accumulators(ply);
             self.move_stack[ply] = Move::NONE;
             let score = -self.negamax(
@@ -624,13 +625,6 @@ impl Searcher {
                 }
             }
 
-            let next = position.make_move(mv);
-            crate::node_stat!(MovesMade);
-            // The child's accumulator pair is pushed here, before any
-            // pruning: every recursion below uses it, and a skipped push
-            // would leave the pair at ply + 1 stale for the next move.
-            self.push_accumulators(position, &next, mv, ply);
-            let gives_check = next.in_check(next.side());
             self.move_stack[ply] = mv;
 
             // The legal-move counter increments immediately after the
@@ -694,6 +688,18 @@ impl Searcher {
                 self.picker[ply].skip_quiets();
                 continue;
             }
+
+            // The move is made, and the child's accumulator pair pushed, only
+            // once the pruning blocks above have let it through: they decide
+            // from the parent's data alone, so a pruned move costs neither a
+            // board copy nor a network update. The pair at ply + 1 is written
+            // from the parent's pair by every move that reaches a child, so
+            // a skipped push leaves nothing stale behind.
+            let next = position.make_move(mv);
+            self.tables.tt.prefetch(next.key());
+            crate::node_stat!(MovesMade);
+            self.push_accumulators(position, &next, mv, ply);
+            let gives_check = next.in_check(next.side());
 
             let mut extension = if mv == tt_move { singular_extension } else { 0 };
 

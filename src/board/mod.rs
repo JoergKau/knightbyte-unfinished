@@ -3,6 +3,7 @@
 pub mod attacks;
 pub mod bitboard;
 pub mod fen;
+pub mod legality;
 pub mod movegen;
 pub mod perft;
 pub mod position;

@@ -3,10 +3,16 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-19 (P0 complete: the measurement rig is reproducible; same-session depth-20 baseline 669,773 vs 1,064,034 NPS (1.59x, identical tree); the legal filter is 89.8 % of all makes and ~45-55 % of the gap; B42 found; P1 one-pass move path is next)
+**Last updated:** 2026-11-19 (P1.0, P1, P2, P5-prefetch done: depth-20 ratio 0.629 -> 1.08-1.11; P1.0 and P1 done: depth-20 ratio 0.629 -> 0.87-0.91; earlier: P0 complete: the measurement rig is reproducible; same-session depth-20 baseline 669,773 vs 1,064,034 NPS (1.59x, identical tree); the legal filter is 89.8 % of all makes and ~45-55 % of the gap; B42 found; P1 one-pass move path is next)
 **Rule:** update this document at the end of every working session.
 
-## NEXT SESSION (top priority): P1 - the one-pass move path
+## NEXT SESSION (top priority): beyond parity - P3 / P4 / P6 / P7 (R2 reached)
+
+**2026-11-19 update:** P2 (hardware `pext`) and the P5 prefetch are also done. Same-session depth 20 (identical tree): KnightByte 1.54-1.57 M vs predecessor 1.42-1.43 M NPS = **1.08-1.11x** (docs/baselines.md 7.8). The parity milestone R2 is reached; the project goal (1.5x) and thread scaling (P7) remain.
+
+**P1 is DONE (2026-11-19):** `movegen::legal` now uses the make-free `board::legality::Legality` test (equal to the making filter move for move, `tests/legality.rs`) and the search makes a move only after the pruning blocks. Pins exact; same-session depth-20 ratio vs the predecessor 0.629 -> 0.87-0.91 (details and the why-not-pseudo-list lesson: `docs/baselines.md` 7.7). Next: P1c (early-exit forced-reply count), P2 (hardware PEXT), P3 (incremental occupancy), P5 (TT prefetch), measured one step at a time.
+
+### Historical: the P1 brief
 
 **P0 is complete (2026-11-19).** The reproducible same-session baseline is:
 KnightByte **669,773 NPS** at `perf_test.py --depth 20` and **739,702 NPS** at
@@ -25,9 +31,10 @@ iterate the pseudo-legal list, make the move once, reject illegal moves before
 any side effect, and keep every pruning condition and counter identical. The
 gate is the four bench pins and every per-depth delta +0.
 
-**P1.0 (first, behaviour-neutral):** fix **B42** - the eval cache stores every
-evaluation although `UseEvalCache` is off and the cache is never probed
-(8.33 M wasted stores per `bench 20`). Gate the store with the lever.
+**P1.0 - DONE (2026-11-19):** **B42** fixed - the eval-cache store is gated with
+`UseEvalCache` (it used to write 8.33 M never-read entries per `bench 20`).
+Pins exact; `bench 12` median about +3.8 % (see `docs/baselines.md` 7.6). The
+remaining work of this section is **P1 proper** (one-pass move path), next.
 
 **After P1:** re-run `perf_test.py --depth 20` and the node-stats composition.
 Expected ~0.80-0.85 MNPS at depth 20 (from 0.67), closing roughly half of the

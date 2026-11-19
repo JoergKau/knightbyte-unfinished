@@ -184,6 +184,7 @@ fn relevant_mask(square: Square, diagonal: bool) -> u64 {
 /// Selected once per process: BMI2 present, not disabled through
 /// `KNIGHTBYTE_DISABLE_PEXT=1`, and not a slow-BMI2 CPU (Zen 1/2, Excavator),
 /// with `KNIGHTBYTE_FORCE_PEXT=1` as the A/B override.
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 struct PextTables {
     rook_masks: [u64; 64],
     bishop_masks: [u64; 64],
@@ -193,6 +194,7 @@ struct PextTables {
     bishop_table: Vec<u64>,
 }
 
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 impl PextTables {
     /// Fills the tables from the ray-walking attacks (bit-identical to the
     /// magic-style reference construction).
@@ -286,7 +288,42 @@ impl PextTables {
 /// Extracts the relevant occupancy bits into a compact index: the k-th set
 /// bit of the mask maps to the k-th bit of the index, matching the
 /// Carry-Rippler subset enumeration order of the table build.
+///
+/// On x86-64 this is the single BMI2 `pext` instruction; the PEXT tables are
+/// only ever built after the CPU feature check, which is what makes the
+/// instruction safe to issue. Elsewhere (and for the `#[cfg(test)]` oracle)
+/// [`pext_index_software`] computes the same index.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
 fn pext_index(occupancy: u64, mask: u64) -> usize {
+    let index: u64;
+    // SAFETY: `pext` is a BMI2 instruction. `pext_index` is only reached
+    // through `PextTables`, and `pext_tables()` builds those tables only when
+    // `is_x86_feature_detected!("bmi2")` is true. The instruction reads two
+    // registers and writes one: no memory, no stack, no flags.
+    unsafe {
+        core::arch::asm!(
+            "pext {index}, {occupancy}, {mask}",
+            index = lateout(reg) index,
+            occupancy = in(reg) occupancy,
+            mask = in(reg) mask,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    index as usize
+}
+
+/// Portable form of [`pext_index`] for targets without BMI2.
+#[cfg(not(target_arch = "x86_64"))]
+#[inline(always)]
+fn pext_index(occupancy: u64, mask: u64) -> usize {
+    pext_index_software(occupancy, mask)
+}
+
+/// Software `pext`: the portable fallback and the test oracle.
+#[cfg(any(test, not(target_arch = "x86_64")))]
+#[inline]
+fn pext_index_software(occupancy: u64, mask: u64) -> usize {
     let mut index = 0_usize;
     let mut bit = 0_usize;
     let mut rest = mask;
@@ -305,6 +342,15 @@ static PEXT_TABLES: std::sync::OnceLock<Option<PextTables>> = std::sync::OnceLoc
 
 /// Returns the PEXT tables when the host can run them, or `None` when the
 /// ray-walking fallback stays.
+#[cfg(not(target_arch = "x86_64"))]
+fn pext_tables() -> Option<&'static PextTables> {
+    None
+}
+
+/// Returns the PEXT tables when the host can run them, or `None` when the
+/// ray-walking fallback stays.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
 fn pext_tables() -> Option<&'static PextTables> {
     PEXT_TABLES
         .get_or_init(|| {
@@ -370,6 +416,31 @@ mod tests {
     };
     use crate::types::color::{BLACK, WHITE};
     use crate::types::square::{Square, from_algebraic};
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn the_hardware_pext_index_matches_the_software_index() {
+        if !std::arch::is_x86_feature_detected!("bmi2") {
+            return;
+        }
+        // A fixed xorshift stream of occupancies against every real mask.
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        for square in 0..64 {
+            for diagonal in [false, true] {
+                let mask = super::relevant_mask(square, diagonal);
+                for _ in 0..200 {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    assert_eq!(
+                        super::pext_index(state, mask),
+                        super::pext_index_software(state, mask),
+                        "square {square} diagonal {diagonal}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn knight_on_a1_has_two_targets() {

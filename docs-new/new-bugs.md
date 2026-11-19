@@ -657,10 +657,12 @@ Consequences for KnightByte:
     search defect.
   - Reproduction: the `eval_cache_probes`, `eval_cache_stores` and
     `eval_head_calls` lines of the command above.
-  - Status: **open**, fix scheduled as P1.0. Gate the store in
-    `evaluate_stacked` with `self.params.use_eval_cache` (the probe already
-    is); behaviour-neutral for both lever settings. Add a test that the cache
-    is untouched while the lever is off.
+  - Status: **fixed 2026-11-19 (P1.0)**. `evaluate_stacked` now gates the
+    store with `self.params.use_eval_cache`, like the probe; behaviour-neutral
+    for both lever settings (bench pins unchanged). Regression test:
+    `the_eval_cache_is_not_written_while_the_lever_is_off`. Measured effect:
+    `bench 12` median 799-833 K -> 847-863 K NPS (about +3-4 %, three
+    interleaved five-run pairs).
 
 - **B41 — warm-transposition-table node divergence (found by Phase 5 step 12, fixed 2026-11-18).**
   - Build / commit: step-12 release build; bench pins exact (`capture_bench.py compare`, all deltas +0).

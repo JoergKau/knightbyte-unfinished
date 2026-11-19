@@ -209,6 +209,7 @@ impl Searcher {
             }
 
             let next = position.make_move(mv);
+            self.tables.tt.prefetch(next.key());
             crate::node_stat!(MovesMade);
             self.push_accumulators(position, &next, mv, ply);
             self.move_stack[ply] = mv;

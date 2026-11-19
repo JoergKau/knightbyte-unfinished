@@ -282,4 +282,82 @@ noise (bench 12 788 K vs 795 K). The hardware `pext` fix is P2.
 default) the eval cache is never probed but still stores every static
 evaluation (8.33 M stores in `bench 20`). The predecessor performs no cache
 instructions when the lever is off. The store is gated with the same lever in
-P1; this is behaviour-neutral.
+P1.0; this is behaviour-neutral.
+
+### 7.6 P1.0 result (B42 fixed, 2026-11-19)
+
+Three interleaved pairs of `tools/perf_bench.py --depth 12 --runs 5` (same
+host, same build class, before = the P0 commit, after = P1.0). Node pin exact
+(456,308) in every run; `bench 6/16/18` = 15,528 / 2,815,799 / 6,892,874.
+
+| Pair | Before median NPS | After median NPS | Ratio |
+| :--- | ---: | ---: | ---: |
+| 1 | 799,138 | 862,586 | 1.079 |
+| 2 | 828,145 | 859,337 | 1.038 |
+| 3 | 832,678 | 846,582 | 1.017 |
+
+The spread between pairs is machine-state noise (a few percent); the after
+build wins every pair, so the gain is real but modest (about +2-8 %, median
++3.8 %). The depth-20 same-session comparison is re-run after P1.
+
+### 7.7 P1 result (make-free legality, 2026-11-19)
+
+Change: `movegen::legal` filters the pseudo-legal list with `board::legality::Legality`
+(checkers and pinned pieces computed once per node, no `make_move`), and the
+search makes a move only after the pruning blocks (late-move, history and
+futility pruning) have let it through. Pins exact: `bench 6/12/16/18` =
+15,528 / 456,308 / 2,815,799 / 6,892,874; `capture_bench.py compare` all
+deltas +0 at depths 1-12, 14, 16, 18.
+
+**Same-session depth 20** (`perf_test.py --depth 20 --threads 1 --hash 256`,
+interleaved, both engines visit 18,662,358 nodes):
+
+| Run | KnightByte NPS | Predecessor NPS | Ratio |
+| :--- | ---: | ---: | ---: |
+| 1 | 1,266,762 | 1,396,130 | 0.907 |
+| 2 | 1,251,896 | 1,442,185 | 0.868 |
+
+(The machine state differs from the section 7.1 session - the predecessor ran
+at 1.06 M there and 1.40-1.44 M here - so only the **ratio** is comparable:
+0.629 before P1, 0.87-0.91 after.) `bench 12` median, interleaved against
+the P0 build: 843-868 K -> 1,030-1,056 K (+22 %).
+
+**Design note (why not "pseudo-legal list + make-then-test").** The first
+attempt followed the plan literally: hand the picker the pseudo-legal list and
+reject an illegal move after making it. It was fast but moved the node pins
+(`bench 12/16/18` = 432,747 / 3,136,996 / 8,042,164): the picker's partial
+selection sort swaps the best move into the cursor slot, which permutes the
+order of equal-scored moves, so an illegal move sitting in the buffer changes
+the order of the legal moves after it. Node identity therefore requires the
+picker to see the exact legal list; the legality decision has to be made before
+the picker, and it is made without making the move (P1b's pin/check-aware
+test). The attempt was reverted.
+
+### 7.8 P2 (hardware PEXT) and P5-prefetch results (2026-11-19)
+
+Both steps are node-neutral (pins exact, `capture_bench.py compare` all +0,
+`cargo test --all-targets` green).
+
+* **P2:** the PEXT index is now the single BMI2 `pext` instruction (inline
+  asm behind the existing BMI2 / slow-BMI2 gate; the software loop stays as the
+  portable fallback and test oracle, a new test compares both on random
+  occupancies). `attacks.rs` is also cfg-gated so non-x86 targets compile
+  without the x86 feature macro. `bench 12` median: 1.05 M (ray walk,
+  `KNIGHTBYTE_DISABLE_PEXT=1`) -> 1.15 M; deeper searches gain more
+  (`bench 18` 1.21 M -> 1.33 M).
+* **P5 (prefetch only):** `tt.prefetch(next.key())` right after every
+  `make_move` in negamax and quiescence and after `make_null`. Interleaved
+  `bench 16` medians, P2 build vs P2 + prefetch: 1.34 M -> 1.49 M and
+  1.30 M -> 1.47 M (+11-13 %).
+
+**Same-session depth 20** (identical 18,662,358 nodes, interleaved):
+
+| Build | KnightByte NPS | Predecessor NPS | Ratio |
+| :--- | ---: | ---: | ---: |
+| P1 | 1,251,896 - 1,266,762 | 1,396,130 - 1,442,185 | 0.87 - 0.91 |
+| P1 + P2 | 1,392,732 - 1,401,984 | 1,402,460 - 1,429,129 | 0.97 - 1.00 |
+| P1 + P2 + prefetch | **1,537,300 - 1,570,740** | 1,416,247 - 1,427,949 | **1.08 - 1.11** |
+
+Milestone R2 (predecessor parity, same session) is reached: KnightByte is
+~8-11 % faster per node than the predecessor at depth 20 on this host. R3 (the
+1.5x project goal) and R4 (thread scaling) remain open.

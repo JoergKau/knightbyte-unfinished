@@ -624,10 +624,9 @@ impl Searcher {
     /// node or refreshed at the search root). The evaluation reuses this
     /// searcher's [`Evaluator`] for the output head.
     pub(crate) fn evaluate_stacked(&mut self, position: &Position, ply: usize) -> i32 {
+        let use_cache = self.params.use_eval_cache;
         let key = position.key();
-        if self.params.use_eval_cache
-            && let Some(cached) = self.tables.eval_cache.probe(key)
-        {
+        if use_cache && let Some(cached) = self.tables.eval_cache.probe(key) {
             return i32::from(cached);
         }
         let value = crate::eval::nnue::evaluate::evaluate_pair(
@@ -635,9 +634,14 @@ impl Searcher {
             position.side(),
             &self.accumulator_stack[ply],
         );
-        self.tables
-            .eval_cache
-            .store(key, value.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
+        // The store is gated by the same lever as the probe: with the cache
+        // off nothing ever reads it, so writing would only cost a shared
+        // cache line per node (and ping it between threads).
+        if use_cache {
+            self.tables
+                .eval_cache
+                .store(key, value.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
+        }
         value
     }
 
@@ -1378,6 +1382,33 @@ mod tests {
             searcher.evaluate_stacked(&position, 0),
             12_345,
             "with the lever off the cache must be ignored"
+        );
+    }
+
+    #[test]
+    fn the_eval_cache_is_not_written_while_the_lever_is_off() {
+        // B42: the store used to run unconditionally, writing a cache that
+        // nothing read. With the lever off the cache must stay untouched;
+        // with it on the evaluation must be stored and then served.
+        let mut searcher = Searcher::new(2);
+        let position = Position::from_fen(STARTPOS_FEN).expect("the start FEN must parse");
+        let key = position.key();
+        searcher.refresh_accumulators(&position, 0);
+
+        searcher.params_mut().use_eval_cache = false;
+        let value = searcher.evaluate_stacked(&position, 0);
+        assert_eq!(
+            searcher.tables.eval_cache.probe(key),
+            None,
+            "an evaluation must not be stored while the lever is off"
+        );
+
+        searcher.params_mut().use_eval_cache = true;
+        assert_eq!(searcher.evaluate_stacked(&position, 0), value);
+        assert_eq!(
+            searcher.tables.eval_cache.probe(key),
+            Some(value as i16),
+            "with the lever on the evaluation must be stored"
         );
     }
 
