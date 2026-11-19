@@ -2,6 +2,7 @@
 
 pub mod evaluate;
 pub mod features;
+pub mod kernels;
 pub mod net;
 
 pub use evaluate::{Evaluator, embedded_net, evaluate_position};

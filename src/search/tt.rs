@@ -292,6 +292,7 @@ impl TranspositionTable {
     /// whose key happens to be zero is never cached (probability 2^-64).
     #[inline]
     pub fn probe(&self, key: u64) -> Option<TtEntry> {
+        crate::node_stat!(TtProbes);
         if key == 0 {
             return None;
         }
@@ -301,6 +302,7 @@ impl TranspositionTable {
             // new key always comes with its matching data.
             let stored_key = bucket.key_slot(slot).load(Ordering::Acquire);
             if stored_key == key {
+                crate::node_stat!(TtHits);
                 let data = bucket.data_slot(slot).load(Ordering::Relaxed);
                 return Some(unpack(key, data));
             }
@@ -323,6 +325,7 @@ impl TranspositionTable {
     /// considerably deeper entry.
     #[inline]
     pub fn store(&self, entry: TtEntry) {
+        crate::node_stat!(TtStores);
         if entry.key == 0 {
             return;
         }
@@ -410,36 +413,35 @@ fn allocate(count: usize) -> Box<[Bucket]> {
 }
 
 /// Chooses the slot to write and returns its index, or `None` when a deeper
-/// current-generation same-key entry must be kept.
+/// same-key entry must be kept.
 ///
 /// The reference policy, in order:
 ///
-/// 1. **Same key** — the entry is refreshed in place unless it is a
-///    *current-generation* entry that is strictly deeper than what is being
-///    stored; such an entry is kept (its extra search depth is worth more
-///    than the fresh score).
+/// 1. **Same key** — the entry is refreshed in place iff the new depth is
+///    equal or greater. The reference's stamped age is identical on every
+///    entry (its per-search stamp counter resets with each fresh search
+///    object, B41), so the age clause of its rule never fires and only the
+///    depth rule governs — across searches as well as within one.
 /// 2. **Empty slot** — the first empty slot wins, never evicting a live
 ///    entry while a free one exists.
 /// 3. **Least-precious victim** — the occupied-by-another-key slot with the
 ///    lowest `stored depth - 2 per generation of age`. There is no
 ///    deeper-entry guard: a full bucket always loses its least-precious
 ///    occupant.
-fn choose_slot(bucket: &Bucket, key: u64, depth: u8, generation: u8) -> Option<usize> {
-    let current_generation = generation & GENERATION_MASK;
+fn choose_slot(bucket: &Bucket, key: u64, depth: u8, _generation: u8) -> Option<usize> {
+    let current_generation = _generation & GENERATION_MASK;
     let mut victim = 0;
     let mut victim_precious = i32::MAX;
     for slot in 0..BUCKET_SLOTS {
         let stored_key = bucket.key_slot(slot).load(Ordering::Relaxed);
         let data = bucket.data_slot(slot).load(Ordering::Relaxed);
         if stored_key == key {
-            let stored_depth = entry_depth(data);
-            let stored_generation = entry_generation(data);
-            if i32::from(depth) >= i32::from(stored_depth)
-                || current_generation != stored_generation
-            {
+            // A deeper stored entry is kept, also across searches (B41): the
+            // reference stamps every entry with the same per-search age, so
+            // its same-key rule reduces to the depth comparison.
+            if i32::from(depth) >= i32::from(entry_depth(data)) {
                 return Some(slot);
             }
-            // A deeper entry from the current generation is kept.
             return None;
         }
         if stored_key == 0 {
@@ -626,16 +628,19 @@ mod tests {
     }
 
     #[test]
-    fn deeper_current_generation_entry_is_kept() {
+    fn deeper_same_key_entry_is_kept_across_generations() {
         let table = TranspositionTable::new(1);
         table.store(stamped(&table, 99, 9));
         // Same generation, shallower depth: the stored entry stays.
         table.store(stamped(&table, 99, 3));
         assert_eq!(table.probe(99).unwrap().depth, 9);
-        // A different generation always refreshes.
+        // B41: an older-generation entry is kept against a shallower store,
+        // too. The predecessor stamps every entry with the same per-search
+        // age, so its same-key rule is a pure depth comparison across
+        // searches as well.
         table.new_generation();
         table.store(stamped(&table, 99, 3));
-        assert_eq!(table.probe(99).unwrap().depth, 3);
+        assert_eq!(table.probe(99).unwrap().depth, 9);
     }
 
     #[test]

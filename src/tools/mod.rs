@@ -2,3 +2,5 @@
 
 pub mod bench;
 pub mod net;
+#[cfg(feature = "node-stats")]
+pub mod node_stats;

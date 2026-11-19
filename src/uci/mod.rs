@@ -10,6 +10,7 @@
 
 use std::io::{self, BufRead};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::board::fen::STARTPOS_FEN;
 use crate::board::movegen::{gives_check, legal};
@@ -1005,13 +1006,25 @@ fn handle_perft(line: &str, position: Option<&Position>, output: &mut Output) ->
 }
 
 /// Counts perft nodes for the current position at `depth`.
+///
+/// The reference prints three lines (`Nodes`, `Time`, `NPS`) for both the
+/// `perft` command and `go perft`; the elapsed-milliseconds guard keeps a
+/// fast count from dividing by zero, the same rule the search's nps uses.
 fn handle_perft_depth(
     depth: u32,
     position: Option<&Position>,
     output: &mut Output,
 ) -> io::Result<()> {
     match position {
-        Some(position) => output.line(&format!("Nodes: {}", perft(position, depth))),
+        Some(position) => {
+            let started = Instant::now();
+            let nodes = perft(position, depth);
+            let millis = started.elapsed().as_millis().max(1);
+            let nps = nodes as u128 * 1000 / millis;
+            output.line(&format!("Nodes: {nodes}"))?;
+            output.line(&format!("Time: {millis}ms"))?;
+            output.line(&format!("NPS: {nps}"))
+        }
         None => output.line("info string no position set"),
     }
 }

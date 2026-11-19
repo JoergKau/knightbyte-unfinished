@@ -640,6 +640,42 @@ Consequences for KnightByte:
 
 ## Open
 
+- **B42 - eval cache stores every evaluation while the cache is disabled
+  (found by the P0 node counters, 2026-11-19).**
+  - Build / commit: 2026-11-19 performance session, working tree before P1
+    (release, `node-stats` feature).
+  - Platform / CPU: Windows 11, AMD Ryzen 7 260.
+  - Command: `cargo run --release --features node-stats -- bench 20`.
+  - Expected: with `UseEvalCache=false` (the compiled default) the evaluation
+    path touches the cache zero times; the predecessor returns from its
+    evaluation before any cache instruction when the lever is off.
+  - Actual: 0 eval-cache probes, but **8,326,971 stores** in `bench 20` (0.547
+    per node): a random write to the shared 1 MB cache for every static
+    evaluation, with no reader. The same pattern appears in `bench 12`
+    (234,673 stores, 0 probes). Node counts are unaffected; this is a
+    performance defect (wasted memory traffic and cache pollution), not a
+    search defect.
+  - Reproduction: the `eval_cache_probes`, `eval_cache_stores` and
+    `eval_head_calls` lines of the command above.
+  - Status: **open**, fix scheduled as P1.0. Gate the store in
+    `evaluate_stacked` with `self.params.use_eval_cache` (the probe already
+    is); behaviour-neutral for both lever settings. Add a test that the cache
+    is untouched while the lever is off.
+
+- **B41 — warm-transposition-table node divergence (found by Phase 5 step 12, fixed 2026-11-18).**
+  - Build / commit: step-12 release build; bench pins exact (`capture_bench.py compare`, all deltas +0).
+  - Platform / CPU: Windows 11, AMD Ryzen 7 260.
+  - Command / FEN: replay `tests/golden/transcripts/go_limiter_depth.txt` in one session: `position startpos`, `go`, `go depth 7`, `go nodes 50000`, `go movestogo 40`.
+  - Expected: the golden's unmasked warm values, e.g. depth 7 = 5,731 nodes after the bare `go`; `go nodes 50000` reports 34,979; `movestogo` 169.
+  - Actual: 10,500 / 48,863 / 3,924 nodes. Cold fixed-depth searches remain identical (bench 6/12/16/18 = 15,528 / 456,308 / 2,815,799 / 6,892,874); step 12 pins only cold values (47 at depth 1, 43 at the mate in one). The goldens were captured with a warm shared table in a sequential session; PV tails also differ in derived reporting (step 3). No crash, illegal move or time loss is involved.
+  - Controlled 2026-11-18 probe against the local reference binary (one process, `position startpos` then repeated searches): cold `go depth 6` is 5,741 nodes in **both** engines; the second `go depth 6` gives reference **326** vs KnightByte **3,351**, and `go depth 7` after that warm-up gives **4,311** vs **9,999**. The reference also reports `hashfull 10`, KnightByte `0` at that point. The divergence is deterministic and confined to states with entries from an earlier search.
+  - Table-size probe (same sequence at `Hash` 1, 16 and 64 MB): each engine's warm counts are identical across all three sizes (reference 326 / 4,311; KnightByte 3,351 / 9,999), so capacity and entry count are **not** the cause.
+  - Rejected hypothesis (2026-11-18): removing `TranspositionTable::new_generation()` from `Searcher::search()` moved the numbers (3,351 → 164 and 9,999 → 7,367) but did not match the reference. The predecessor source then showed that its main thread calls `_tt.NewSearch()` and increments `_currentAge` at the start of **every** `IterativeDeepening` (`Search.IterativeDeepening.cs:43-48`, `TranspositionTable.cs:274`), i.e. the generation bump is correct. The change was reverted; fmt/clippy, all 264 tests, release build and every bench delta (+0) are green again.
+  - Status: **fixed (2026-11-18)**, via the per-node ledger method of `docs/SEARCH-PARITY.md` §8.6. The ledger diff of the repeated `go depth 6` localized the first divergent node, and the probe dump at that node showed the cause. Two state-carryover differences, both invisible to cold searches:
+    1. **TT same-key replacement evicted deeper entries across searches.** KnightByte stamped entries with its advancing generation, so each new search's shallow root entry overwrote the previous search's deep Exact entry (root probe in the warm search: reference `depth 6 Exact` vs KnightByte `depth 1`). The predecessor stamps every entry with the same per-search age — its UCI layer builds a fresh `SearchEngine` for each `go` whose `_currentAge` resets to 1 → 2 (`EngineOrchestrator.cs:1261`, `Search.Options.cs:122`) — so its same-key rule (`TranspositionTable.cs:456`) reduces to a pure depth comparison across searches. Fix: `choose_slot` (`src/search/tt.rs`) refreshes a same-key slot only when `depth >= stored depth`; the generation clause is gone.
+    2. **History and correction history survived the search.** The predecessor builds a fresh `ThreadData` for every `go` (`EngineOrchestrator.cs:1231`), so its learned tables start cold each search; KnightByte persisted them (the step-8 persistent-pool design). Fix: `Searcher::search()` clears history and correction history next to the killers (`src/search/searcher.rs`); the persistent worker pool keeps its per-helper searchers, only their learned tables reset per search.
+  - Verification: the per-node ledger now shows cold 5,741 = 5,741 and warm 326 = 326 with **zero ledger divergence**; the re-captured `go_limiter_depth.txt` transcript reproduces every warm node count exactly (213 / 439 / 1,210 / 4,001 / 11,999 / 34,979 / 169) — the remaining transcript differences are the documented PV-tail reporting (step 3), the timing values and the start-up banner. All 264 tests pass, fmt/clippy clean, release build clean and every bench delta at +0. Step 13 / CCRL game safety is unblocked.
+
 - **Predecessor bug 150 (found by the Phase 5 step 0 capture, 2026-11-18; fixed same day):** `setoption name Hash value 999999` — any spin value above the declared maximum — killed the reference with native heap corruption (`TTable.Resize`, delayed manifestation). Fixed in the predecessor at commit `acaff1f` (option-layer clamp `ClampHashSize` + validation in `TTable.Resize`/constructor; regression tests `PredecessorBug150Tests`, full suite 745/745, bench identity unchanged). KnightByte is **not** affected: spin values are clamped into range at the option layer (`src/search/options.rs`) and the Hash resize is clamped to 1..1024 (`src/search/searcher.rs`), verified 2026-11-18. All oracle transcripts were re-captured against the fixed build.
 - No open KnightByte defects. B33-B37 were fixed at the Phase 1 restart (`07b401c`,
   2026-11-18): the UCI position handling follows the predecessor's decided

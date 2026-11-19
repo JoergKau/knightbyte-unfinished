@@ -188,6 +188,12 @@ pub struct Searcher {
     /// stderr. Enabled per process with `KNIGHTBYTE_TRACE`; it is the
     /// parity-hunt dump, never active in normal operation.
     pub(crate) trace: bool,
+    /// Incremental NNUE accumulator pair per search ply: the pair at `ply`
+    /// holds the white/black accumulators of the position searched there.
+    /// Pushed from the parent pair for every made move; a perspective whose
+    /// own king moved falls back to a full refresh (the feature rows depend
+    /// on the own king's region and mirror).
+    accumulator_stack: Vec<[Vec<i16>; 2]>,
 }
 
 impl Searcher {
@@ -227,7 +233,17 @@ impl Searcher {
             currmove_reported: false,
             completed_depth: 0,
             trace: std::env::var_os("KNIGHTBYTE_TRACE").is_some(),
+            accumulator_stack: Self::accumulator_stack(),
         }
+    }
+
+    /// Allocates the per-ply accumulator pairs over the embedded network's
+    /// first-layer width.
+    fn accumulator_stack() -> Vec<[Vec<i16>; 2]> {
+        let l1 = crate::eval::nnue::embedded_net().l1();
+        (0..=MAX_PLY + 1)
+            .map(|_| [vec![0_i16; l1], vec![0_i16; l1]])
+            .collect()
     }
 
     /// Forgets every position-dependent table.
@@ -385,8 +401,17 @@ impl Searcher {
         self.currmove_reported = false;
         self.pv.reset();
         self.killers.clear();
+        // The learned tables start cold every search, as in the predecessor:
+        // its UCI layer builds a fresh per-thread state object for each `go`,
+        // so history and correction history never survive a search (B41).
+        // Only the transposition table persists.
+        self.history.clear();
+        self.correction.clear();
         self.reset_stacks();
         *self.nodes_per_move = [0; 64 * 64];
+        // The predecessor's main thread advances the TT generation at the
+        // start of every iterative-deepening search (NewSearch + _currentAge).
+        // Keep that: the age blending in the replacement policy depends on it.
         self.tables.tt.new_generation();
 
         let root_moves = crate::board::movegen::legal(position);
@@ -441,6 +466,9 @@ impl Searcher {
             pv: Vec::new(),
         };
         let mut last_score = 0;
+        // The root accumulator pair is refreshed once per search: every
+        // deeper ply pushes its pair incrementally from the parent's.
+        self.refresh_accumulators(position, 0);
 
         for depth in 1..=max_depth {
             // The stop flag is honoured before each iteration too: a `stop`
@@ -589,24 +617,91 @@ impl Searcher {
         }
     }
 
-    /// Returns the static evaluation of `position`, optionally via the cache.
+    /// Returns the static evaluation of `position` from the accumulator pair
+    /// at `ply`, optionally via the cache.
     ///
-    /// The evaluation reuses this searcher's [`Evaluator`] (its accumulators
-    /// are allocated once per searcher). The earlier path called the
-    /// `evaluate_position` convenience function, which allocates two
-    /// accumulator vectors per call — pure waste at one call per node.
-    pub(crate) fn evaluate(&mut self, position: &Position) -> i32 {
+    /// The pair at `ply` must be current for `position` (pushed by the parent
+    /// node or refreshed at the search root). The evaluation reuses this
+    /// searcher's [`Evaluator`] for the output head.
+    pub(crate) fn evaluate_stacked(&mut self, position: &Position, ply: usize) -> i32 {
         let key = position.key();
         if self.params.use_eval_cache
             && let Some(cached) = self.tables.eval_cache.probe(key)
         {
             return i32::from(cached);
         }
-        let value = self.evaluator.evaluate(position);
+        let value = crate::eval::nnue::evaluate::evaluate_pair(
+            self.evaluator.net(),
+            position.side(),
+            &self.accumulator_stack[ply],
+        );
         self.tables
             .eval_cache
             .store(key, value.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
         value
+    }
+
+    /// Full refresh of the accumulator pair at `ply` from `position`.
+    ///
+    /// Used at the search root and whenever a perspective's own king moved.
+    pub(crate) fn refresh_accumulators(&mut self, position: &Position, ply: usize) {
+        let net = self.evaluator.net();
+        let pair = &mut self.accumulator_stack[ply];
+        crate::eval::nnue::evaluate::refresh_into(net, position, WHITE, &mut pair[0]);
+        crate::eval::nnue::evaluate::refresh_into(net, position, BLACK, &mut pair[1]);
+    }
+
+    /// Copies the validated pair of `ply` into `ply + 1` (the null-move child:
+    /// same placement, only the side to move flips).
+    pub(crate) fn copy_accumulators(&mut self, ply: usize) {
+        let (head, tail) = self.accumulator_stack.split_at_mut(ply + 1);
+        tail[0].clone_from(&head[ply]);
+    }
+
+    /// Computes the accumulator pair at `ply + 1` by applying `mv` to the
+    /// validated pair at `ply`.
+    ///
+    /// A perspective whose own king moved falls back to a full refresh of
+    /// `child`: its region and mirror may have changed, which invalidates
+    /// every row. All other perspectives keep their frame (the parent's), so
+    /// at most four rows change: the moved piece, the captured piece (its own
+    /// square for en passant), the promotion piece and the castling rook.
+    /// The delta application lives in [`crate::eval::nnue::evaluate`], next
+    /// to the row kernels it calls.
+    pub(crate) fn push_accumulators(
+        &mut self,
+        parent: &Position,
+        child: &Position,
+        mv: Move,
+        ply: usize,
+    ) {
+        let net = self.evaluator.net();
+        let (parent_stack, child_stack) = self.accumulator_stack.split_at_mut(ply + 1);
+        crate::eval::nnue::evaluate::push_accumulators(
+            net,
+            parent,
+            child,
+            mv,
+            &parent_stack[ply],
+            &mut child_stack[0],
+        );
+    }
+
+    /// Evaluates one child position through the incremental path.
+    ///
+    /// Diagnostic hook for the release microbench: it pushes the child
+    /// accumulator pair from the pair at ply 0 and then runs the output head.
+    /// The pair at ply 0 must already describe `position` (a completed search
+    /// leaves it ready). Not used by the search itself.
+    #[doc(hidden)]
+    pub fn bench_incremental_eval(&mut self, position: &Position, mv: Move) -> i32 {
+        let child = position.make_move(mv);
+        self.push_accumulators(position, &child, mv, 0);
+        crate::eval::nnue::evaluate::evaluate_pair(
+            self.evaluator.net(),
+            child.side(),
+            &self.accumulator_stack[1],
+        )
     }
 
     /// Installs a fresh, cleared stop flag and returns its handle.
@@ -1083,6 +1178,181 @@ mod tests {
     use crate::board::position::Position;
     use crate::types::r#move::{Move, flags};
 
+    /// A tiny deterministic generator for the accumulator walk.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn below(&mut self, n: u64) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) % n
+        }
+    }
+
+    /// Plays `moves` from the start position with a fresh searcher, pushing
+    /// the accumulator incrementally and comparing it against the full
+    /// refresh after every move. Returns the castle and en-passant counts.
+    fn assert_incremental_walk(moves: &[&str]) -> (u32, u32) {
+        let mut searcher = Searcher::new(16);
+        let mut position = Position::from_fen(STARTPOS_FEN).expect("startpos");
+        searcher.refresh_accumulators(&position, 0);
+        let mut castles = 0;
+        let mut en_passants = 0;
+        for (ply, uci) in moves.iter().enumerate() {
+            let legal_moves = legal(&position);
+            let mv = *legal_moves
+                .as_slice()
+                .iter()
+                .find(|candidate| candidate.to_uci() == *uci)
+                .unwrap_or_else(|| panic!("move {uci} is not legal at ply {ply}"));
+            let next = position.make_move(mv);
+            searcher.push_accumulators(&position, &next, mv, ply);
+            let incremental = crate::eval::nnue::evaluate::evaluate_pair(
+                searcher.evaluator.net(),
+                next.side(),
+                &searcher.accumulator_stack[ply + 1],
+            );
+            let full = searcher.evaluator.evaluate(&next);
+            assert_eq!(
+                incremental, full,
+                "ply {ply} after {uci}: incremental eval diverges"
+            );
+            if mv.flag() == crate::types::r#move::flags::CASTLE {
+                castles += 1;
+            }
+            if mv.flag() == crate::types::r#move::flags::EN_PASSANT {
+                en_passants += 1;
+            }
+            position = next;
+        }
+        (castles, en_passants)
+    }
+
+    /// The incremental accumulator must reproduce the full refresh
+    /// bit-exactly at every position of every walk. The deterministic
+    /// segments cover the en-passant capture and castling for both sides; the
+    /// seeded random walks add broad coverage (the promotion delta has its
+    /// own test below).
+    #[test]
+    fn the_incremental_accumulator_matches_the_full_refresh() {
+        // En passant: the white e-pawn captures the d5 pawn behind it.
+        let (castles, en_passants) =
+            assert_incremental_walk(&["e2e4", "a7a6", "e4e5", "d7d5", "e5d6"]);
+        assert_eq!(en_passants, 1, "the en-passant capture must be walked");
+        assert_eq!(castles, 0);
+
+        // Both sides castle: the rook delta runs for white and for black.
+        let (castles, en_passants) = assert_incremental_walk(&[
+            "e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "e1g1", "f8c5", "d2d3", "e8g8",
+        ]);
+        assert_eq!(castles, 2, "both sides must have castled");
+        assert_eq!(en_passants, 0);
+
+        // Seeded random walks: 8 x 80 plies over the start position. The
+        // identity check at every pushed position is the point; special move
+        // deltas are pinned by the deterministic segments above.
+        for seed in 1..=8u64 {
+            let mut rng = Lcg(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let mut searcher = Searcher::new(16);
+            let mut position = Position::from_fen(STARTPOS_FEN).expect("startpos");
+            searcher.refresh_accumulators(&position, 0);
+            for ply in 0..80usize {
+                let moves = legal(&position);
+                if moves.is_empty() {
+                    break;
+                }
+                let mv = moves.as_slice()[rng.below(moves.len() as u64) as usize];
+                let next = position.make_move(mv);
+                searcher.push_accumulators(&position, &next, mv, ply);
+                let incremental = crate::eval::nnue::evaluate::evaluate_pair(
+                    searcher.evaluator.net(),
+                    next.side(),
+                    &searcher.accumulator_stack[ply + 1],
+                );
+                let full = searcher.evaluator.evaluate(&next);
+                assert_eq!(
+                    incremental,
+                    full,
+                    "seed {seed} ply {ply} after {}: incremental eval diverges",
+                    mv.to_uci()
+                );
+                position = next;
+            }
+        }
+        // Castle coverage comes from the deterministic segment above; random
+        // games rarely castle, so no coverage assert here.
+    }
+
+    /// The promotion delta matches the full refresh. The FEN is verified
+    /// against the external verifier at test time (project rule): the white
+    /// b-pawn promotes on the empty b8 square.
+    #[test]
+    fn the_promotion_delta_matches_the_full_refresh() {
+        // 6k1/1P6/8/8/8/8/8/6K1 w - - 0 1
+        const PROMO_FEN: &str = "6k1/1P6/8/8/8/8/5PPP/6K1 w - - 0 1";
+        verify_fen_externally(PROMO_FEN);
+
+        let mut searcher = Searcher::new(16);
+        let position = Position::from_fen(PROMO_FEN).expect("verified FEN");
+        searcher.refresh_accumulators(&position, 0);
+        let moves = legal(&position);
+        let mv = *moves
+            .as_slice()
+            .iter()
+            .find(|mv| mv.to_uci() == "b7b8q")
+            .expect("the promotion must be legal");
+        let child = position.make_move(mv);
+        searcher.push_accumulators(&position, &child, mv, 0);
+        let incremental = crate::eval::nnue::evaluate::evaluate_pair(
+            searcher.evaluator.net(),
+            child.side(),
+            &searcher.accumulator_stack[1],
+        );
+        let full = searcher.evaluator.evaluate(&child);
+        assert_eq!(
+            incremental, full,
+            "promotion delta diverges: incremental {incremental}, full {full}"
+        );
+    }
+
+    /// Verifies one FEN through the configured external verifier, so the test
+    /// FENs of this module obey the project rule without the integration-test
+    /// helper module.
+    fn verify_fen_externally(fen: &str) {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+
+        let verifier = std::env::var_os("KNIGHTBYTE_FEN_VERIFIER")
+            .expect("set KNIGHTBYTE_FEN_VERIFIER before running the tests");
+        let mut child = Command::new(verifier)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("cannot start the verifier");
+        child
+            .stdin
+            .as_mut()
+            .expect("verifier stdin")
+            .write_all(
+                format!("uci\nisready\nposition fen {fen}\nd\ngo depth 1\nquit\n").as_bytes(),
+            )
+            .expect("write verifier commands");
+        let stdout = child.wait_with_output().expect("wait for verifier").stdout;
+        let stdout = String::from_utf8_lossy(&stdout).into_owned();
+        assert!(!stdout.contains("Illegal"), "verifier rejected {fen}");
+        assert!(stdout.contains("bestmove"), "verifier produced no bestmove");
+        let reported = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("Fen: "))
+            .expect("verifier did not report a FEN");
+        let input: Vec<&str> = fen.split_whitespace().take(4).collect();
+        let reported: Vec<&str> = reported.split_whitespace().take(4).collect();
+        assert_eq!(input, reported, "FEN did not round-trip: {fen}");
+    }
+
     #[test]
     fn the_eval_cache_lever_gates_the_cache_consult() {
         // Step 11: `UseEvalCache` is a pure memoisation — identical values,
@@ -1095,16 +1365,17 @@ mod tests {
         let position = Position::from_fen(STARTPOS_FEN).expect("the start FEN must parse");
         let key = position.key();
         searcher.tables.eval_cache.store(key, 12_345);
+        searcher.refresh_accumulators(&position, 0);
 
         searcher.params_mut().use_eval_cache = true;
         assert_eq!(
-            searcher.evaluate(&position),
+            searcher.evaluate_stacked(&position, 0),
             12_345,
             "with the lever on the cache must be consulted"
         );
         searcher.params_mut().use_eval_cache = false;
         assert_ne!(
-            searcher.evaluate(&position),
+            searcher.evaluate_stacked(&position, 0),
             12_345,
             "with the lever off the cache must be ignored"
         );

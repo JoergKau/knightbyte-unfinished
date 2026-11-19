@@ -40,12 +40,15 @@ pub fn pseudo_legal(position: &Position) -> MoveList {
 
 /// Generates all legal moves for the side to move.
 pub fn legal(position: &Position) -> MoveList {
+    crate::node_stat!(LegalMoveGens);
     let pseudo = pseudo_legal(position);
     let mut moves = MoveList::new();
     for &mv in pseudo.as_slice() {
         let next = position.make_move(mv);
         if !next.in_check(position.side()) {
             moves.push(mv);
+        } else {
+            crate::node_stat!(IllegalMoves);
         }
     }
     moves

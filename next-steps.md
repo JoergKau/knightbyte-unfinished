@@ -3,8 +3,102 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-18 (Phase 5 steps 0–10 done — step 10 recorded ADR-0007: the synchronous writer stays, and the reference's single `info currmove` line is emitted exactly as the transcripts show it)  
+**Last updated:** 2026-11-19 (P0 complete: the measurement rig is reproducible; same-session depth-20 baseline 669,773 vs 1,064,034 NPS (1.59x, identical tree); the legal filter is 89.8 % of all makes and ~45-55 % of the gap; B42 found; P1 one-pass move path is next)
 **Rule:** update this document at the end of every working session.
+
+## NEXT SESSION (top priority): P1 - the one-pass move path
+
+**P0 is complete (2026-11-19).** The reproducible same-session baseline is:
+KnightByte **669,773 NPS** at `perf_test.py --depth 20` and **739,702 NPS** at
+5 s; the predecessor **1,064,034** and **1,096,913** on the same host in the
+same session. At depth 20 both engines visit the same **18,662,358 nodes**
+(identical tree), so the **1.59x** gap is pure per-node cost: 1.49 us vs
+0.94 us. The shallow bench-12 protocol is not the performance gate - there
+KnightByte is already ~6 % faster (811,935 vs 766,904 median) and it hides the
+deep-search cost.
+
+The counters name the dominant cost: **89.8 % of all make_move calls are the
+`legal()` filter** (97.7 M filter makes vs 11.1 M search makes in `bench 20`).
+The filter is ~17.5 % of the run and ~45-55 % of the same-session gap. **P1
+replaces the full legal filter with the predecessor's one-pass move path**:
+iterate the pseudo-legal list, make the move once, reject illegal moves before
+any side effect, and keep every pruning condition and counter identical. The
+gate is the four bench pins and every per-depth delta +0.
+
+**P1.0 (first, behaviour-neutral):** fix **B42** - the eval cache stores every
+evaluation although `UseEvalCache` is off and the cache is never probed
+(8.33 M wasted stores per `bench 20`). Gate the store with the lever.
+
+**After P1:** re-run `perf_test.py --depth 20` and the node-stats composition.
+Expected ~0.80-0.85 MNPS at depth 20 (from 0.67), closing roughly half of the
+remaining gap. Then P2 (hardware PEXT), P3 (board), P4 (eval/SEE), P5 (TT),
+P6 (PGO), P7 (scaling), in the order of the performance plan.
+
+**The goal line:** parity with the predecessor in the same session and protocol
+(1.06 MNPS at depth 20) is the first milestone. The project target (1.5x the
+predecessor, >=2.43 MNPS) is the long-term goal; the recorded 1,569 MNPS
+predecessor number came from a different session (today's same-session
+predecessor is 1,064 MNPS at depth 20), so cross-session ratios are no longer
+used and the target is re-evaluated after P6 against a same-session baseline.
+
+**Additional blueprints (added to `project-rules.md` by the project owner,
+2026-11-19):** two reference engines live in `C:\dev\c#-chess-engines`
+(`cinder`, `coda`) and are explicitly allowed as blueprints for improvement
+ideas — use them alongside the predecessor source for the accumulator, the
+head and the attack-table work. They are reference material only (the
+copying rule of `migration-plan.md` §2 still applies: read them for
+architecture, write our own code).
+
+**Quick-and-dirty Cinder check (2026-11-19, this host):** Cinder ships
+prebuilt `avx2` (`x86-64-v3`, tuned znver3) and `avx512` (`x86-64-v4`,
+tuned znver4, plus GFNI/VBMI/VNNI/VPOPCNTQ) binaries. Depth-20 startpos,
+deterministic per build: AVX2 = 990,208 nodes in ~1.4–1.9 s, AVX-512 =
+**1,113,088 nodes in ~1.4–1.7 s** — the AVX-512 build searched a **12 %
+larger tree in slightly less time** (per node ~17 % faster). Caveat found on
+re-check: the two builds' NNUE heads round differently (their trees differ),
+so the comparison mixes evaluation differences with speed — it is not a pure
+ISA read.
+
+**Quick-and-dirty Hobbes check (2026-11-19, this host):** Hobbes 4.0's two
+prebuilt binaries search the **identical tree** (579,424 nodes, depth 20,
+deterministic — bit-identical eval across their builds) and the AVX-512
+build is only **~2–4 % faster** (787 K vs 818 K external). This is the clean
+ISA read on Zen 4: the double-pumped 512-bit datapath adds a few percent,
+nothing more. Together the two checks say: an AVX-512 build can gain ~20 %
+on Zen 4 when it also changes the evaluation rounding (Cinder), but a
+bit-identical NNUE gains only a few percent (Hobbes).
+
+**Cinder source reconnaissance (2026-11-19):** Cinder 0.6.1 explains its own
+avx512-vs-avx2 gap of ~20 % on this host — but also the limit of what we can
+copy. Its NNUE is architecturally different from our fixed v5 net:
+
+- **Width-generic `std::simd`** (nightly) with a compile-time `WIDTH` of 64
+  bytes on the avx512 build: the whole NNUE — transformer, head, everything —
+  processes 512-bit vectors, and the remaining scalar loops auto-vectorize
+  because the crate is compiled for `x86-64-v4` with znver4 tuning.
+- **Mixed quantization**: dense feature rows in `i16`, sparse feature sets in
+  **`i8`** (half the memory traffic), with AVX-512 VNNI `dpbusd` for the
+  `i8 × i8 → i32` updates.
+- **Per-side king-bucket accumulator caches with attack-diff updates**: the
+  cached placement and attack masks are diffed incrementally, so even a king
+  move within the same bucket needs no full refresh.
+- An **f32 network head** (no `i16`-quantized integer head at all).
+
+Consequences for KnightByte: (a) the mixed quantization and the f32 head
+belong to Cinder's own net format — our v5 net is fixed by project rule, so
+these are **not portable**; (b) the attack-diff accumulator scheme is a real
+technique worth adopting later (big surgery, own step); (c) building
+KnightByte with AVX-512 target features so LLVM auto-vectorizes the
+remaining scalar loops is a build-config change — but the measured
+whole-binary `znver4` tuning showed no gain, so the expectation is low.
+**The main migration gap is elsewhere:** the predecessor evaluates the same
+positions with the same incremental design at 1.617 MNPS — 0.62 µs per node
+against our 1.17 µs. With the evaluation now incremental and cheap, the
+remaining cost sits in movegen, the TT, make-move and the picker: that is
+what the line-by-line comparison of `MoveGenerator.cs`,
+`TranspositionTable.cs` and `ThreadData.cs` must hunt down (lead 1 below).
+
+**Status:** the migration-plan Phase 7 section records the same directive.
 
 ## 0. Current state in one paragraph
 
@@ -75,10 +169,16 @@ capture found **predecessor
 bug 150** (`setoption Hash` above the declared maximum crashed the reference
 via an overflowing `TTable.Resize` allocation); it was fixed in the
 predecessor the same day (commit `acaff1f`, full suite 745/745). KnightByte
-was not affected (spin clamping). Next: Phase 5 step 12 (UCI transcript
-tests) — step 11 was dropped (see §2.3).
+was not affected (spin clamping). **Step 12** replayed all eleven step-0
+transcripts plus `bench` (`tests/uci_transcripts.rs`): line order and shape,
+public option set, bestmove count and legality, cold fixed-depth node pins.
+It found the perft `Time`/`NPS` gap (fixed) and the warm-TT node divergence
+**B41** (found and fixed with the per-node ledger: the TT same-key rule is now
+depth-only, and history/correction history reset every search). Step 11 was
+dropped (see §2.3). Step 13 (match gates) is tracked in `migration-plan.md`,
+where the project owner recorded 3 x 100 fastchess games.
 
-Verification status on the last run: all 252 tests pass locally on Windows
+Verification status on the last run: all 264 tests pass locally on Windows
 with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
 fmt/clippy clean; all four bench pins exact and `capture_bench.py compare`
 shows every per-position delta at +0. Node identity is verified on this
@@ -227,8 +327,9 @@ command stop and join a running search first. Step 8 (2026-11-18) added the
 Lazy SMP pool: `setoption Threads` resizes it, helpers persist with their
 own search state, and the main thread's result is the answer.
 
-Next action (Phase 5): step 9 stress gates (1, 2, 4, 8 threads, 500 random
-cycles), then step 10-13.
+Next action (Phase 5): steps 9 and 10 are done (stress gate, ADR-0007) and step
+12 (transcript replay) is done; step 13 (match gates) is tracked in
+`migration-plan.md`.
 
 ### 2.5 Inert public options
 
@@ -236,27 +337,57 @@ cycles), then step 10-13.
 `Syzygy50MoveRule`, `EvalFile`, `Contempt` are advertised and accepted but do
 nothing. This is documented on purpose; do not report them as working.
 
-### 2.6 Performance (Phase 7) — measured decomposition, attack order fixed
+### 2.6 Performance (Phase 7) — decomposition after the incremental accumulator and the SIMD kernels
 
-Measured on this host (release, `tests/perf_microbench.rs`, Ryzen 7 260):
+Measured on this host (release, `tests/perf_microbench.rs`, Ryzen 7 260; the
+microbench now measures the real search rate per bench position instead of
+the stale hardcoded 370 K):
 
-| Building block | Rate | Share of the 2.7 µs node budget |
+| Building block | Rate | Per call |
 | :--- | ---: | ---: |
-| NNUE evaluation (full refresh) | ~548K/s (1.8 µs) | **~67 %** |
-| Legal move generation | ~1.5M/s | ~5 % |
-| Copy-make (one move) | ~1.5M/s | ~5 % |
-| Search (whole node) | 370K nodes/s | — |
+| NNUE evaluation (full refresh, SIMD) | ~1.16M/s | 0.86 µs |
+| Legal move generation | ~1.51M/s | 0.66 µs |
+| Copy-make (one move) | ~1.49M/s | 0.67 µs |
+| Search (bench 12, cleared tables) | ~856K nodes/s | 1.17 µs/node |
 
-The evaluation dominates, and inside it the per-node allocation waste
-(B40, fixed: the searcher now reuses its `Evaluator`). The Phase 7 attack
-order follows the measurement and the performance document's bottom line:
+The search no longer pays the full refresh per node (the incremental
+accumulator pushes deltas), so the full-refresh rate is only the **upper
+bound** of the in-search evaluation cost — the microbench prints it as such.
+Where the remaining 1.17 µs/node actually goes (TT, picker, the incremental
+push, the output head) needs a real profile: Phase 7's first work item
+("identify the top three costs. Do not guess.") is still open.
+
+The Phase 7 attack order, with items 1–3 done:
 
 1. ~~Wire the reusable `Evaluator`~~ (B40, done — pins unchanged).
-2. **Incremental accumulator** (the biggest item): update ~4 feature rows
-   per move instead of a full 2 × 512-wide refresh per node.
-3. **SIMD kernels** for refresh + output (AVX-512 VNNI on this host; the
-   ADR-0001 ladder `v2 → v3 → v3-vnni → v4-vnni`).
-4. **Slider attacks** (PEXT — fast on Zen 3+ — vs magics, benchmarked).
+2. ~~**Incremental accumulator**~~ — **done (2026-11-19)**: the searcher
+   pushes a per-ply accumulator pair and only the changed weight rows are
+   applied (own-king moves fall back to a full refresh); bit-exact against
+   the full refresh on random walks and the deterministic segments, bench
+   pins unchanged. Measured: bench 12 ~0.37 → **0.556 MNPS (+50 %)**,
+   `go nodes 2000000` 386 K → 533 K at 1 T and 549 K → 923 K at 2 T.
+3. ~~**SIMD kernels**~~ — **done for x86-64 (2026-11-19)**: SSE4.1 (128-bit)
+   and AVX2 (256-bit) kernels for the accumulator row arithmetic and the
+   SCReLU head, dispatched once per process with the ADR-0001
+   `KNIGHTBYTE_FORCE_ISA` override; the 512-bit AVX-512 kernels for the
+   `v4-vnni` rung landed the same day and measure identically to AVX2 on the
+   Zen 4 host (double-pumped 512-bit datapath — the real gain belongs to
+   Zen 5 / Intel 512-bit-datapath hosts). The VNNI rungs map to the AVX2
+   kernels (the dot-product instruction cannot express the per-element
+   square-shift semantics without changing them) and NEON lands with the
+   macOS phase. Measured: bench 12 0.556 → **0.863 MNPS**, `go nodes 2000000`
+   1 T 533 K → **856 K**. The 6–8 T degradation remains the next profile target.
+4. ~~**Slider attacks**~~ — **done (2026-11-19)**: BMI2 PEXT tables
+   (`src/board/attacks.rs`), filled from the ray-walking implementation
+   (bit-identical by construction), selected once per process (BMI2 present,
+   not a slow-BMI2 CPU, `KNIGHTBYTE_FORCE_PEXT`/`KNIGHTBYTE_DISABLE_PEXT`
+   overrides). Verified against the ray walk for **every relevant subset of
+   every square**. Honest result: no measurable search-level gain on this
+   host (bench 12: 850K with PEXT vs 869K without — within noise); the
+   predecessor's NPS advantage does not come from the slider attacks alone.
+   The deadlock the first version introduced (the table fill re-entered the
+   `pext_tables()` initialisation through the public dispatchers) is fixed —
+   the fill uses the ray walks directly.
 5. **`target-cpu` + PGO builds** (the ladder's per-variant artifacts).
 
 Gate for every step: the bench pins stay exact (15,528 / 456,308 /
@@ -264,6 +395,33 @@ Gate for every step: the bench pins stay exact (15,528 / 456,308 /
 step. Target: at least PawnForgeCS's ~1.4 MNPS single-threaded on this
 host (the plan's goal is higher: ≥1.5× the reference, ≥2.48 MNPS on the M4
 baseline host).
+
+**Step-13 session evidence (2026-11-18), entry item for the phase:** the
+thread scaling caps at ~1 M aggregate NPS and *drops* beyond two threads
+(external wall clock on `go nodes 2000000`: 1 T = 386 K, 2 T = 549 K,
+4 T = 701 K, 6 T = 478 K, 8 T = 560 K), while the predecessor scales 5.99×
+on the same 8-core host. Diagnostics: an 8-thread search keeps 7.98
+core-equivalents fully busy (nothing blocks), the private-table variant
+(no TT sharing) scales the same way, and — decisive — **8 concurrent
+single-threaded processes also cap the host at ~390 K nodes/s aggregate**
+(387 K / 381 K / 389 K / 390 K for 1 / 2 / 4 / 8 processes). The bottleneck
+is therefore a shared hardware resource saturated by the per-node work
+itself — the full 2 × 512-wide accumulator refresh dominates the node
+budget — and **not** the Lazy SMP pool, the TT sharing or the node-counter
+cadence. Consequence: the incremental accumulator and the SIMD kernels are
+both the single-thread lever *and* the thread-scaling fix; profile
+(ETW/samply) in front of every change. Match evidence from the same session
+(KnightByte multi-thread vs the single-threaded predecessor, 100 games
+each): 25.0 % (1 T), 17.0 % (2 T), 25.5 % (4 T) — consistent with the NPS
+deficit, and no crash, illegal move or time loss in any game
+(`fastchess --compliance` passes for both engines). Phase 6 was deferred by
+the project owner on the same day (deferral, not cancellation).
+
+**Update after the SIMD kernels (2026-11-19):** the same
+`go nodes 2000000` probe now reads 1 T = 856 K and 2 T = 1,293 K (from
+386 K / 549 K at the start of the phase) — the per-node traffic shrank and
+the cap moved up. The 6–8 T degradation remains (8 T now reads *below* 1 T)
+and is the top profile target of the next session.
 
 ### 2.7 CI: macOS hosted runners are starved
 
@@ -324,7 +482,12 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
 
 ## 3. Recommended next steps, in order
 
-**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–10 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag, `go ponder`/`ponderhit`, `go mate`/`searchmoves` (every `go` limiter implemented), the shared-tables refactor with the parallel-zeroing bounded clear (B38 fixed), the persistent Lazy SMP pool behind `Threads`, the 500-cycle multi-thread stress gate (B39 found and fixed), and the output decision ADR-0007 with the `info currmove` line. **Step 11 was dropped by decision of the project owner** (no node-count lever test; strength measurement of all levers happens after the migration as a dedicated SPRT tuning campaign). **Next when we continue: step 12 (UCI transcript tests).** Details in `migration-plan.md`, Phase 5.
+**State (2026-11-18, end of session):** the predecessor bugs are fixed (143–149 at `bffe98a`/`f274b39`, 150 at `acaff1f`) and the migration has resumed. Phase 5 steps 0–10 are complete: oracle transcripts, the command surface and parser, the option surface with full `setoption` validation, the complete `info` lines, the search thread with the shared stop flag, `go ponder`/`ponderhit`, `go mate`/`searchmoves` (every `go` limiter implemented), the shared-tables refactor with the parallel-zeroing bounded clear (B38 fixed), the persistent Lazy SMP pool behind `Threads`, the 500-cycle multi-thread stress gate (B39 found and fixed), and the output decision ADR-0007 with the `info currmove` line. **Step 11 was dropped by decision of the project owner** (no node-count lever test; strength measurement of all levers happens after the migration as a dedicated SPRT tuning campaign). **Step 12 (UCI transcript tests) is done:** the replay suite checks all eleven
+captures plus `bench`, found the missing perft `Time`/`NPS` lines (fixed) and
+the warm-TT node divergence **B41** (found and fixed with the per-node ledger:
+the TT same-key rule is now depth-only, and history/correction history reset
+every search — details in `docs-new/new-bugs.md`). **Next when we continue:
+step 13 (match gates).** Details in `migration-plan.md`, Phase 5.
 
 ### 3.1 Phase 5 — UCI robustness and threading (in progress, steps 0–10 done)
 
@@ -385,16 +548,93 @@ submission, run real games at CCRL's time controls and read the `Timeouts` and
   <move> currmovenumber 1 nodes 1` is emitted once per search, when
   iteration 1's first root move begins, exactly as the step-0 transcripts
   show it.
-- Steps 11–13: step 11 dropped (the lever strength measurement is a dedicated SPRT campaign after the migration); then UCI transcript tests
-  against the step-0 captures, match gates (1,000 games vs the reference).
+- ~~Step 11: lever independence~~ — dropped (the lever strength measurement
+  is a dedicated SPRT campaign after the migration).
+- ~~Step 12: UCI transcript tests~~ — done (2026-11-18): `tests/uci_transcripts.rs`
+  replays all 11 step-0 captures plus `bench 6`; it checks line order/shape,
+  the public option set, one `bestmove` per search with legality, cold
+  fixed-depth node pins and the perft output. The perft `Time`/`NPS` gap was
+  fixed, and the warm-TT node divergence **B41** was found and fixed with the
+  per-node ledger (TT same-key rule now depth-only; history/correction reset
+  every search — the re-captured warm transcript node counts match exactly).
+  264 tests pass, fmt/clippy clean, bench deltas all +0.
+- Step 13: match gates — see `migration-plan.md` step 13 (the project owner
+  recorded 3 x 100 fastchess games there: KnightByte scored 25.0 % at 1
+  thread, 17.0 % at 2 threads and 25.5 % at 4 threads against the
+  single-threaded predecessor; `fastchess --compliance` passes for both
+  engines, no crashes, illegal moves or time losses in any game). The G5
+  1,000-game cutechess gate is not re-run by step 12.
 
-### 3.2 Phase 7 — performance, then releases
+### 3.2 The performance plan: reach ≥1.617 MNPS (100 % of the predecessor)
 
-- Incremental NNUE accumulator, SIMD kernels (NEON/AVX2/VNNI), slider and
-  make/move optimizations; the 0.36 → ≥1.5 MNPS goal at the pinned node
-  counts.
-- Then Phase 8 (macOS/Linux/Windows artifacts) and Phase 6 (Syzygy/book) per
-  the plan order.
+**The baseline (Zen 4, same host, same protocol, identical node counts):**
+the predecessor runs 1,617 K nodes/s single-threaded (0.62 µs/node);
+KnightByte runs **863 K** (1.17 µs/node) after the incremental accumulator
+and the SIMD kernels. The gap to close is **1.87×**. The project goal is
+≥1.5× the predecessor = **≥2.43 MNPS**. Every step keeps the bench pins
+exact (node identity is the gate — this is speed work, never search
+behaviour) and is measured with the same protocol: bench 12 NPS and
+`perf_test.py --depth 20` on the `zen4` host, compared against
+`docs/baselines.md` §4.
+
+**P0 - Measurement rig (half a day).** Done 2026-11-19. Added the
+`release-with-debug` profile; fixed the microbench (legal, pseudo, make, SEE,
+incremental push+head and search measured separately); added the `node-stats`
+feature (19 counters printed by `bench`) and `tools/perf_bench.py` (five-run
+median, node-pin check, JSON). Same-session result: depth 20 669,773 vs
+1,064,034 NPS (1.59x, identical 18,662,358 nodes); bench 12 811,935 vs
+766,904. The `bench 20` counters found **B42** (eval cache stores while
+disabled) and show that 89.8 % of all makes are the legal filter.
+
+**P1 - One-pass move path (1-2 days, the decisive step).** Search and
+quiescence iterate the pseudo-legal list, make the move once, reject illegal
+moves before any side effect, and keep every pruning condition and counter
+identical. The forced-reply extension keeps its pseudo-count predicate.
+Predicted +30-60 %; gate: all four pins exact and every per-depth delta +0.
+
+**P2 - Hardware PEXT (half a day).** Call `_pext_u64` from the BMI2 branch;
+keep the software loop as the table-fill oracle and the non-BMI2 fallback;
+hoist the per-call `OnceLock`. Gate: the subset test, perft, pins.
+
+**P3 - Board (1 day).** Incremental occupancy (unconditional). Make/unmake
+and staged generation only if the post-P1 profile still justifies them.
+
+**P4 - Evaluation (1-2 days).** One contiguous 2 KB accumulator pair per
+ply; an exact `madd_epi16` head variant; hoist the kernel dispatch. Gate:
+the 15 vectors, the random-walk identity, the bench pins.
+
+**P4b - AArch64 NEON (2-3 days, M4 gate).** The Apple build still evaluates
+in scalar. Add the row and head kernels, run the same parity gates on the M4.
+This is required for the >= 2.48 MNPS M4 goal.
+
+**P5 - TT and caches (1 day).** Prefetch after every make and null move;
+advance the shared generation once per `go` in the main thread; keep the
+replacement policy exactly.
+
+**P6 - PGO and `target-cpu` (half a day to a day).** Per-host, per-variant
+profiles; `v3`/`znver4`/`apple-m1` rungs; `native` is local only. Gate: node
+counts and perft unchanged.
+
+**P7 - Thread scaling (2-3 days).** Re-run the N-process saturation test,
+then per-thread eval caches, single generation ownership, helper diversity
+and false-sharing checks. Gate: the stress walk and the match gates; the
+1 T pins stay exact.
+
+**The checkpoint rule:** measure after every step (bench 12 NPS,
+`perf_test.py --depth 20`, the predecessor comparison). If a step does not
+move the number, revert it and record why. When 1.617 MNPS is crossed, the
+goal rises to ≥1.5× the predecessor (≥2.43 MNPS) per the migration plan.
+
+**Phase 6 (Syzygy/book) stays deferred until the performance target is met**
+(the project-owner decision of 2026-11-18, reaffirmed: deferral, not
+cancellation) — the features gate the 100 %-compliance goal, not CCRL, and
+they land with their own parity steps after the performance work.
+
+**What is explicitly NOT portable (recorded so nobody re-tries):** Cinder's
+`i8` sparse feature rows and `f32` network layers belong to its own net
+format; the KnightByte v5 net is fixed by project rule. The predecessor's
+accumulator design (dirty-piece stack, stale flags, lazy refresh) is already
+ported (B41 and the incremental accumulator).
 
 ---
 

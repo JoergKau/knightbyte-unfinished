@@ -1,9 +1,15 @@
 //! Attack tables and sliding-attack generation.
 //!
-//! Phase 2 uses precomputed knight/king/pawn tables and direction-walking
-//! sliders. The tables are compile-time constants; the slider walk is easy to
-//! audit and is fast enough for correctness work. A later performance phase
-//! can replace it with magics or PEXT without changing the board API.
+//! Knight/king/pawn attacks are precomputed tables. Slider attacks use BMI2
+//! PEXT tables on hosts with fast BMI2 (Intel Haswell+, AMD Zen 3+), falling
+//! back to the direction-walking rays on hosts without BMI2 or with microcoded
+//! `pext` (Zen 1/2, Excavator) — selected once per process, with
+//! `KNIGHTBYTE_FORCE_PEXT=1` and `KNIGHTBYTE_DISABLE_PEXT=1` as A/B overrides.
+//!
+//! The PEXT tables are **filled from the ray-walking implementation**, so both
+//! backends produce bit-identical attack sets by construction: the choice
+//! changes only speed, never the attack sets, the move generation or the
+//! search tree (the migration-plan node-identity gates are unaffected).
 
 use crate::types::color::Color;
 use crate::types::piece::{BISHOP, KING, KNIGHT, PAWN, QUEEN, ROOK};
@@ -145,8 +151,182 @@ fn ray(square: Square, df: i8, dr: i8, occupancy: u64) -> u64 {
     attacks
 }
 
+/// The relevant-occupancy mask of `square` for one slider kind: the reachable
+/// squares up to (excluding) the board edge.
+fn relevant_mask(square: Square, diagonal: bool) -> u64 {
+    let directions: [(i8, i8); 4] = if diagonal {
+        [(1, 1), (1, -1), (-1, 1), (-1, -1)]
+    } else {
+        [(1, 0), (-1, 0), (0, 1), (0, -1)]
+    };
+    let f0 = file(square) as i8;
+    let r0 = rank(square) as i8;
+    let mut mask = 0_u64;
+    for (df, dr) in directions {
+        let mut f = f0 + df;
+        let mut r = r0 + dr;
+        // Walk while the NEXT square in this direction stays on the board:
+        // the edge square is excluded from the relevant occupancy.
+        while (0..8).contains(&(f + df)) && (0..8).contains(&(r + dr)) {
+            mask |= 1_u64 << from_file_rank(f as u8, r as u8);
+            f += df;
+            r += dr;
+        }
+    }
+    mask
+}
+
+/// BMI2 PEXT sliding-attack tables, mirroring the predecessor's
+/// `PextBitboards`: relevant-occupancy masks and per-square offsets, with the
+/// tables **filled from the ray-walking implementation** — bit-identical to it
+/// by construction, so the dispatch changes only speed, never the attack sets.
+///
+/// Selected once per process: BMI2 present, not disabled through
+/// `KNIGHTBYTE_DISABLE_PEXT=1`, and not a slow-BMI2 CPU (Zen 1/2, Excavator),
+/// with `KNIGHTBYTE_FORCE_PEXT=1` as the A/B override.
+struct PextTables {
+    rook_masks: [u64; 64],
+    bishop_masks: [u64; 64],
+    rook_offsets: [usize; 64],
+    bishop_offsets: [usize; 64],
+    rook_table: Vec<u64>,
+    bishop_table: Vec<u64>,
+}
+
+impl PextTables {
+    /// Fills the tables from the ray-walking attacks (bit-identical to the
+    /// magic-style reference construction).
+    fn build() -> Self {
+        let mut rook_masks = [0_u64; 64];
+        let mut bishop_masks = [0_u64; 64];
+        let mut rook_offsets = [0_usize; 64];
+        let mut bishop_offsets = [0_usize; 64];
+        let mut rook_total = 0_usize;
+        let mut bishop_total = 0_usize;
+
+        for square in 0..64_usize {
+            let slider = square as Square;
+            rook_masks[square] = relevant_mask(slider, false);
+            bishop_masks[square] = relevant_mask(slider, true);
+            rook_offsets[square] = rook_total;
+            bishop_offsets[square] = bishop_total;
+            rook_total += 1_usize << rook_masks[square].count_ones();
+            bishop_total += 1_usize << bishop_masks[square].count_ones();
+        }
+
+        let mut rook_table = vec![0_u64; rook_total];
+        let mut bishop_table = vec![0_u64; bishop_total];
+
+        // The Carry-Rippler trick enumerates every subset of the mask.
+        for square in 0..64_usize {
+            let slider = square as Square;
+            for (diagonal, mask, offsets, table) in [
+                (
+                    false,
+                    rook_masks[square],
+                    rook_offsets[square],
+                    &mut rook_table,
+                ),
+                (
+                    true,
+                    bishop_masks[square],
+                    bishop_offsets[square],
+                    &mut bishop_table,
+                ),
+            ] {
+                let mut subset = 0_u64;
+                let mut index = 0_usize;
+                loop {
+                    // The fill uses the ray walks directly — NOT the public
+                    // `rook_attacks`/`bishop_attacks`, which re-enter the
+                    // `pext_tables()` initialisation and deadlock on it.
+                    table[offsets + index] = if diagonal {
+                        ray(slider, 1, 1, subset)
+                            | ray(slider, 1, -1, subset)
+                            | ray(slider, -1, 1, subset)
+                            | ray(slider, -1, -1, subset)
+                    } else {
+                        ray(slider, 1, 0, subset)
+                            | ray(slider, -1, 0, subset)
+                            | ray(slider, 0, 1, subset)
+                            | ray(slider, 0, -1, subset)
+                    };
+                    index += 1;
+                    subset = subset.wrapping_sub(mask) & mask;
+                    if subset == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Self {
+            rook_masks,
+            bishop_masks,
+            rook_offsets,
+            bishop_offsets,
+            rook_table,
+            bishop_table,
+        }
+    }
+
+    /// Returns the rook attacks for `occupancy` via one BMI2 `pext` lookup.
+    fn rook_attacks(&self, square: usize, occupancy: u64) -> u64 {
+        let index = pext_index(occupancy, self.rook_masks[square]);
+        self.rook_table[self.rook_offsets[square] + index]
+    }
+
+    /// Returns the bishop attacks for `occupancy` via one BMI2 `pext` lookup.
+    fn bishop_attacks(&self, square: usize, occupancy: u64) -> u64 {
+        let index = pext_index(occupancy, self.bishop_masks[square]);
+        self.bishop_table[self.bishop_offsets[square] + index]
+    }
+}
+
+/// Extracts the relevant occupancy bits into a compact index: the k-th set
+/// bit of the mask maps to the k-th bit of the index, matching the
+/// Carry-Rippler subset enumeration order of the table build.
+fn pext_index(occupancy: u64, mask: u64) -> usize {
+    let mut index = 0_usize;
+    let mut bit = 0_usize;
+    let mut rest = mask;
+    while rest != 0 {
+        let lowest = rest.trailing_zeros();
+        if occupancy & (1_u64 << lowest) != 0 {
+            index |= 1_usize << bit;
+        }
+        rest &= rest - 1;
+        bit += 1;
+    }
+    index
+}
+
+static PEXT_TABLES: std::sync::OnceLock<Option<PextTables>> = std::sync::OnceLock::new();
+
+/// Returns the PEXT tables when the host can run them, or `None` when the
+/// ray-walking fallback stays.
+fn pext_tables() -> Option<&'static PextTables> {
+    PEXT_TABLES
+        .get_or_init(|| {
+            let bmi2 = std::arch::is_x86_feature_detected!("bmi2");
+            let force = std::env::var("KNIGHTBYTE_FORCE_PEXT").as_deref() == Ok("1");
+            let disable = std::env::var("KNIGHTBYTE_DISABLE_PEXT").as_deref() == Ok("1");
+            // PEXT needs BMI2 hardware; the ADR-0001 rule keeps it off CPUs where
+            // `pext` is microcoded (Zen 1/2, Excavator).
+            if bmi2 && !disable && (force || !crate::platform::cpu::has_slow_bmi2()) {
+                Some(PextTables::build())
+            } else {
+                None
+            }
+        })
+        .as_ref()
+}
+
 /// Returns rook attacks from `square` with the given occupancy.
 pub fn rook_attacks(square: Square, occupancy: u64) -> u64 {
+    if let Some(tables) = pext_tables() {
+        return tables.rook_attacks(square as usize, occupancy);
+    }
     ray(square, 1, 0, occupancy)
         | ray(square, -1, 0, occupancy)
         | ray(square, 0, 1, occupancy)
@@ -155,6 +335,9 @@ pub fn rook_attacks(square: Square, occupancy: u64) -> u64 {
 
 /// Returns bishop attacks from `square` with the given occupancy.
 pub fn bishop_attacks(square: Square, occupancy: u64) -> u64 {
+    if let Some(tables) = pext_tables() {
+        return tables.bishop_attacks(square as usize, occupancy);
+    }
     ray(square, 1, 1, occupancy)
         | ray(square, 1, -1, occupancy)
         | ray(square, -1, 1, occupancy)
@@ -186,7 +369,7 @@ mod tests {
         bishop_attacks, king_attacks, knight_attacks, pawn_attacks, queen_attacks, rook_attacks,
     };
     use crate::types::color::{BLACK, WHITE};
-    use crate::types::square::from_algebraic;
+    use crate::types::square::{Square, from_algebraic};
 
     #[test]
     fn knight_on_a1_has_two_targets() {
@@ -233,5 +416,71 @@ mod tests {
         let attacks = rook_attacks(d4, blocker);
         assert!(attacks & blocker != 0);
         assert_eq!(attacks & (1_u64 << from_algebraic("d7").unwrap()), 0);
+    }
+
+    /// Every PEXT lookup must match the ray-walking attacks for the same
+    /// subset occupancy: the fill and the lookup are pinned together.
+    #[test]
+    fn pext_lookups_match_the_ray_walk_for_every_relevant_subset() {
+        let tables = super::pext_tables().expect("this host must expose BMI2 for the test");
+        for square in 0..64_usize {
+            for (diagonal, masks, offsets, table) in [
+                (
+                    false,
+                    tables.rook_masks[square],
+                    tables.rook_offsets[square],
+                    &tables.rook_table,
+                ),
+                (
+                    true,
+                    tables.bishop_masks[square],
+                    tables.bishop_offsets[square],
+                    &tables.bishop_table,
+                ),
+            ] {
+                let bits = masks.count_ones();
+                for index in 0..(1_usize << bits) {
+                    // The subset occupancy for this compact index: the k-th
+                    // set index bit sits on the k-th set mask bit.
+                    let mut occupancy = 0_u64;
+                    let mut rest = masks;
+                    let mut bit = 0_usize;
+                    while rest != 0 {
+                        let lowest = rest.trailing_zeros();
+                        if index & (1 << bit) != 0 {
+                            occupancy |= 1_u64 << lowest;
+                        }
+                        rest &= rest - 1;
+                        bit += 1;
+                    }
+                    let expected = if diagonal {
+                        bishop_ray(square as Square, occupancy)
+                    } else {
+                        rook_ray(square as Square, occupancy)
+                    };
+                    let actual = table[offsets + index];
+                    assert_eq!(
+                        actual, expected,
+                        "square {square} subset {index}: lookup diverges"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The ray-walking attacks (the table-fill oracle, same file).
+    fn rook_ray(square: Square, occupancy: u64) -> u64 {
+        super::ray(square, 1, 0, occupancy)
+            | super::ray(square, -1, 0, occupancy)
+            | super::ray(square, 0, 1, occupancy)
+            | super::ray(square, 0, -1, occupancy)
+    }
+
+    /// The ray-walking bishop attacks (the table-fill oracle, same file).
+    fn bishop_ray(square: Square, occupancy: u64) -> u64 {
+        super::ray(square, 1, 1, occupancy)
+            | super::ray(square, 1, -1, occupancy)
+            | super::ray(square, -1, 1, occupancy)
+            | super::ray(square, -1, -1, occupancy)
     }
 }

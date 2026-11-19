@@ -145,6 +145,7 @@ pub fn see_value(position: &Position, mv: Move) -> i32 {
 /// the threshold is met or missed, and it uses the reference's `-1` tie-break
 /// so that an even exchange counts as a loss by one point.
 pub fn see_ge(position: &Position, mv: Move, threshold: i32) -> bool {
+    crate::node_stat!(SeeCalls);
     if mv.flag() == flags::CASTLE {
         return true;
     }
@@ -211,6 +212,7 @@ pub fn see_ge(position: &Position, mv: Move, threshold: i32) -> bool {
 /// Returns the cheap material approximation used as a prefilter.
 #[inline]
 pub fn see_approximate(position: &Position, mv: Move) -> i32 {
+    crate::node_stat!(SeeCalls);
     move_value(position, mv) - piece_value(piece_type(position.piece_at(mv.from())))
 }
 

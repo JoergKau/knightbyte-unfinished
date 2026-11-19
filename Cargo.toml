@@ -9,6 +9,11 @@ publish = false
 
 [dependencies]
 
+[features]
+# Compile-time node counters for the performance composition report.
+# Off by default: the counters are diagnostic and add atomic traffic.
+node-stats = []
+
 [dev-dependencies]
 # Test-only dependency used to verify the embedded network checksum.
 sha2 = "0.10"
@@ -22,6 +27,13 @@ strip = "symbols"
 overflow-checks = false
 debug-assertions = false
 incremental = false
+
+# Profiling-only profile: keeps line tables and symbols so a sampler can map
+# samples back to source. Never shipped; the release artifact stays stripped.
+[profile.release-with-debug]
+inherits = "release"
+strip = "none"
+debug = 1
 
 [lints.rust]
 warnings = "deny"

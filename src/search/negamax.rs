@@ -140,12 +140,14 @@ impl Searcher {
         observer: &mut dyn FnMut(SearchEvent),
     ) -> i32 {
         // The ply guard runs before the node is counted: a node beyond the
-        // safety depth returns its static evaluation and costs nothing.
+        // safety depth returns its static evaluation and costs nothing. No
+        // accumulator pair exists at this ply, so the full refresh runs.
         if ply >= MAX_SEARCH_PLY {
-            return self.evaluate(position);
+            return self.evaluator.evaluate(position);
         }
         self.pv.clear(ply);
         self.nodes += 1;
+        crate::node_stat!(NegamaxNodes);
         if ply > self.seldepth {
             self.seldepth = ply;
         }
@@ -289,7 +291,7 @@ impl Searcher {
             }
         }
 
-        let raw_eval = tt_eval.unwrap_or_else(|| self.evaluate(position));
+        let raw_eval = tt_eval.unwrap_or_else(|| self.evaluate_stacked(position, ply));
         let mut eval = raw_eval;
 
         // Correction history: a learned offset applied before every pruning
@@ -405,6 +407,7 @@ impl Searcher {
                 reduction = depth - 1;
             }
             let next = position.make_null();
+            self.copy_accumulators(ply);
             self.move_stack[ply] = Move::NONE;
             let score = -self.negamax(
                 &next,
@@ -494,7 +497,9 @@ impl Searcher {
             return self.quiescence(position, alpha, beta, ply, previous);
         }
 
+        crate::node_stat!(NegamaxMoveLists);
         let moves = movegen::legal(position);
+        crate::node_stat!(PseudoMoves, moves.as_slice().len());
         if moves.is_empty() {
             return if in_check {
                 mated_in(ply as i32)
@@ -549,6 +554,7 @@ impl Searcher {
         let mut quiets_count = 0;
 
         while let Some(mv) = self.picker[ply].next(position, &self.history, moves_slice) {
+            crate::node_stat!(MovesTried);
             // Step 10: the reference's single `info currmove` line of the
             // search — emitted when iteration 1's first root move begins,
             // before the depth-1 line, with `currmovenumber 1` and the node
@@ -619,6 +625,11 @@ impl Searcher {
             }
 
             let next = position.make_move(mv);
+            crate::node_stat!(MovesMade);
+            // The child's accumulator pair is pushed here, before any
+            // pruning: every recursion below uses it, and a skipped push
+            // would leave the pair at ply + 1 stale for the next move.
+            self.push_accumulators(position, &next, mv, ply);
             let gives_check = next.in_check(next.side());
             self.move_stack[ply] = mv;
 

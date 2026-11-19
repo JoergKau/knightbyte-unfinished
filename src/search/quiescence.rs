@@ -50,6 +50,7 @@ impl Searcher {
         previous: Option<Previous>,
     ) -> i32 {
         self.nodes += 1;
+        crate::node_stat!(QsearchNodes);
         if ply > self.seldepth {
             self.seldepth = ply;
         }
@@ -57,7 +58,7 @@ impl Searcher {
             return 0;
         }
         if ply >= 100 || ply >= MAX_PLY - 1 {
-            return self.evaluate(position);
+            return self.evaluator.evaluate(position);
         }
         if ply > 0 && self.is_draw(position, ply) {
             return DRAW_SCORE;
@@ -98,7 +99,7 @@ impl Searcher {
         if in_check {
             best_score = mated_in(ply as i32);
         } else {
-            stand = tt_eval.unwrap_or_else(|| self.evaluate(position));
+            stand = tt_eval.unwrap_or_else(|| self.evaluate_stacked(position, ply));
             static_eval = stand;
 
             if self.params.use_tt_score_eval
@@ -145,7 +146,9 @@ impl Searcher {
             best_score = stand;
         }
 
+        crate::node_stat!(QsearchMoveLists);
         let moves = movegen::legal(position);
+        crate::node_stat!(PseudoMoves, moves.as_slice().len());
         if in_check && moves.is_empty() {
             return mated_in(ply as i32);
         }
@@ -168,6 +171,7 @@ impl Searcher {
         let mut legal_moves = 0;
 
         while let Some(mv) = self.picker[ply].next(position, &self.history, moves.as_slice()) {
+            crate::node_stat!(MovesTried);
             if self.params.use_qs_narrowing && !in_check {
                 if ply as i32 >= self.params.qs_promotion_max_ply && mv.is_promotion() {
                     continue;
@@ -205,6 +209,8 @@ impl Searcher {
             }
 
             let next = position.make_move(mv);
+            crate::node_stat!(MovesMade);
+            self.push_accumulators(position, &next, mv, ply);
             self.move_stack[ply] = mv;
             legal_moves += 1;
             let score = -self.quiescence(

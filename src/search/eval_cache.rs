@@ -101,6 +101,7 @@ impl EvalCache {
     /// evaluation never becomes wrong, so entries stay usable across searches.
     #[inline]
     pub fn probe(&self, key: u64) -> Option<i16> {
+        crate::node_stat!(EvalCacheProbes);
         if key == 0 {
             return None;
         }
@@ -111,6 +112,7 @@ impl EvalCache {
             return None;
         }
         if stored_key(stored) == key_bits(key) {
+            crate::node_stat!(EvalCacheHits);
             Some(entry_score(stored))
         } else {
             None
@@ -124,6 +126,7 @@ impl EvalCache {
     /// overwritten.
     #[inline]
     pub fn store(&self, key: u64, score: i16) {
+        crate::node_stat!(EvalCacheStores);
         if key == 0 {
             return;
         }

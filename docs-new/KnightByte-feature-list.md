@@ -64,8 +64,33 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
 - [x] Bit-exact evaluation parity on the 15 captured region/mirror FENs.
 - [x] Negative loader tests (bad magic, version, checksum, truncation).
 - [x] `nnueeval` diagnostic UCI command.
-- [ ] Incremental accumulator with dirty-piece tracking.
-- [ ] NEON/DotProd, AVX2, AVX-VNNI and AVX-512-VNNI kernels.
+- [x] Incremental accumulator: a per-ply accumulator pair in the searcher;
+      every made move pushes the child pair by applying only the changed
+      weight rows (moved piece, captures incl. en passant, promotion piece,
+      castling rook), and a perspective whose own king moved falls back to a
+      full refresh. Bit-exact against the full refresh on seeded random walks
+      and deterministic castling/en-passant/promotion segments; bench pins
+      unchanged; bench 12 ~0.37 → 0.556 MNPS on the Windows host.
+- [x] BMI2 PEXT slider attacks (the predecessor's `PextBitboards` approach,
+      2026-11-19): relevant-occupancy masks and per-square offsets, tables
+      filled **from the ray-walking implementation** (bit-identical by
+      construction), runtime-selected (BMI2 present, not a slow-BMI2 CPU,
+      `KNIGHTBYTE_FORCE_PEXT`/`KNIGHTBYTE_DISABLE_PEXT` overrides), verified
+      against the ray walk for every relevant subset of every square. Honest
+      result: no measurable search-level NPS gain on this host (bench 12:
+      850K with PEXT vs 869K without — within noise); the predecessor's NPS
+      advantage lies elsewhere. The first version deadlocked (the fill
+      re-entered the `pext_tables()` initialisation) — fixed by filling from
+      the ray walks directly.
+- [x] NEON/DotProd, AVX2, AVX-VNNI and AVX-512-VNNI kernels — **x86-64 part
+      done (2026-11-19)**: SSE4.1 (128-bit) and AVX2 (256-bit) kernels for
+      the accumulator row arithmetic and the SCReLU head, dispatched once per
+      process with the ADR-0001 `KNIGHTBYTE_FORCE_ISA` override; the 512-bit
+      AVX-512 kernels for the `v4-vnni` rung measure identically to AVX2 on
+      the Zen 4 host (double-pumped datapath — the real 512-bit gain belongs
+      to Zen 5 / Intel 512-bit-datapath hosts). Bench 12 0.556 → 0.863 MNPS.
+      NEON lands with the macOS validation phase; VNNI remains documented as
+      inapplicable to the SCReLU per-element semantics.
 - [ ] `EvalFile` override.
 
 ### Board and rules
@@ -192,8 +217,15 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       cutoff, so singular extensions never fire — is the only code path now.
 - [x] The search reuses one `Evaluator` (B40, Phase 7 preparation): the
       accumulator buffers are allocated once per searcher, not two vectors
-      per node. The performance decomposition lives in
-      `tests/perf_microbench.rs` (evaluation ~67% of the node budget).
+      per node. The corrected performance decomposition lives in
+      `tests/perf_microbench.rs` (P0, 2026-11-19); the `node-stats`
+      composition shows that the legal-move filter is the largest measured
+      slice (89.8 % of all make calls), not the evaluation.
+- [x] P0 performance measurement rig (2026-11-19): `release-with-debug`
+      profile, corrected microbench, the `node-stats` counter feature,
+      `tools/perf_bench.py` (five-run median and node-pin check) and the
+      same-session baseline in `docs/baselines.md` section 7. The counters
+      found B42 (eval-cache stores while the cache is disabled).
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).
@@ -218,7 +250,8 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       reference parsing: case-insensitive tokens, unknown tokens ignored,
       values consumed even when unparsable, bare `go` and `movestogo` alone
       search depth 6, `go perft N` runs the counter (no bestmove, as the
-      reference).
+      reference). Perft prints the reference's three lines (`Nodes:`, `Time:`,
+      `NPS:`), added in step 12 after the transcript replay found them missing.
 - [x] Step 1: reference diagnostic formats — `d` (FEN and zobrist line), `eval`
       (evaluation with the net source name), `checkmoves` (per-move
       gives-check verdicts), `debug on/off`.
@@ -296,6 +329,16 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       `Threads=1` runs the single-threaded path unchanged (exact node pins).
       Measured on the Windows host: `Threads=4` ≈ 2.1× the single-threaded
       NPS at depth 12 on the start position.
+- [x] Step 12: all 11 published step-0 transcripts are replayed against the
+      engine (`tests/uci_transcripts.rs`): line order and shape, public option
+      set, `bestmove` count and legality, the cold fixed-depth node pins and
+      the `bench 6` transcript. Timing fields, scores, node values and PV
+      tails are masked; host-dependent iteration counts collapse to one
+      report block per search. The warm-TT node divergence was found by the
+      replay, root-caused with the per-node ledger and fixed as B41 (the TT
+      same-key rule is now a pure depth comparison, and history/correction
+      history reset every search — the predecessor builds a fresh per-thread
+      state for every `go`).
 
 ### Endgame and book
 

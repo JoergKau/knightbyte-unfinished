@@ -4,13 +4,13 @@
 
 Fully optimized engine code from the predecessor tree has to be migrated and optimized to become a rust program. The Neural Network used keeps unchanged.
 
-## if during the migration phase quirks are found in the predecessor, that has to be reported in a file called ""C:\dev\Migration-Project\PawnForgeCS-Files\quirks-found.md"" first 
+## if during the migration phase quirks are found in the predecessor, that has to be reported in a file called ""C:\dev\Migration-Project\PawnForgeCS-Files\quirks-found.md"" first
 
-The migration goes on and KnightByte has to reproduce it and that will be all checked again later when the migration finished. 
+The migration goes on and KnightByte has to reproduce it and that will be all checked again later when the migration finished.
 
 ## if during the migration phase bugs are found in the predecessor, we will stop the migration and decide what to do next
 
-add all bugs to "C:\dev\Migration-Project\PawnForgeCS-Files\new-bugs.md" and those bugs have to be fixed first and it must be checked whether those bugs were already introduced into the KnightByte code.  
+add all bugs to "C:\dev\Migration-Project\PawnForgeCS-Files\new-bugs.md" and those bugs have to be fixed first and it must be checked whether those bugs were already introduced into the KnightByte code.
 
 ## KnightByte at the end should be 100% feature compliant but the rust implementation should be highly optimized in key features like "time to depth" and must use any language feature which may help here
 
@@ -55,3 +55,9 @@ after each step is finished first update the documentaion before the next step.
 Every FEN constant used in a test must be verified against Stockfish first. On macOS stockfish is installed here: /opt/homebrew/bin/stockfish. on windows it is "C:\dev\c#-chess-engines\stockfish\stockfish-windows-x86-64-universal.exe"
 
 ## the code must compile with no errors and warnings
+
+## we have reference engines which may help to improve our code
+
+the goal is not to just copy over code but use this references as a blueprint for new ideas how we can implement improvements! those references are:
+1. Hobbes: C:\dev\c#-chess-engines\hobbes
+2. Coda: C:\dev\c#-chess-engines\coda

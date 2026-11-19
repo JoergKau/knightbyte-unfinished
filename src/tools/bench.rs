@@ -10,6 +10,11 @@
 //! predecessor engine, and matching them exactly requires porting its remaining
 //! search formulas. Until that is done, this command prints the current totals
 //! and the parity check stays open.
+//!
+//! With the `node-stats` feature enabled, the run also prints one
+//! `info string stats <name> <value>` line per counter (see
+//! [`crate::tools::node_stats`]) so the node-cost composition can be recorded
+//! next to the speed number.
 
 use std::io;
 use std::time::Instant;
@@ -55,6 +60,9 @@ pub fn run(command: &str, output: &mut Output) -> io::Result<()> {
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(DEFAULT_BENCH_DEPTH);
 
+    #[cfg(feature = "node-stats")]
+    crate::tools::node_stats::reset();
+
     let mut searcher = Searcher::new(BENCH_TT_MEGABYTES);
     let started = Instant::now();
     let mut total_nodes = 0_u64;
@@ -85,6 +93,10 @@ pub fn run(command: &str, output: &mut Output) -> io::Result<()> {
     output.line(&format!("Nodes: {total_nodes}"))?;
     output.line(&format!("Time: {elapsed_ms} ms"))?;
     output.line(&format!("NPS: {nps}"))?;
+    #[cfg(feature = "node-stats")]
+    for (name, value) in crate::tools::node_stats::snapshot() {
+        output.line(&format!("info string stats {name} {value}"))?;
+    }
     Ok(())
 }
 

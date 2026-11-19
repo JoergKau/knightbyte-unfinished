@@ -172,13 +172,114 @@ Other gates:
 
 ## 6. KnightByte results
 
-Filled in Phase 7 and at every release candidate.
+Filled per release candidate. The 2026-11-19 rows are the current build
+(B41 fix, incremental accumulator, SIMD kernels — SSE4.1/AVX2/AVX-512),
+measured with `perf_test.py --depth 20` on the `zen4` host. WAC and the
+tactical mini-suite were not re-run for these rows.
 
 | Host | Build | Threads | Avg depth | Avg NPS | Total nodes | EBF | WAC | Tactics |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| m4 | TBD | 1 | — | — | — | — | — | — |
-| m4 | TBD | 4 | — | — | — | — | — | — |
-| m4 | TBD | 8 | — | — | — | — | — | — |
-| zen4 | TBD | 1 | — | — | — | — | — | — |
-| zen4 | TBD | 4 | — | — | — | — | — | — |
-| zen4 | TBD | 8 | — | — | — | — | — | — |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| zen4 | 2026-11-19 | 1 | 20.0 | 810,424 | 18,662,358 | 2.131 | not run | not run |
+| zen4 | 2026-11-19 | 4 | 20.0 | 1,417,620 | 20,594,684 | 2.14 | not run | not run |
+| zen4 | 2026-11-19 | 8 | 20.0 | 894,971 | 20,037,205 | 2.11 | not run | not run |
+
+Session context: the 2026-11-18 pre-B41/pre-SIMD build measured 1 T
+516,458 / 4 T 993,497 / 8 T 773,020 on the same protocol — the incremental
+accumulator and the SIMD kernels added +57 % single-threaded. The 4 T/8 T
+efficiency (44 % / 14 %) remains the top profile target (§2.6 of
+`next-steps.md`); the predecessor reaches 3.58× / 5.99× on the same host.
+Multi-thread node totals are not compared (nondeterministic by design).
+
+## 7. Performance rig and the 2026-11-19 same-session baseline
+
+**Status:** P0 of the performance recovery plan is complete. The rig is now
+reproducible, and the earlier cross-session ratio is superseded by the
+same-session numbers below.
+
+### 7.1 The rig
+
+* `tools/perf_bench.py` - five fresh-process `bench` runs, node-pin check,
+  median/min/max NPS and an optional JSON record. It reads both the engine's
+  `Nodes:`/`NPS:` lines and a summary with `Total Nodes:`/`Average NPS:`.
+* `perf-test/perf_test.py --depth 20 --threads 1 --hash 256` - the primary
+  machine-independent comparison: identical nodes and EBF prove the same tree,
+  NPS is the host readout.
+* `perf-test/perf_test.py --movetime 5000 --threads 1 --hash 256` - the
+  time-to-depth comparison.
+* `cargo run --release --features node-stats -- bench N` - per-node composition
+  counters (counts only, no timers).
+* `cargo build --profile release-with-debug` plus a sampler - source-level
+  profiling without changing the shipped release profile.
+
+### 7.2 Same-session comparison (2026-11-19, Ryzen 7 260)
+
+Both engines ran back-to-back in the same session, Hash 256 MB, one thread.
+
+| Protocol | KnightByte | Predecessor | Ratio |
+| :--- | ---: | ---: | ---: |
+| `bench 12`, five-run median | 811,935 | 766,904 | 1.059x |
+| `perf_test --depth 20` | 669,773 | 1,064,034 | 0.629x |
+| `perf_test --movetime 5000` | 739,702 (avg depth 19.2) | 1,096,913 (avg depth 20.5) | 0.674x |
+
+At depth 20 both engines visit **18,662,358 nodes** with the same per-position
+counts and the same EBF (2.131). The tree is identical, so the NPS ratio is a
+pure per-node cost ratio: **1.49 us vs 0.94 us (1.59x)**. The shallow bench-12
+protocol flatters KnightByte - it is ~6 % faster there - and hides the
+deep-search cost. Use depth 20 as the performance gate and bench 12 for node
+identity.
+
+**Protocol lesson:** the recorded predecessor baseline (Zen 4, 1,569,444 NPS)
+came from a different session. Today's same-session predecessor run is
+1,064,034 NPS at depth 20 and 1,096,913 NPS at 5 s. Cross-session comparisons
+overstate the gap by roughly 40 %. Always run both engines in the same session
+and record both numbers together.
+
+### 7.3 Node-cost composition (`bench 20`, node-stats)
+
+15,229,503 nodes, 22,061 ms, 690,336 NPS.
+
+| Counter | Count | Per node |
+| :--- | ---: | ---: |
+| negamax nodes | 10,230,503 | 0.672 |
+| qsearch nodes | 4,999,000 | 0.328 |
+| legal move generations | 3,218,503 | 0.211 |
+| pseudo moves | 97,729,208 | 6.42 |
+| moves tried | 14,949,770 | 0.981 |
+| moves made (search) | 11,080,400 | 0.728 |
+| illegal moves rejected | 13,499,562 | 0.886 |
+| TT probes / hits | 10,981,130 / 2,697,582 | 0.721 / 24.6 % |
+| eval-cache probes / stores | 0 / 8,326,971 | 0 / 0.547 |
+| eval head calls | 8,326,971 | 0.547 |
+| full refreshes (perspective) | 1,222,454 | 0.080 |
+| accumulator pushes | 11,080,400 | 0.728 |
+| SEE calls | 17,761,133 | 1.166 |
+
+The decisive number: **89.8 % of all `make_move` calls are the legality filter**
+(97.7 M filter makes vs 11.1 M search makes). The filter costs about 3.9 s of
+the 22.1 s run (~17.5 %), and about **45-55 % of the same-session gap** to the
+predecessor. This is the target of P1.
+
+### 7.4 Building-block rates (release, P0 microbench)
+
+| Block | Rate | Per call |
+| :--- | ---: | ---: |
+| full NNUE refresh | 1,246,235/s | 802 ns |
+| pseudo-legal generation | 6,920,691/s | 144 ns |
+| legal generation | 833,696/s | 1,200 ns |
+| one copy-make | 20,222,205/s | 49.5 ns |
+| `see_ge` on a capture | 12,788,481/s | 78 ns |
+| incremental push + head | 3,737,928/s | 267.5 ns |
+
+The earlier "copy-make" row called `legal()` inside its loop, so it measured
+`legal + make`; the corrected rig measures one make alone at ~50 ns. The PEXT
+software index is slower than the ray walk on this host (legal 1,200 ns vs
+966 ns; pseudo 144 ns vs 118 ns), while the search-level difference is within
+noise (bench 12 788 K vs 795 K). The hardware `pext` fix is P2.
+
+### 7.5 Defect found by the counters
+
+**B42** (`docs-new/new-bugs.md`): with `UseEvalCache=false` (the compiled
+default) the eval cache is never probed but still stores every static
+evaluation (8.33 M stores in `bench 20`). The predecessor performs no cache
+instructions when the lever is off. The store is gated with the same lever in
+P1; this is behaviour-neutral.
