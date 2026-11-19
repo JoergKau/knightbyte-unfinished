@@ -191,7 +191,10 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             }
             parser::Command::Bench => {
                 stop_search(&mut active, &mut searcher, &pool, &mut output);
-                bench::run(command, &mut output)?
+                // The benchmark runs with the levers as currently configured, so a
+                // lever that does nothing prints the default total.
+                let params = *searcher.as_ref().expect("restored by the join").params();
+                bench::run(command, params, &mut output)?
             }
             parser::Command::SetOption => {
                 stop_search(&mut active, &mut searcher, &pool, &mut output);

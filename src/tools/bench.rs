@@ -22,6 +22,7 @@ use std::time::Instant;
 use crate::board::position::Position;
 use crate::output::Output;
 use crate::search::limits::Limits;
+use crate::search::params::SearchParams;
 use crate::search::searcher::Searcher;
 
 /// The four fixed positions used by the deterministic benchmark.
@@ -48,12 +49,18 @@ pub const DEFAULT_BENCH_DEPTH: u32 = 12;
 /// benchmark must allocate the same table size to be comparable at all.
 pub const BENCH_TT_MEGABYTES: usize = 256;
 
-/// Runs `bench [depth]`.
+/// Runs `bench [depth]` with the search parameters `params`.
+///
+/// The UCI layer passes the levers as currently configured (`setoption` or a
+/// `param:` start-up override), so the total tells whether a lever is wired: a
+/// lever that does nothing prints the default total. The table size stays 256 MB
+/// and the thread count one, whatever the options say, so totals stay
+/// comparable.
 ///
 /// # Errors
 ///
 /// Returns an I/O error if the output stream cannot be written.
-pub fn run(command: &str, output: &mut Output) -> io::Result<()> {
+pub fn run(command: &str, params: SearchParams, output: &mut Output) -> io::Result<()> {
     let depth = command
         .split_whitespace()
         .nth(1)
@@ -64,6 +71,7 @@ pub fn run(command: &str, output: &mut Output) -> io::Result<()> {
     crate::tools::node_stats::reset();
 
     let mut searcher = Searcher::new(BENCH_TT_MEGABYTES);
+    *searcher.params_mut() = params;
     let started = Instant::now();
     let mut total_nodes = 0_u64;
 

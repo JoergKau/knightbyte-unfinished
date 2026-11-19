@@ -485,11 +485,11 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       and skip silently otherwise; a name-scan unit test registers one dummy
       file per material family so CI covers the scan without the large tables.
 - [x] `EvalFile` and `Contempt`: removed 2026-11-19 (ADR-0014), neither is advertised or accepted.
-- [x] The sixty levers (2026-11-19, ADR-0014, `docs/LEVERS.md`): 26 reference levers,
-      23 hard-coded constants exposed with defaults equal to their old values (null
+- [x] The sixty levers (2026-11-19, ADR-0014, `docs/LEVERS.md`): 24 reference levers,
+      25 hard-coded constants exposed with defaults equal to their old values (null
       move, RFP damping, razor, futility, LMP, history pruning, SEE margins,
-      hindsight, IIR, the LMR divisor, depth and move gates and history divisor,
-      history bonus and malus scales), 3 KnightByte ablation switches and 8 ported
+      hindsight, IIR, the LMR divisor, depth and move gates, history divisor and the PV and
+      killer credits, history bonus and malus scales), 3 KnightByte ablation switches and 8 ported
       features that ship off (ProbCut with margin and depth, the table extension,
       bad-noisy pruning, the quiescence correction). Bench pins unchanged;
       `tests/lever_effect.rs` proves every lever changes the search;

@@ -29,78 +29,78 @@ engine and net.
 | ---: | :--- | :--- | ---: | :--- | :--- | :--- | :--- |
 | 1 | `AspirationBase` | spin | 50 | 10 to 100 | reference | =33: +6.1 | Initial aspiration window in centipawns. |
 | 2 | `AspirationStartDepth` | spin | 5 | 1 to 10 | reference |  | First depth that uses an aspiration window. |
-| 3 | `AspirationMaxCycles` | spin | 8 | 1 to 16 | reference |  | Maximum aspiration re-searches per depth. |
-| 4 | `UseStableTimeManagement` | check | true | true / false | reference | off: -24.4 | Scale the soft limit by the best-move, score and node-fraction stability signals. |
+| 3 | `UseStableTimeManagement` | check | true | true / false | reference | off: -24.4 | Scale the soft limit by the best-move, score and node-fraction stability signals. |
 
 ## Null move
 
 | # | Lever | Type | Default | Range | Origin | Prior evidence | What it does |
 | ---: | :--- | :--- | ---: | :--- | :--- | :--- | :--- |
-| 5 | `NmpBaseReduction` | spin | 3 | 1 to 6 | reference |  | Fixed part of the null-move reduction. |
-| 6 | `NmpDepthDivisor` | spin | 4 | 1 to 8 | reference | =2: -27.0 | Depth divisor of the null-move reduction. |
-| 7 | `NmpEvalDivisor` | spin | 191 | 50 to 400 | constant, exposed |  | Divisor of the evaluation surplus (eval minus beta) in the null-move reduction bonus. |
-| 8 | `NmpEvalBonusMax` | spin | 4 | 0 to 8 | constant, exposed |  | Largest evaluation bonus of the null-move reduction, in plies. |
-| 9 | `NmpMinDepth` | spin | 3 | 2 to 8 | constant, exposed |  | Shallowest remaining depth at which the null move is tried. |
+| 4 | `NmpBaseReduction` | spin | 3 | 1 to 6 | reference |  | Fixed part of the null-move reduction. |
+| 5 | `NmpDepthDivisor` | spin | 4 | 1 to 8 | reference | =2: -27.0 | Depth divisor of the null-move reduction. |
+| 6 | `NmpEvalDivisor` | spin | 191 | 50 to 400 | constant, exposed |  | Divisor of the evaluation surplus (eval minus beta) in the null-move reduction bonus. |
+| 7 | `NmpEvalBonusMax` | spin | 4 | 0 to 8 | constant, exposed |  | Largest evaluation bonus of the null-move reduction, in plies. |
+| 8 | `NmpMinDepth` | spin | 3 | 2 to 8 | constant, exposed |  | Shallowest remaining depth at which the null move is tried. |
 
 ## Reverse futility, razoring, futility, late move pruning
 
 | # | Lever | Type | Default | Range | Origin | Prior evidence | What it does |
 | ---: | :--- | :--- | ---: | :--- | :--- | :--- | :--- |
-| 10 | `RfpFormulaMaxDepth` | spin | 8 | 4 to 12 | reference |  | Reverse-futility gate for the linear formula. |
-| 11 | `RfpImprovingScale` | spin | 65 | 10 to 200 | reference |  | Reverse-futility margin per ply when improving. |
-| 12 | `RfpNotImprovingScale` | spin | 95 | 10 to 300 | reference |  | Reverse-futility margin per ply when not improving. |
-| 13 | `RfpDamping` | spin | 3 | 1 to 8 | constant, exposed |  | Divisor of the overshoot that a reverse-futility cutoff returns above beta. |
-| 14 | `RazorMaxDepth` | spin | 3 | 2 to 8 | reference |  | Deepest node that may use razoring. |
-| 15 | `RazorMarginScale` | spin | 100 | 25 to 300 | constant, exposed |  | Razoring margins in percent of their base values (86 and 353). |
-| 16 | `FutilityMaxDepth` | spin | 7 | 4 to 10 | reference |  | Deepest node that may use futility pruning. |
-| 17 | `FutilityScale` | spin | 100 | 25 to 300 | constant, exposed |  | Futility margins in percent of their base table. |
-| 18 | `LmpMaxDepth` | spin | 4 | 2 to 8 | reference |  | Deepest node that may use late move pruning. |
-| 19 | `LmpScale` | spin | 100 | 25 to 300 | constant, exposed |  | Late-move-pruning quiet-move limits in percent of their base table. |
+| 9 | `RfpFormulaMaxDepth` | spin | 8 | 4 to 12 | reference |  | Reverse-futility gate for the linear formula. |
+| 10 | `RfpImprovingScale` | spin | 65 | 10 to 200 | reference |  | Reverse-futility margin per ply when improving. |
+| 11 | `RfpNotImprovingScale` | spin | 95 | 10 to 300 | reference |  | Reverse-futility margin per ply when not improving. |
+| 12 | `RfpDamping` | spin | 3 | 1 to 8 | constant, exposed |  | Divisor of the overshoot that a reverse-futility cutoff returns above beta. |
+| 13 | `RazorMaxDepth` | spin | 3 | 2 to 8 | reference |  | Deepest node that may use razoring. |
+| 14 | `RazorMarginScale` | spin | 100 | 25 to 300 | constant, exposed |  | Razoring margins in percent of their base values (86 and 353). |
+| 15 | `FutilityMaxDepth` | spin | 7 | 4 to 10 | reference |  | Deepest node that may use futility pruning. |
+| 16 | `FutilityScale` | spin | 100 | 25 to 300 | constant, exposed |  | Futility margins in percent of their base table. |
+| 17 | `LmpMaxDepth` | spin | 4 | 2 to 8 | reference |  | Deepest node that may use late move pruning. |
+| 18 | `LmpScale` | spin | 100 | 25 to 300 | constant, exposed |  | Late-move-pruning quiet-move limits in percent of their base table. |
 
 ## History pruning and SEE pruning
 
 | # | Lever | Type | Default | Range | Origin | Prior evidence | What it does |
 | ---: | :--- | :--- | ---: | :--- | :--- | :--- | :--- |
-| 20 | `UseHistoryPruning` | check | true | true / false | constant, exposed |  | Skip quiet moves whose combined history is far below the depth-scaled threshold. |
-| 21 | `HistPruneMaxDepth` | spin | 3 | 1 to 8 | constant, exposed |  | Deepest node that may use history pruning. |
-| 22 | `HistPruneMargin` | spin | 2000 | 800 to 4000 | reference |  | History-pruning margin scale: the threshold is the margin times the depth. |
-| 23 | `SeePruningMaxDepth` | spin | 8 | 2 to 10 | reference | SEE thresholds + depth 8 off: -8.7 | Deepest node that may prune captures by SEE. |
-| 24 | `SeeQuietMargin` | spin | -43 | -120 to 0 | constant, exposed |  | Quiet-move SEE-pruning margin per ply (negative = loss tolerance). |
-| 25 | `SeeNoisyMargin` | spin | -26 | -100 to 0 | constant, exposed |  | Capture SEE-pruning margin per squared ply (negative = loss tolerance). |
-| 26 | `SeeHistoryDivisor` | spin | 128 | 32 to 512 | constant, exposed |  | Divisor of the combined-history refund in the SEE-pruning threshold. |
+| 19 | `UseHistoryPruning` | check | true | true / false | constant, exposed |  | Skip quiet moves whose combined history is far below the depth-scaled threshold. |
+| 20 | `HistPruneMaxDepth` | spin | 3 | 1 to 8 | constant, exposed |  | Deepest node that may use history pruning. |
+| 21 | `HistPruneMargin` | spin | 2000 | 800 to 4000 | reference |  | History-pruning margin scale: the threshold is the margin times the depth. |
+| 22 | `SeePruningMaxDepth` | spin | 8 | 2 to 10 | reference | SEE thresholds + depth 8 off: -8.7 | Deepest node that may prune captures by SEE. |
+| 23 | `SeeQuietMargin` | spin | -43 | -120 to 0 | constant, exposed |  | Quiet-move SEE-pruning margin per ply (negative = loss tolerance). |
+| 24 | `SeeNoisyMargin` | spin | -26 | -100 to 0 | constant, exposed |  | Capture SEE-pruning margin per squared ply (negative = loss tolerance). |
+| 25 | `SeeHistoryDivisor` | spin | 128 | 32 to 512 | constant, exposed |  | Divisor of the combined-history refund in the SEE-pruning threshold. |
 
 ## Extensions and depth adjustments
 
 | # | Lever | Type | Default | Range | Origin | Prior evidence | What it does |
 | ---: | :--- | :--- | ---: | :--- | :--- | :--- | :--- |
-| 27 | `UseNegativeExtensions` | check | true | true / false | reference | off: 0.0 | Search suspicious moves (losing captures, historically bad quiets) one ply shallower. |
-| 28 | `NegExtHistoryThreshold` | spin | 3000 | 500 to 8000 | constant, exposed |  | A quiet move whose butterfly history is below the negative of this value is searched one ply shallower. |
-| 29 | `UseInternalIterativeReduction` | check | true | true / false | constant, exposed |  | Search one ply shallower at a node that has no transposition-table move. |
-| 30 | `IirMinDepth` | spin | 4 | 2 to 10 | constant, exposed |  | Shallowest remaining depth of internal iterative reduction. |
-| 31 | `UseTrioHindsight` | check | true | true / false | reference |  | Run the hindsight depth pair: reduced nodes earn or lose a ply by their evaluation. |
-| 32 | `HindsightMargin` | spin | 62 | 0 to 200 | constant, exposed |  | Evaluation-sum threshold above which a reduced parent loses a ply (hindsight pair). |
+| 26 | `UseNegativeExtensions` | check | true | true / false | reference | off: 0.0 | Search suspicious moves (losing captures, historically bad quiets) one ply shallower. |
+| 27 | `NegExtHistoryThreshold` | spin | 3000 | 500 to 8000 | constant, exposed |  | A quiet move whose butterfly history is below the negative of this value is searched one ply shallower. |
+| 28 | `UseInternalIterativeReduction` | check | true | true / false | constant, exposed |  | Search one ply shallower at a node that has no transposition-table move. |
+| 29 | `IirMinDepth` | spin | 4 | 2 to 10 | constant, exposed |  | Shallowest remaining depth of internal iterative reduction. |
+| 30 | `UseTrioHindsight` | check | true | true / false | reference |  | Run the hindsight depth pair: reduced nodes earn or lose a ply by their evaluation. |
+| 31 | `HindsightMargin` | spin | 62 | 0 to 200 | constant, exposed |  | Evaluation-sum threshold above which a reduced parent loses a ply (hindsight pair). |
 
 ## Late move reductions
 
 | # | Lever | Type | Default | Range | Origin | Prior evidence | What it does |
 | ---: | :--- | :--- | ---: | :--- | :--- | :--- | :--- |
-| 33 | `LmrDivisor` | spin | 175 | 100 to 300 | constant, exposed |  | Divisor of the late-move-reduction table in hundredths: 1 + ln(depth) * ln(move) / (value / 100). |
-| 34 | `LmrMinDepth` | spin | 3 | 2 to 8 | constant, exposed |  | Shallowest remaining depth at which late moves are reduced. |
-| 35 | `LmrMinMoves` | spin | 3 | 1 to 8 | constant, exposed |  | Moves searched at full depth before late-move reduction starts. |
-| 36 | `LmrHistoryDivisor` | spin | 3419 | 1000 to 8000 | constant, exposed |  | Divisor of the history term of late-move reduction, in 1024ths of a ply: a larger divisor lets the history reduce fewer plies. |
-| 37 | `UseTerm1NotImproving` | check | false | true / false | reference |  | Add a whole ply of late-move reduction when not improving. |
-| 38 | `UseCutNode` | check | true | true / false | reference | off: +2.6 | Reduce one ply more at predicted cut nodes and admit them to the null-move gate. |
-| 39 | `UseImprovingFlag` | check | true | true / false | reference | off: -10.4 | Compare the evaluation with the same line two plies ago. |
-| 40 | `UseReSearchReduction` | check | true | true / false | constant, exposed |  | Shave the re-search after a reduced fail-high when the reduction was large. |
+| 32 | `LmrDivisor` | spin | 175 | 100 to 300 | constant, exposed |  | Divisor of the late-move-reduction table in hundredths: 1 + ln(depth) * ln(move) / (value / 100). |
+| 33 | `LmrMinDepth` | spin | 3 | 2 to 8 | constant, exposed |  | Shallowest remaining depth at which late moves are reduced. |
+| 34 | `LmrMinMoves` | spin | 3 | 1 to 8 | constant, exposed |  | Moves searched at full depth before late-move reduction starts. |
+| 35 | `LmrHistoryDivisor` | spin | 3419 | 1000 to 8000 | constant, exposed |  | Divisor of the history term of late-move reduction, in 1024ths of a ply: a larger divisor lets the history reduce fewer plies. |
+| 36 | `LmrPvWeight` | spin | 1024 | 0 to 2048 | constant, exposed |  | Late-move reduction taken off at principal-variation nodes, in 1024ths of a ply. |
+| 37 | `LmrKillerWeight` | spin | 1024 | 0 to 2048 | constant, exposed |  | Late-move reduction taken off for a killer or countermove, in 1024ths of a ply. |
+| 38 | `UseTerm1NotImproving` | check | false | true / false | reference |  | Add a whole ply of late-move reduction when not improving. |
+| 39 | `UseCutNode` | check | true | true / false | reference | off: +2.6 | Reduce one ply more at predicted cut nodes and admit them to the null-move gate. |
+| 40 | `UseImprovingFlag` | check | true | true / false | reference | off: -10.4 | Compare the evaluation with the same line two plies ago. |
+| 41 | `UseReSearchReduction` | check | true | true / false | constant, exposed |  | Shave the re-search after a reduced fail-high when the reduction was large. |
 
 ## Quiescence
 
 | # | Lever | Type | Default | Range | Origin | Prior evidence | What it does |
 | ---: | :--- | :--- | ---: | :--- | :--- | :--- | :--- |
-| 41 | `QsDeltaMargin` | spin | 1100 | 700 to 1500 | reference |  | Delta-pruning margin in quiescence. |
-| 42 | `UseQsNarrowing` | check | false | true / false | reference | on: +5.2 | Apply the recapture-only and promotion limits in quiescence. |
-| 43 | `QsRecaptureOnlyPly` | spin | 8 | 0 to 16 | reference |  | Quiescence ply from which only recaptures are searched (needs UseQsNarrowing). |
-| 44 | `QsPromotionMaxPly` | spin | 2 | 0 to 8 | reference |  | Quiescence ply from which promotions are no longer searched (needs UseQsNarrowing). |
+| 42 | `QsDeltaMargin` | spin | 1100 | 700 to 1500 | reference |  | Delta-pruning margin in quiescence. |
+| 43 | `UseQsNarrowing` | check | false | true / false | reference | on: +5.2 | Apply the recapture-only and promotion limits in quiescence. |
+| 44 | `QsRecaptureOnlyPly` | spin | 8 | 0 to 16 | reference |  | Quiescence ply from which only recaptures are searched (needs UseQsNarrowing). |
 | 45 | `UseMicroRiders` | check | true | true / false | reference | off: -9.6 | Fail-soft quiescence with fail-high averaging. |
 | 46 | `UseCheckAwareQuiescence` | check | true | true / false | KnightByte switch |  | KnightByte research lever: switch off quiescence check evasions (the reference always searches them). |
 | 47 | `UseSeeApproxPrefilter` | check | true | true / false | KnightByte switch |  | KnightByte research lever: switch off the approximate-SEE prefilter of quiescence captures. |

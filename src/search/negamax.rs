@@ -952,7 +952,7 @@ impl Searcher {
                     reduction_1024 += 1024;
                 }
                 if pv_node {
-                    reduction_1024 -= 1024;
+                    reduction_1024 -= self.params.lmr_pv_weight;
                 }
                 // Killers are read live; the countermove is the value the
                 // picker captured before the loop started (see
@@ -960,7 +960,7 @@ impl Searcher {
                 if self.killers.contains(ply, mv)
                     || self.picker[ply].counter_move() == mv.without_double_push()
                 {
-                    reduction_1024 -= 1024;
+                    reduction_1024 -= self.params.lmr_killer_weight;
                 }
                 reduction = reduction_1024 / 1024;
                 if reduction > new_depth {

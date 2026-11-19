@@ -201,6 +201,12 @@ pub struct SearchParams {
     /// Divisor of the history term of late-move reduction, in 1024ths of a
     /// ply: a larger divisor lets the history reduce fewer plies.
     pub lmr_history_divisor: i32,
+    /// Late-move reduction taken off at principal-variation nodes, in 1024ths
+    /// of a ply.
+    pub lmr_pv_weight: i32,
+    /// Late-move reduction taken off for a killer or countermove, in 1024ths
+    /// of a ply.
+    pub lmr_killer_weight: i32,
     /// History bonuses (scale and cap) in percent of their base values.
     pub history_bonus_scale: i32,
     /// History maluses (scale and cap) in percent of their base values.
@@ -300,6 +306,8 @@ impl Default for SearchParams {
             lmr_min_depth: 3,
             lmr_min_moves: 3,
             lmr_history_divisor: 3_419,
+            lmr_pv_weight: 1_024,
+            lmr_killer_weight: 1_024,
             history_bonus_scale: 100,
             history_malus_scale: 100,
             use_probcut: false,
@@ -398,6 +406,8 @@ mod tests {
         assert_eq!(params.lmr_min_depth, 3);
         assert_eq!(params.lmr_min_moves, 3);
         assert_eq!(params.lmr_history_divisor, 3_419);
+        assert_eq!(params.lmr_pv_weight, 1_024);
+        assert_eq!(params.lmr_killer_weight, 1_024);
         assert_eq!(params.history_bonus_scale, 100);
         assert_eq!(params.history_malus_scale, 100);
         // The ported features ship off.

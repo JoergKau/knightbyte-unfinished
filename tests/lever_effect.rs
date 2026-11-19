@@ -27,8 +27,7 @@ const TIME_ONLY: [&str; 1] = ["UseStableTimeManagement"];
 /// The companion settings a lever needs before its effect is observable.
 fn companions(name: &str) -> &'static [(&'static str, i64)] {
     match name {
-        "AspirationMaxCycles" => &[("AspirationBase", 10)],
-        "QsRecaptureOnlyPly" | "QsPromotionMaxPly" => &[("UseQsNarrowing", 1)],
+        "QsRecaptureOnlyPly" => &[("UseQsNarrowing", 1)],
         "ProbCutMargin" | "ProbCutMinDepth" => &[("UseProbCut", 1)],
         "TtExtensionMaxDepth" => &[("UseTtExtension", 1)],
         "BnpDepth" => &[("UseBadNoisyPruning", 1)],
@@ -44,10 +43,6 @@ fn probe_value(name: &str) -> i64 {
         .expect("the lever exists");
     if spec.kind == OptionKind::Check {
         1 - spec.default
-    } else if name == "AspirationMaxCycles" {
-        // These are caps. Raising a cap that the search never reaches changes
-        // nothing, so the informative probe is the smallest allowed value.
-        spec.min
     } else if (spec.max - spec.default) > (spec.default - spec.min) {
         spec.max
     } else {

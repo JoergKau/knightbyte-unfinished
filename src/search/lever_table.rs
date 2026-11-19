@@ -57,14 +57,6 @@ pub const LEVERS: &[LeverSpec] = &[
         help: "First depth that uses an aspiration window.",
     },
     LeverSpec {
-        name: "AspirationMaxCycles",
-        kind: OptionKind::Spin,
-        default: 8,
-        min: 1,
-        max: 16,
-        help: "Maximum aspiration re-searches per depth.",
-    },
-    LeverSpec {
         name: "UseStableTimeManagement",
         kind: OptionKind::Check,
         default: 1,
@@ -344,6 +336,22 @@ pub const LEVERS: &[LeverSpec] = &[
         help: "Divisor of the history term of late-move reduction, in 1024ths of a ply: a larger divisor lets the history reduce fewer plies.",
     },
     LeverSpec {
+        name: "LmrPvWeight",
+        kind: OptionKind::Spin,
+        default: 1_024,
+        min: 0,
+        max: 2_048,
+        help: "Late-move reduction taken off at principal-variation nodes, in 1024ths of a ply.",
+    },
+    LeverSpec {
+        name: "LmrKillerWeight",
+        kind: OptionKind::Spin,
+        default: 1_024,
+        min: 0,
+        max: 2_048,
+        help: "Late-move reduction taken off for a killer or countermove, in 1024ths of a ply.",
+    },
+    LeverSpec {
         name: "UseTerm1NotImproving",
         kind: OptionKind::Check,
         default: 0,
@@ -401,14 +409,6 @@ pub const LEVERS: &[LeverSpec] = &[
         min: 0,
         max: 16,
         help: "Quiescence ply from which only recaptures are searched (needs UseQsNarrowing).",
-    },
-    LeverSpec {
-        name: "QsPromotionMaxPly",
-        kind: OptionKind::Spin,
-        default: 2,
-        min: 0,
-        max: 8,
-        help: "Quiescence ply from which promotions are no longer searched (needs UseQsNarrowing).",
     },
     LeverSpec {
         name: "UseMicroRiders",

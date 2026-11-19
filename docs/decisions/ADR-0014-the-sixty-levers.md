@@ -40,21 +40,21 @@ and the owner asked for the 60 most promising ones to be the only ones visible.
 3. **The visible surface is ten public options plus exactly sixty levers**
    (`docs/LEVERS.md`, generated from `src/search/lever_table.rs`). Every lever
    drives a search parameter. The set:
-   - **26 reference levers** that have a real range or a measured effect (the
-     aspiration trio, stable time management, the null-move pair, the
+   - **24 reference levers** that have a real range or a measured effect (the
+     aspiration window base and start depth, stable time management, the null-move pair, the
      reverse-futility gates and scales, razor, futility and LMP depth gates, the
      history-pruning margin, SEE pruning depth, negative extensions, hindsight,
      the improving, cut-node and "not improving" terms, the quiescence delta
      margin, narrowing, micro riders, the quiescence table probe, table-score
-     evaluation, and the quiescence plies and correction switch that were
+     evaluation, and the quiescence recapture ply and correction switch that were
      reserved before).
-   - **23 constants exposed** with defaults equal to the values they replaced
+   - **25 constants exposed** with defaults equal to the values they replaced
      (`NmpEvalDivisor`, `NmpEvalBonusMax`, `NmpMinDepth`, `RfpDamping`,
      `RazorMarginScale`, `FutilityScale`, `LmpScale`, `UseHistoryPruning`,
      `HistPruneMaxDepth`, the three SEE margins, `NegExtHistoryThreshold`,
      `UseInternalIterativeReduction`, `IirMinDepth`, `HindsightMargin`,
      `LmrDivisor`, `LmrMinDepth`, `LmrMinMoves`, `LmrHistoryDivisor`,
-     `UseReSearchReduction`, `HistoryBonusScale`, `HistoryMalusScale`). The
+     `LmrPvWeight`, `LmrKillerWeight`, `UseReSearchReduction`, `HistoryBonusScale`, `HistoryMalusScale`). The
      tables of margins are exposed as one percentage per table (100 = unchanged)
      rather than as one lever per entry, so a single lever moves a whole
      schedule; this is how the 60 stay testable.
@@ -81,11 +81,22 @@ and the owner asked for the 60 most promising ones to be the only ones visible.
    clock-imbalance trio, and `MaxPathExtensions` (decision 5). `setoption`
    rejects all of them as unknown options. Their defaults still hold in
    `SearchParams`, so the search is unchanged.
-5. **`MaxPathExtensions` was swapped out by measurement.** Its first slot was
-   replaced after the effect test showed that even at its minimum (8 instead of
-   32) the budget changes the tree by only 0.2 % at depth 15: it is almost never
-   binding. `LmrHistoryDivisor` (the history term inside late-move reduction)
-   took the slot.
+5. **Three levers were swapped out by measurement** while the test plan
+   (`docs/audit-tests-KB.md`) was written, because their effect on the tree is
+   too small for a 400-game match to resolve:
+   - `MaxPathExtensions`: even at its minimum (8 instead of 32) the budget
+     changes the tree by only 0.2 % at depth 15; it is almost never binding.
+     `LmrHistoryDivisor` (the history term inside late-move reduction) took the
+     slot.
+   - `AspirationMaxCycles`: 0.06 % of the nodes at its extreme value of 1, and no
+     change at all at 2 and above, because a window that has failed twice almost
+     always succeeds on the third try.
+   - `QsPromotionMaxPly`: 0.00 % even at 0; quiescence promotions never reach the
+     ply where the limit applies.
+   `LmrPvWeight` and `LmrKillerWeight` (the credits that principal-variation
+   nodes and killer or countermoves receive against the late-move reduction,
+   1024 = one ply) took the last two slots: they act on the branching factor
+   directly.
 
 ## Verification
 
@@ -94,7 +105,7 @@ and the owner asked for the 60 most promising ones to be the only ones visible.
   constants with parameters and after adding the three ports.
 - **Every lever acts.** `tests/lever_effect.rs` (release-mode gate) sets each of
   the 59 time-independent levers to a non-default value, with the companion
-  setting it needs (narrowing for the quiescence plies, ProbCut for its margin),
+  setting it needs (narrowing for the recapture ply, ProbCut for its margin),
   and requires the node count or a best move to change at depth 9, 12 or 15. The
   first run found two caps whose probe value was too lenient; they are probed at
   their minimum. `UseStableTimeManagement` only acts on a clock and is covered by
