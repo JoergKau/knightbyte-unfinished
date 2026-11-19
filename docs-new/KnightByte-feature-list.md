@@ -369,6 +369,10 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       the predecessor's lazy ones). The counting search is a second instantiation
       (`const STATS`), so the playing code is unchanged: no speed cost. Off by
       default.
+- [x] `tbhits` (2026-11-19, ADR-0013): `info` lines carry `tbhits <n>` between
+      `hashfull` and `time` only while a tablebase set is in use (WDL values used by
+      the search and quiescence plus the successful root probe, merged over all
+      threads); without tablebases the line is the reference's exactly.
 - [x] Allocation audit (2026-11-19, docs/baselines.md 7.21): `tests/alloc_audit.rs`
       counts allocations of a search with a counting allocator; exactly two per
       completed iteration (the PV vectors), none per node.

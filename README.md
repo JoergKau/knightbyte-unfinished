@@ -110,6 +110,10 @@ The engine answers `uci` with its option list. The public options are:
 | `EvalFile` | empty | accepted but ignored: the network is embedded |
 | `Contempt` | 0 | accepted but ignored |
 
+The `info` lines carry `tbhits <n>` (between `hashfull` and `time`) only while a
+tablebase set is in use; without tablebases they are exactly
+`depth seldepth score nodes nps hashfull time pv`.
+
 Pondering is not advertised. Every other option is a search-tuning lever named
 after the feature it controls (`Nmp...`, `Rfp...`, `Lmr...`); the defaults are
 the shipped configuration and changing them is for tuning experiments. A lever
@@ -131,7 +135,6 @@ two hidden developer diagnostics, both off by default:
   time.
 * Some research levers are accepted but not wired (the features they would
   switch on are not part of the shipped search).
-* `info` lines do not carry `tbhits`.
 * `go infinite` ends on its own at the engine's depth cap (128) or on a proven
   mate, instead of waiting for `stop`; this only happens in positions that are
   trivially drawn or already decided.

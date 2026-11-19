@@ -283,3 +283,78 @@ fn an_empty_syzygy_path_reports_none() {
         "empty path was not reported:\n{output}"
     );
 }
+
+/// Returns the `tbhits` value of every `info depth` line, `None` for a line
+/// without the field.
+fn tbhits_per_info_line(output: &str) -> Vec<Option<u64>> {
+    output
+        .lines()
+        .filter(|line| line.starts_with("info depth "))
+        .map(|line| {
+            let mut words = line.split_whitespace();
+            words
+                .by_ref()
+                .find(|word| *word == "tbhits")
+                .and_then(|_| words.next())
+                .and_then(|value| value.parse().ok())
+        })
+        .collect()
+}
+
+#[test]
+fn tbhits_joins_the_info_line_only_while_tablebases_are_in_use() {
+    let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/tb");
+    let fen = "8/8/8/8/8/1Q6/8/K6k w - - 0 1";
+    let _ = verified(fen);
+
+    // Without a tablebase path the line is the reference's, field for field.
+    let plain = run_engine(&format!("position fen {fen}\ngo depth 4\n"));
+    assert!(
+        !plain.contains("tbhits"),
+        "tbhits appeared without tablebases:\n{plain}"
+    );
+
+    // With tables every info line carries the field, and the search found hits.
+    let with_tables = run_engine(&format!(
+        "setoption name SyzygyPath value {directory}\nposition fen {fen}\ngo depth 4\n"
+    ));
+    let hits = tbhits_per_info_line(&with_tables);
+    assert!(!hits.is_empty(), "no info line:\n{with_tables}");
+    assert!(
+        hits.iter().all(Option::is_some),
+        "an info line lacks tbhits:\n{with_tables}"
+    );
+    let counts: Vec<u64> = hits.into_iter().flatten().collect();
+    assert!(
+        counts.windows(2).all(|pair| pair[0] <= pair[1]),
+        "tbhits must not decrease: {counts:?}"
+    );
+    assert!(counts.last().copied().unwrap_or(0) > 0, "{counts:?}");
+
+    // The field sits between hashfull and time.
+    let line = with_tables
+        .lines()
+        .find(|line| line.starts_with("info depth "))
+        .expect("an info line");
+    let position = |key: &str| line.find(key).unwrap_or_else(|| panic!("no {key}: {line}"));
+    assert!(position("hashfull") < position("tbhits") && position("tbhits") < position("time"));
+}
+
+#[test]
+fn helper_threads_add_their_tablebase_hits() {
+    let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/tb");
+    let fen = "8/8/8/8/8/1Q6/8/K6k w - - 0 1";
+    let _ = verified(fen);
+    let output = run_engine(&format!(
+        "setoption name SyzygyPath value {directory}\n\
+         setoption name Threads value 3\n\
+         position fen {fen}\n\
+         go depth 8\n"
+    ));
+    let counts: Vec<u64> = tbhits_per_info_line(&output)
+        .into_iter()
+        .flatten()
+        .collect();
+    assert!(!counts.is_empty(), "no tbhits with 3 threads:\n{output}");
+    assert!(counts.last().copied().unwrap_or(0) > 0, "{counts:?}");
+}

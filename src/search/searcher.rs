@@ -89,6 +89,9 @@ pub struct SearchInfo {
     pub score: i32,
     /// Nodes visited so far.
     pub nodes: u64,
+    /// Tablebase hits so far, or `None` while no tablebase is in use (the
+    /// `info` line then carries no `tbhits` field).
+    pub tb_hits: Option<u64>,
     /// Milliseconds elapsed since the search started.
     pub time_ms: u64,
     /// Nodes per second, derived from `nodes` and `time_ms` (guarded against
@@ -183,6 +186,12 @@ pub struct Searcher {
     pub(crate) root_tb_move: Move,
     /// Fifty-move-aware WDL class of the root, when the root probe succeeded.
     pub(crate) root_tb_wdl: Option<i32>,
+    /// Tablebase hits of this searcher in the current search: every WDL value
+    /// the tables returned for a node, plus the successful root probe.
+    pub(crate) tb_hits: u64,
+    /// Part of `tb_hits` already flushed to the shared helper total (only
+    /// helpers flush).
+    pub(crate) published_tb_hits: u64,
     /// Step 8 (Lazy SMP): the shared node counter of a multi-threaded search.
     /// The main thread only READS it (its own count stays exact, which is
     /// what keeps the `Threads=1` node pins bit-identical); each helper
@@ -256,6 +265,8 @@ impl Searcher {
             tb_probing: false,
             root_tb_move: Move::NONE,
             root_tb_wdl: None,
+            tb_hits: 0,
+            published_tb_hits: 0,
             helper_nodes: None,
             publishes_nodes: false,
             published_nodes: 0,
@@ -460,6 +471,13 @@ impl Searcher {
         self.tb_probing = crate::tb::syzygy::probing_enabled();
         self.root_tb_move = Move::NONE;
         self.root_tb_wdl = None;
+        self.tb_hits = 0;
+        self.published_tb_hits = 0;
+        if self.helper_nodes.is_none() {
+            // No helpers: this searcher owns the whole count. With helpers the
+            // UCI layer cleared the shared total before launching them.
+            crate::search::tb::reset_helper_tb_hits();
+        }
         // The learned tables start cold every search, as in the predecessor:
         // its UCI layer builds a fresh per-thread state object for each `go`,
         // so history and correction history never survive a search (B41).
@@ -533,6 +551,7 @@ impl Searcher {
             {
                 self.root_tb_move = result.mv;
                 self.root_tb_wdl = Some(result.wdl);
+                self.tb_hits += 1;
             }
         }
 
@@ -588,6 +607,7 @@ impl Searcher {
                 seldepth: best.seldepth,
                 score: best.score,
                 nodes: best.nodes,
+                tb_hits: (self.tb.is_some() && self.tb_probing).then(|| self.reported_tb_hits()),
                 time_ms,
                 nps: nps_of(best.nodes, time_ms),
                 // Read once per completed iteration, not per node: the
@@ -899,6 +919,13 @@ impl Searcher {
                 counter.fetch_add(unpublished, Ordering::Relaxed);
                 self.published_nodes = self.nodes;
             }
+            if force || unpublished >= 2048 {
+                let new_hits = self.tb_hits - self.published_tb_hits;
+                if new_hits > 0 {
+                    crate::search::tb::publish_helper_tb_hits(new_hits);
+                    self.published_tb_hits = self.tb_hits;
+                }
+            }
         }
     }
 
@@ -910,6 +937,16 @@ impl Searcher {
                 .helper_nodes
                 .as_ref()
                 .map_or(0, |counter| counter.load(Ordering::Relaxed))
+    }
+
+    /// Returns the tablebase hits this searcher reports: its own exact count
+    /// plus, while helpers are attached, what the helpers have published.
+    pub fn reported_tb_hits(&self) -> u64 {
+        if self.helper_nodes.is_some() && !self.publishes_nodes {
+            self.tb_hits + crate::search::tb::helper_tb_hits()
+        } else {
+            self.tb_hits
+        }
     }
 
     /// Returns whether the search must stop before visiting another node.

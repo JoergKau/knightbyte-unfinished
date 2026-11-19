@@ -808,6 +808,7 @@ fn spawn_active_search(
     if crate::tools::diagnostics::search_stats_enabled() {
         crate::tools::diagnostics::clear_last_search();
     }
+    crate::search::tb::reset_helper_tb_hits();
     if pool.threads() > 1 {
         let helper_limits = Limits {
             soft_time_ms: None,
@@ -1073,9 +1074,9 @@ fn answer_without_search(position: Option<&Position>, output: &mut Output) -> io
 ///
 /// Field order and set mirror the captured reference lines exactly:
 /// `depth`, `seldepth`, `score`, `nodes`, `nps`, `hashfull`, `time`, `pv`.
-/// The reference omits `tbhits` while no tablebases are configured (the
-/// capture masks `tbhits <n>` when present, and no captured line carries
-/// one); the token joins the line when the Syzygy phase lands.
+/// The reference never prints `tbhits`. KnightByte adds `tbhits <n>` after
+/// `hashfull` only while a tablebase set is in use, so the line of a search
+/// without tablebases is byte-identical to the reference's (ADR-0013).
 fn format_info(info: &SearchInfo) -> String {
     let pv = info
         .pv
@@ -1083,14 +1084,18 @@ fn format_info(info: &SearchInfo) -> String {
         .map(|mv| mv.to_uci())
         .collect::<Vec<String>>()
         .join(" ");
+    let tb_hits = info
+        .tb_hits
+        .map_or_else(String::new, |hits| format!(" tbhits {hits}"));
     format!(
-        "info depth {} seldepth {} score {} nodes {} nps {} hashfull {} time {} pv {}",
+        "info depth {} seldepth {} score {} nodes {} nps {} hashfull {}{} time {} pv {}",
         info.depth,
         info.seldepth,
         format_score(info.score),
         info.nodes,
         info.nps,
         info.hashfull,
+        tb_hits,
         info.time_ms,
         pv
     )
@@ -2058,6 +2063,7 @@ mod tests {
             seldepth: 3,
             score: 46,
             nodes: 213,
+            tb_hits: None,
             time_ms: 2,
             nps: 106_500,
             hashfull: 4,
@@ -2076,6 +2082,22 @@ mod tests {
         assert!(line.contains("score mate 1"), "mate score format: {line}");
         assert!(line.contains("hashfull 4"), "hashfull missing: {line}");
         assert!(line.contains("time 2"), "time missing: {line}");
+
+        // `tbhits` joins the line, between `hashfull` and `time`, only while a
+        // tablebase set is in use; zero hits still print.
+        let with_tables = SearchInfo {
+            tb_hits: Some(7),
+            ..info.clone()
+        };
+        assert_eq!(
+            super::format_info(&with_tables),
+            "info depth 2 seldepth 3 score cp 46 nodes 213 nps 106500 hashfull 4 tbhits 7 time 2 pv "
+        );
+        let none_yet = SearchInfo {
+            tb_hits: Some(0),
+            ..info
+        };
+        assert!(super::format_info(&none_yet).contains("hashfull 4 tbhits 0 time 2"));
     }
 
     /// Applies a sequence of `setoption name <name> value <value>` commands to
