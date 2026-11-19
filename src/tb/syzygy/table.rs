@@ -217,6 +217,25 @@ impl Inner {
                 }
             }
         }
+        // Two pieces each side (six pieces). The second group starts at the
+        // first group's first piece, and at its second piece when the first
+        // pieces are equal, so a mirrored material is listed only once.
+        for i in 0..5 {
+            for j in i..5 {
+                for k in i..5 {
+                    let start = if i == k { j } else { k };
+                    for l in start..5 {
+                        add(format!(
+                            "K{}{}vK{}{}",
+                            piece(i),
+                            piece(j),
+                            piece(k),
+                            piece(l)
+                        ));
+                    }
+                }
+            }
+        }
         // Four pieces versus king.
         for i in 0..5 {
             for j in i..5 {
@@ -923,4 +942,51 @@ fn calc_key_from_pcs(pcs: &[u8; 16], mirror: bool) -> u64 {
         key = key.wrapping_add((pcs[(black ^ m) & 15] as u64).wrapping_mul(PRIMES[black]));
     }
     key
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Inner;
+
+    /// Every material family the format defines must be registered when its
+    /// file is present: a family missing from the name scan silently turns
+    /// every position of that material into "not covered".
+    #[test]
+    fn the_name_scan_registers_every_material_family() {
+        // Canonical names: strongest piece first, groups ordered Q R B N P.
+        let names = [
+            "KQvK",     // 3 pieces
+            "KQvKR",    // 4 pieces, one each
+            "KQRvK",    // 4 pieces, two on one side
+            "KQRvKB",   // 5 pieces, 3 v 2
+            "KQRBvK",   // 5 pieces, 4 v 1
+            "KQNvKNP",  // 6 pieces, 3 v 3 with different first pieces
+            "KQNvKQN",  // 6 pieces, 3 v 3 with equal first pieces
+            "KQRvKQN",  // 6 pieces, 3 v 3 sharing the first piece
+            "KQRBvKN",  // 6 pieces, 4 v 2
+            "KQRBNvK",  // 6 pieces, 5 v 1
+            "KQBNvKRN", // 7 pieces, 4 v 3
+            "KQRBNvKN", // 7 pieces, 5 v 2
+        ];
+        let directory =
+            std::env::temp_dir().join(format!("knightbyte-names-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("create temp directory");
+        for name in names {
+            // A table file's size is 16 modulo 64; the scan checks only that.
+            std::fs::write(directory.join(format!("{name}.rtbw")), [0_u8; 16])
+                .expect("write dummy table");
+        }
+
+        let inner = Inner::open(&directory.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&directory);
+        assert_eq!(
+            inner.wdl_count,
+            names.len(),
+            "every material family must be registered"
+        );
+        assert_eq!(
+            inner.max_pieces, 7,
+            "the seven-piece family must be covered"
+        );
+    }
 }

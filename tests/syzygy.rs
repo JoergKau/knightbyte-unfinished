@@ -272,9 +272,9 @@ fn dtz_root_ranking_drives_the_search_result() {
 
 #[test]
 fn dtz_root_ranking_converts_a_won_endgame_to_checkmate() {
-    // Ported from the predecessor's endgame conversion regression: with root
-    // ranking the winning side must convert to mate, not shuffle into a
-    // fifty-move or insufficient-material draw.
+    // Endgame conversion regression: with root ranking the winning side must
+    // convert to mate, not shuffle into a fifty-move or insufficient-material
+    // draw.
     let Some(directory) = std::env::var_os("KNIGHTBYTE_SYZYGY_PATH") else {
         return;
     };
@@ -324,6 +324,55 @@ fn search_without_tables_has_no_tablebase_scores() {
     );
 }
 
+/// Loads the full table set named by `KNIGHTBYTE_SYZYGY_PATH`, or returns
+/// `None` when it is not configured (the test then skips).
+fn full_set() -> Option<std::sync::Arc<syzygy::Syzygy>> {
+    let directory = std::env::var_os("KNIGHTBYTE_SYZYGY_PATH")?;
+    assert!(syzygy::initialize(&directory.to_string_lossy()));
+    syzygy::current()
+}
+
+#[test]
+fn four_and_five_piece_values_match_an_independent_reader() {
+    // Values agreed by an independent tablebase reader and the reference
+    // engine. These positions need the capture sign, the trailing placement
+    // groups and the DTZ value decode of a pawnless 4/5-piece table: all
+    // three were once wrong while the three-piece tests still passed.
+    let _guard = tb_lock();
+    let Some(tables) = full_set() else { return };
+    assert!(tables.max_pieces() >= 5, "this test needs the 3-4-5 set");
+
+    // (fen, wdl, |dtz|)
+    let cases = [
+        ("4k3/8/7N/8/6K1/B7/8/8 w - - 0 1", 2, 54),   // KBNvK
+        ("3R4/8/8/8/8/6k1/2K1R3/8 b - - 0 1", -2, 6), // KRRvK, black to move
+        ("1B6/p7/8/8/8/4N2K/3k4/8 w - - 0 1", 2, 1),  // winning capture
+        ("k7/6N1/8/1B6/2K5/8/3B4/8 w - - 0 1", 2, 7), // KBBNvK
+    ];
+    for (fen, wdl, dtz) in cases {
+        let position = verified(fen);
+        let result = tables.probe_root(&position);
+        assert!(!result.failed, "root probe failed for {fen}");
+        assert_eq!(result.wdl, wdl, "WDL mismatch for {fen}");
+        assert_eq!(result.dtz, dtz, "DTZ mismatch for {fen}");
+    }
+}
+
+#[test]
+fn six_piece_three_versus_three_material_is_covered() {
+    // KQN vs KPN: a 3-v-3 material. The name scan once omitted the whole
+    // family, so every such position reported "not covered".
+    let _guard = tb_lock();
+    let Some(tables) = full_set() else { return };
+    if tables.max_pieces() < 6 {
+        return;
+    }
+    let position = verified("6K1/8/6k1/5p1n/2N5/8/4Q3/8 w - - 0 1");
+    let result = tables.probe_root(&position);
+    assert!(!result.failed, "a 3-v-3 position must be covered");
+    assert_eq!(result.wdl, 2);
+    assert_eq!(result.dtz, 5);
+}
 #[test]
 fn missing_and_corrupt_tables_are_harmless() {
     let _guard = tb_lock();

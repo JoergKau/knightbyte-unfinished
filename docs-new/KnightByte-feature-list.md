@@ -421,6 +421,16 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
 - [x] Bench pins unchanged: `bench 6/12/16/18` =
       15,528 / 456,308 / 2,815,799 / 6,892,874 (tables and book are absent in
       the default configuration).
+- [x] Differential verification tools: `tools/tb_compare.py` (random positions
+      of every material: WDL, DTZ and chosen move against an independent
+      reader and a second engine) and `tools/book_compare.py` (book move sets
+      along random lines against a second engine). They found and verified the
+      fixes of B45-B48; the final runs show no disagreement on 3,900 tablebase
+      positions (3-4-5 and 6-man) and 315 book positions.
+- [x] Real-book tests (`tests/book.rs`) run against a local `.ctg` when one is
+      present (`KNIGHTBYTE_BOOK_PATH` or the git-ignored `books/` directory)
+      and skip silently otherwise; a name-scan unit test registers one dummy
+      file per material family so CI covers the scan without the large tables.
 - [ ] `EvalFile` net override and `Contempt` remain inert (outside Phase 6's
       scope; carried in the feature-compliance list).
 

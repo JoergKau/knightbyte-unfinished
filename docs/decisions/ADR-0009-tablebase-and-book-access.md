@@ -45,15 +45,28 @@ Three decisions are not obvious from the port itself:
    Probes inside one table set are serialized by the set's own mutex, exactly
    like the reference's single prober lock; this is endgame-only traffic.
 4. **The reference's coarser error flag is reproduced.** A material's hash
-   slot carries one "file failed" flag for both WDL and DTZ. A missing or
-   corrupt `.rtbz` therefore also disables WDL probing for that material until
-   a reload. This is recorded as quirk Q9 in the migration register; the
-   graceful-degradation behaviour (no panic, no crash) is the important part.
+   slot carries one "file failed" flag for both WDL and DTZ. A present but
+   unreadable or corrupt `.rtbz` therefore also disables WDL probing for that
+   material until a reload (an absent `.rtbz` does not: the probe fails early
+   without touching the flag). This is recorded as quirk Q9 in the migration
+   register; the graceful-degradation behaviour (no panic, no crash) is the
+   important part.
 5. **Test data is small and public.** `tests/data/tb/` holds the three 3-man
    WDL/DTZ pairs (KQvK, KRvK, KPvK), which are part of the public Syzygy set.
    Book tests build a synthetic `.ctg` fixture in memory, so no third-party
    book is committed. The full 3-4-5 set is exercised locally through
    `KNIGHTBYTE_SYZYGY_PATH` (the DTZ-ranking tests skip when it is unset).
+
+## Verification
+
+Unit tests on the committed 3-man tables and a synthetic book are necessary
+but were shown not to be sufficient: they passed while four defects were
+present (B45-B48 in `docs-new/new-bugs.md`). Parity for this phase is therefore
+established differentially, by `tools/tb_compare.py` (random positions of every
+3-4-5 and 6-man material against an independent reader and the predecessor
+binary: WDL, DTZ and the chosen move) and `tools/book_compare.py` (the set of
+book moves each engine can return along random lines). Both must show zero
+disagreements before a change to the prober or the book reader is accepted.
 
 ## Consequences
 

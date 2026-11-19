@@ -611,6 +611,58 @@ last section lists predecessor quirks that are reproduced on purpose.
 - **Measured context** (`tests/perf_microbench.rs`, release, Ryzen 7 260): full-refresh evaluation ~548K/s (1.8 µs), legal move generation ~1.5M/s, copy-make ~1.5M/s; the search at 370K nodes/s (2.7 µs/node) — so the evaluation is ~67 % of the entire node budget, and the per-node allocations are part of that.
 - **Status:** fixed 2026-11-18 — the `Searcher` owns an `Evaluator` over the embedded net (allocated once); `evaluate` uses it. The values are bit-identical (the same code path), verified by the unchanged bench pins. The bigger wins (incremental accumulator, SIMD kernels, `target-cpu`/PGO builds) are the Phase 7 items proper.
 
+## B45-B48 - Phase 6 port defects found by the post-phase audit's differential checks
+
+All four were introduced by the Phase 6 port (commit `fd7658e`) and fixed the
+same day. None of them could be seen by the ported unit tests, which use only
+the three committed 3-man tables or a synthetic book. They were found by
+differential runs against an independent tablebase reader and the
+predecessor binary (`tools/tb_compare.py`, `tools/book_compare.py`): 273 of 300
+random 4/5-piece positions disagreed before the fixes, none of 3,500 do after
+(3-4-5 and 6-man sets, WDL, DTZ and chosen move), and 56 of 197 book positions
+disagreed before versus 0 of 315 (400 samples each) after.
+
+- **B45 - `probe_wdl` used the capture value without negating it.**
+  - Command or FEN: any 4/5/6-piece position where a capture is available,
+    for example `1B6/p7/8/8/8/4N2K/3k4/8 w - - 0 1` (winning capture, DTZ 1).
+  - Expected: the child is probed from the opponent's side, so its value is
+    negated (`v = -ProbeAb(...)`); the winning capture returns DTZ 1.
+  - Actual: the unnegated value was compared with the running best, so
+    captures were scored from the wrong side (DTZ 3 here).
+  - Status: fixed 2026-11-19 (`src/tb/syzygy/probe.rs`).
+- **B46 - `encode` skipped the trailing piece groups of pawnless tables.**
+  - Command or FEN: any 4+ piece pawnless table, for example
+    `4k3/8/7N/8/6K1/B7/8/8 w - - 0 1` (KBNvK, DTZ 54).
+  - Expected: after the leading three pieces (or two kings) the remaining
+    groups each add a combination index; the reference runs that loop for both
+    encodings.
+  - Actual: the pawnless branch returned right after the leading group, so
+    only the first three pieces fixed the index (DTZ 14 here). The 3-man
+    tables, which have no extra groups, were unaffected, which is why the
+    committed tests passed.
+  - Status: fixed 2026-11-19 (`src/tb/syzygy/index.rs`; one shared loop).
+- **B47 - the material-name scan omitted the 3-v-3 six-piece family.**
+  - Command or FEN: `6K1/8/6k1/5p1n/2N5/8/4Q3/8 w - - 0 1` (KQN v KPN).
+  - Expected: `K.. v K..` names are registered (the reference's loop with
+    `l = (i == k) ? j : k`).
+  - Actual: those tables were never registered, so every 3-v-3 position
+    reported "not covered" (97 of 292 six-piece samples).
+  - Status: fixed 2026-11-19 (`src/tb/syzygy/table.rs`); the unit test
+    `the_name_scan_registers_every_material_family` registers one dummy file
+    per family so CI covers it without the large tables.
+- **B48 - the book's en-passant availability used the wrong capturer colour.**
+  - Command or FEN: `position startpos moves e2e4 e7e6 g1f3 b8c6 d2d4`
+    (an own pawn stands next to the pushed pawn).
+  - Expected: the capturing pawn belongs to the side to move.
+  - Actual: the colour was inverted, so an own adjacent pawn recorded a
+    capture that cannot happen; the child signature then missed the book and
+    double-push moves such as `d2d4`, `c2c4` and `f2f4` were dropped from the
+    candidates in many positions.
+  - Status: fixed 2026-11-19 (`src/tb/book/signature.rs`). The earlier
+    en-passant test compared two different positions and proved nothing; it now
+    compares the same board with and without the square and covers the own-pawn
+    case.
+
 ## Predecessor behaviour
 
 Predecessor quirks are tracked in the local quirk register, which is not part of

@@ -437,3 +437,22 @@ bench pins are unchanged. Their parity surface is checked separately:
 The reference's coarser error flag (a failed DTZ load also disables WDL for the
 same material) is reproduced as quirk Q9; ADR-0009 records the file-access and
 dependency decisions.
+
+### 9.1 Differential evidence (2026-11-19)
+
+The unit tests alone were not a sufficient parity gate for this phase (they
+passed while B45-B48 were present). The gate is therefore differential:
+
+| Check | Tool | Result |
+| :--- | :--- | :--- |
+| WDL, DTZ and chosen move, random positions of every 3-4-5 material | `tools/tb_compare.py` | 2,300 positions, 0 disagreements (independent reader and predecessor) |
+| Same with the 6-man set (captures resolve into the 5-man tables) | `tools/tb_compare.py` | 1,600 positions (1,155 six-piece), 0 disagreements |
+| Book move sets per position along random lines | `tools/book_compare.py` | 315 positions x 400 samples, 0 disagreements |
+
+Before the fixes the same runs disagreed on 273 of 300 tablebase positions and
+56 of 197 book positions (`docs-new/new-bugs.md`, B45-B48). Both tools take the
+other engine as an argument and are not run in CI (they need the large table
+set / a local book); the CI-visible regressions are
+`the_name_scan_registers_every_material_family`, the signature tests in
+`tests/book.rs`, and the full-set tests that skip when
+`KNIGHTBYTE_SYZYGY_PATH` is unset.

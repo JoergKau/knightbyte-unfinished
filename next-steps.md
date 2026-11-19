@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-19 (Phase 6 complete: Syzygy WDL/DTZ + root DTZ ranking + `.ctg` opening book, 305 tests, bench pins unchanged; next: finish the performance plan, P4/P4b/P8, then search tuning)
+**Last updated:** 2026-11-19 (Phase 6 complete: Syzygy WDL/DTZ + root DTZ ranking + `.ctg` opening book, 312 tests, bench pins unchanged; next: finish the performance plan, P4/P4b/P8, then search tuning)
 **Rule:** update this document at the end of every working session.
 
 ## ORDER OF WORK (decided 2026-11-19)
@@ -23,13 +23,26 @@ lazy shuffle Kd2-c1 reproduces), and the `.ctg` reader with signature
 validation, weighted move choice and annotations. `Own Book` defaults off;
 `Book File` loads explicitly (empty value auto-detects next to the executable
 or in `books/`); `SyzygyPath`/`SyzygyRootProbe`/`Syzygy50MoveRule` are
-functional and report their state. Tests: 305 (the big-set DTZ-ranking tests skip when the variable is unset)
-(`KNIGHTBYTE_SYZYGY_PATH`); the DTZ-ranking tests skip when it is unset. Bench
-pins unchanged: 15,528 / 456,308 / 2,815,799 / 6,892,874. The table files are
-mapped lazily through `memmap2` (ADR-0009); the 3-man test tables are in
-`tests/data/tb/`; the book tests use a synthetic fixture, so no third-party
-book is published. Quirk Q9 (a failed DTZ load poisons WDL for the same
-material) is reproduced and recorded.
+functional and report their state. Tests: 312 (the full-set tests skip when
+`KNIGHTBYTE_SYZYGY_PATH` is unset, the real-book tests when no book is
+present). Bench pins unchanged: 15,528 / 456,308 / 2,815,799 / 6,892,874. The
+table files are mapped lazily through `memmap2` (ADR-0009); the 3-man test
+tables are in `tests/data/tb/`; the book tests use a synthetic fixture plus a
+local real book, so no third-party book is published. Quirk Q9 (a failed DTZ
+load of a present but corrupt file poisons WDL for the same material) is
+reproduced and recorded.
+
+**Post-phase audit (2026-11-19): lesson and result.** The ported unit tests
+passed while four real defects were present (B45-B48: capture sign, trailing
+placement groups, the 3-v-3 name family, the book's en-passant capturer). They
+were found by differential runs against an independent tablebase reader and
+the predecessor binary: `tools/tb_compare.py` and `tools/book_compare.py`. Final
+state: 3,900 random tablebase positions (3-4-5 and 6-man) and 315 book
+positions agree. **Rule of thumb for later phases: a ported feature that reads
+external data needs a differential run against the predecessor before it is
+called done; unit tests on tiny fixtures are not a parity gate.** Open
+decision from the audit: `tbhits` in the `info` line (the plan wanted it, the
+predecessor never prints it).
 
 **2026-11-19 (P6):** PGO (`tools/pgo_build.ps1`) gives +7-12 %: same-session depth 20 = **2.51-2.61 M vs 1.36-1.41 M NPS (1.79-1.92x)**, formal R3 (>= 2.43 M) reached; target-cpu=znver4 gave nothing (docs/baselines.md 7.11). The release workflow must run the PGO script per host/ISA variant.
 
@@ -215,7 +228,7 @@ depth-only, and history/correction history reset every search). Step 11 was
 dropped (see §2.3). Step 13 (match gates) is tracked in `migration-plan.md`,
 where the project owner recorded 3 x 100 fastchess games.
 
-Verification status on the last run (2026-11-19, after Phase 6): all 305 tests
+Verification status on the last run (2026-11-19, after Phase 6): all 312 tests
 pass locally on Windows (the full-set DTZ-ranking tests skip when
 `KNIGHTBYTE_SYZYGY_PATH` is unset) using the Stockfish verifier from
 `C:\dev\c#-chess-engines\stockfish`; fmt/clippy clean; all four bench pins

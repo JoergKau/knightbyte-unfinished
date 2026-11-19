@@ -535,18 +535,6 @@ impl Searcher {
             let Some((score, pv)) = self.search_root(position, depth, last_score, observer) else {
                 break;
             };
-            // Fifty-move-aware root correction: the leaf probe ignores the real
-            // counter, so a WDL win that the actual counter turns into a cursed
-            // win or draw must not be reported as a decisive +TB_WIN_SCORE.
-            // Mate scores and genuine tablebase wins are untouched.
-            let score = if self.root_tb_wdl.is_some_and(|wdl| matches!(wdl, -1..=1))
-                && score.abs() >= crate::tb::syzygy::TB_WIN_SCORE_MIN
-                && score.abs() < MATE_LIMIT
-            {
-                0
-            } else {
-                score
-            };
             last_score = score;
             best.score = score;
             best.depth = depth;
@@ -659,6 +647,20 @@ impl Searcher {
             if self.stopped {
                 return None;
             }
+            // Fifty-move-aware root correction, applied before the window
+            // test (so a clamped score that leaves the window is re-searched,
+            // exactly like the reference): the leaf probe ignores the real
+            // counter, so a WDL win that the actual counter turns into a
+            // cursed win or draw must not be reported as a decisive
+            // tablebase win. Mate scores and genuine wins are untouched.
+            let score = if self.root_tb_wdl.is_some_and(|wdl| matches!(wdl, -1..=1))
+                && score.abs() >= crate::tb::syzygy::TB_WIN_SCORE_MIN
+                && score.abs() < MATE_LIMIT
+            {
+                0
+            } else {
+                score
+            };
             if score > alpha && score < beta {
                 return Some((score, self.pv.line(0).to_vec()));
             }

@@ -145,7 +145,8 @@ fn en_passant_capture_possible(position: &Position) -> bool {
     if pawn_rank > 7 {
         return false;
     }
-    let capturer = if position.side() == WHITE { BP } else { WP };
+    // The capturing pawn belongs to the side to move.
+    let capturer = if position.side() == WHITE { WP } else { BP };
     for delta in [-1_i8, 1] {
         let file = target_file as i8 + delta;
         if (0..8).contains(&file) && position.piece_at(pawn_rank * 8 + file as u8) == capturer {

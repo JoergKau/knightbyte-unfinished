@@ -48,21 +48,24 @@ pub(crate) fn probe_wdl(inner: &mut Inner, pos: &Pos) -> TableValue {
         if !legal {
             continue;
         }
-        let value = probe_ab(inner, &next, -2, -best_cap, 1);
-        if value.success == 0 {
+        let probed = probe_ab(inner, &next, -2, -best_cap, 1);
+        if probed.success == 0 {
             return TableValue::FAILED;
         }
-        if value.value > best_cap {
-            if value.value == 2 {
+        // The child is probed from the opponent's side, so its value is
+        // negated to read from ours.
+        let value = -probed.value;
+        if value > best_cap {
+            if value == 2 {
                 return TableValue {
                     value: 2,
                     success: 2,
                 };
             }
             if !is_en_passant(pos, mv) {
-                best_cap = value.value;
-            } else if value.value > best_ep {
-                best_ep = value.value;
+                best_cap = value;
+            } else if value > best_ep {
+                best_ep = value;
             }
         }
     }

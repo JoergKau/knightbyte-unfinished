@@ -234,6 +234,9 @@ pub(crate) fn encode(p: &mut [i32; TB_PIECES], ei: &EncInfo, shape: &EncShape, e
     let binary = tables();
     let n = shape.num;
     let mut index;
+    // First slot not yet placed by the leading group(s). The trailing loop
+    // below adds every remaining piece group for both encodings.
+    let mut k;
 
     if p[0] & 0x04 != 0 {
         for slot in p.iter_mut().take(n) {
@@ -264,6 +267,7 @@ pub(crate) fn encode(p: &mut [i32; TB_PIECES], ei: &EncInfo, shape: &EncShape, e
                 return 0;
             }
             index = kk as u64;
+            k = 2;
         } else {
             let s1 = i32::from(p[1] > p[0]);
             let s2 = i32::from(p[2] > p[0]) + i32::from(p[2] > p[1]);
@@ -290,8 +294,9 @@ pub(crate) fn encode(p: &mut [i32; TB_PIECES], ei: &EncInfo, shape: &EncShape, e
                     + (DIAG[p[1] as usize] as i32 - s1) as u64 * 6
                     + (DIAG[p[2] as usize] as i32 - s2) as u64;
             }
+            k = 3;
         }
-        index * ei.factor[0]
+        index *= ei.factor[0];
     } else {
         for i in 1..shape.pawns0 {
             for j in (i + 1)..shape.pawns0 {
@@ -301,7 +306,7 @@ pub(crate) fn encode(p: &mut [i32; TB_PIECES], ei: &EncInfo, shape: &EncShape, e
             }
         }
 
-        let k = shape.pawns0;
+        k = shape.pawns0;
         index = binary.pawn_idx[enc - 1][k - 1][FLAP[enc - 1][p[0] as usize] as usize];
         for i in 1..k {
             index = index
@@ -309,7 +314,6 @@ pub(crate) fn encode(p: &mut [i32; TB_PIECES], ei: &EncInfo, shape: &EncShape, e
         }
         index *= ei.factor[0];
 
-        let mut group_end = k;
         if shape.pawns1 != 0 {
             let end = k + shape.pawns1;
             for i in k..end {
@@ -331,33 +335,34 @@ pub(crate) fn encode(p: &mut [i32; TB_PIECES], ei: &EncInfo, shape: &EncShape, e
                 );
             }
             index = index.wrapping_add(sum.wrapping_mul(ei.factor[k]));
-            group_end = end;
-        }
-
-        let mut k = group_end;
-        while k < n {
-            let end = k + ei.norm[k] as usize;
-            for i in k..end {
-                for j in (i + 1)..end {
-                    if p[i] > p[j] {
-                        p.swap(i, j);
-                    }
-                }
-            }
-            let mut sum = 0_u64;
-            for i in k..end {
-                let square = p[i] as usize;
-                let mut skips = 0_usize;
-                for &other in p.iter().take(k) {
-                    skips += usize::from(square > other as usize);
-                }
-                sum = sum.wrapping_add(binary.binomial_[i - k + 1][square.wrapping_sub(skips)]);
-            }
-            index = index.wrapping_add(sum.wrapping_mul(ei.factor[k]));
             k = end;
         }
-        index
     }
+
+    // The remaining piece groups (for example the fourth and fifth piece of a
+    // pawnless table) each add a combination index scaled by their factor.
+    while k < n {
+        let end = k + ei.norm[k] as usize;
+        for i in k..end {
+            for j in (i + 1)..end {
+                if p[i] > p[j] {
+                    p.swap(i, j);
+                }
+            }
+        }
+        let mut sum = 0_u64;
+        for i in k..end {
+            let square = p[i] as usize;
+            let mut skips = 0_usize;
+            for &other in p.iter().take(k) {
+                skips += usize::from(square > other as usize);
+            }
+            sum = sum.wrapping_add(binary.binomial_[i - k + 1][square.wrapping_sub(skips)]);
+        }
+        index = index.wrapping_add(sum.wrapping_mul(ei.factor[k]));
+        k = end;
+    }
+    index
 }
 
 /// `C(k, n)` with the same shape as the reference helper.

@@ -45,3 +45,8 @@ book file is distributed with the engine.
 The project's test and benchmark scripts may invoke an external UCI engine for
 FEN verification. That tool is not distributed with KnightByte and is not a
 runtime dependency.
+
+`tools/tb_compare.py` imports the `chess` Python package (python-chess,
+GPL-3.0) as an independent tablebase reader to cross-check probe results. It is
+a developer-only script, is not part of the release package and is not linked
+into the engine.

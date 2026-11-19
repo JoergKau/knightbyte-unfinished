@@ -107,13 +107,16 @@ fn signature_flips_ranks_when_black_is_to_move() {
 fn en_passant_is_only_recorded_when_a_capture_exists() {
     let start = start_position();
     // After 1.e4 the engine keeps e3, but no black pawn can capture; the book
-    // must store the position without an en-passant flag. Stockfish normalises
-    // such a FEN away, so the position is derived by playing the move.
+    // must store the position without an en-passant flag. The external
+    // verifier normalises such a FEN away, so the position is derived by
+    // playing the move.
     let with_ep = start.make_move(Move::new(12, 28, flags::DOUBLE_PUSH));
     let plain = verified("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1");
     assert_eq!(signature_hex(&plain), signature_hex(&with_ep));
 
-    // 1.e4 a6 2.e5 d5: black's double push leaves d6, and exd6 is available.
+    // 1.e4 a6 2.e5 d5: black's double push leaves d6 and exd6 is available,
+    // so this position records the en-passant file. The same board without
+    // the en-passant square must produce a different signature.
     let with_capture_ep = play(
         &start,
         &[
@@ -123,10 +126,29 @@ fn en_passant_is_only_recorded_when_a_capture_exists() {
             Move::new(51, 35, flags::DOUBLE_PUSH),
         ],
     );
-    let capture_plain = verified("rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2");
+    let same_board_without_ep =
+        verified("rnbqkbnr/1pp1pppp/p7/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq - 0 3");
     assert_ne!(
-        signature_hex(&capture_plain),
+        signature_hex(&same_board_without_ep),
         signature_hex(&with_capture_ep)
+    );
+
+    // 1.e4 e5 2.d4: white's double push leaves d3, but the only adjacent
+    // pawn is white's own e4, so no capture exists and no flag is recorded.
+    // (A capturer of the wrong colour would record one here.)
+    let own_pawn_adjacent = play(
+        &start,
+        &[
+            Move::new(12, 28, flags::DOUBLE_PUSH),
+            Move::new(52, 36, flags::DOUBLE_PUSH),
+            Move::new(11, 27, flags::DOUBLE_PUSH),
+        ],
+    );
+    let own_pawn_adjacent_plain =
+        verified("rnbqkbnr/pppp1ppp/8/4p3/3PP3/8/PPP2PPP/RNBQKBNR b KQkq - 0 2");
+    assert_eq!(
+        signature_hex(&own_pawn_adjacent_plain),
+        signature_hex(&own_pawn_adjacent)
     );
 }
 
@@ -308,4 +330,92 @@ fn missing_and_malformed_books_are_rejected() {
     assert!(!book.load("this-file-does-not-exist.ctg"));
     assert!(!book.is_loaded());
     assert!(!book.load_bytes(vec![0_u8; 4096]));
+}
+
+// ---------------------------------------------------------------------------
+// Real-book tests. A third-party book is never published, so these run only
+// when a book is available locally (`KNIGHTBYTE_BOOK_PATH`, or a `.ctg` in the
+// git-ignored `books/` directory) and skip silently otherwise.
+// ---------------------------------------------------------------------------
+
+/// Loads the local test book, or returns `None` when there is none.
+fn local_book() -> Option<CtgBook> {
+    let path = std::env::var_os("KNIGHTBYTE_BOOK_PATH")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/books"))
+                .ok()?
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .find(|path| path.extension().is_some_and(|ext| ext == "ctg"))
+        })?;
+    let mut book = CtgBook::default();
+    book.load(&path.to_string_lossy()).then_some(book)
+}
+
+#[test]
+fn a_real_book_loads_with_a_sensible_entry_count() {
+    let Some(book) = local_book() else { return };
+    assert!(book.is_loaded());
+    assert!(
+        book.entry_count() > 10_000,
+        "expected a large book, got {} entries",
+        book.entry_count()
+    );
+}
+
+#[test]
+fn a_real_book_always_answers_the_start_position_with_a_legal_move() {
+    let Some(book) = local_book() else { return };
+    let start = start_position();
+    let legal = knightbyte::board::movegen::legal(&start);
+    let mut seen = std::collections::HashSet::new();
+    for seed in 1..=200_u64 {
+        let mut rng = BookRng::new(seed);
+        let mv = book.pick_book_move(&start, &mut rng);
+        assert!(
+            !mv.is_none(),
+            "the start position must always yield a book move"
+        );
+        assert!(
+            legal.as_slice().contains(&mv),
+            "illegal book move {}",
+            mv.to_uci()
+        );
+        seen.insert(mv.to_uci());
+    }
+    assert!(
+        seen.len() >= 2,
+        "expected variety in book picks, got {seen:?}"
+    );
+}
+
+#[test]
+fn a_real_book_can_be_followed_for_both_sides() {
+    // Plays book moves for white and black: this exercises the rank-flip
+    // decode path for black and the castling decode path. Every move must be
+    // legal in the position it is played from.
+    let Some(book) = local_book() else { return };
+    let mut position = start_position();
+    let mut rng = BookRng::new(7);
+    for ply in 0..8 {
+        let mv = book.pick_book_move(&position, &mut rng);
+        assert!(!mv.is_none(), "the book ran out at ply {ply}");
+        assert!(
+            knightbyte::board::movegen::legal(&position)
+                .as_slice()
+                .contains(&mv),
+            "illegal book move {} at ply {ply}",
+            mv.to_uci()
+        );
+        position = position.make_move(mv);
+    }
+}
+
+#[test]
+fn a_real_book_has_nothing_for_a_late_endgame() {
+    let Some(book) = local_book() else { return };
+    let endgame = verified("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1");
+    let mut rng = BookRng::new(0);
+    assert!(book.pick_book_move(&endgame, &mut rng).is_none());
 }
