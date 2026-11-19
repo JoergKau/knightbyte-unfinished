@@ -33,3 +33,7 @@ __pycache__/
 
 # Release artifacts (tools/build_release.ps1)
 /dist/
+
+# Lever campaign output (tools/sprt_arm.ps1)
+/matches/
+config.json

@@ -93,7 +93,9 @@ function Invoke-SprtArm {
     if (-not $Engine -or -not (Test-Path $Engine)) { throw "set `$env:KB_ENGINE to the campaign binary" }
     $book = Get-OpeningBook
     if (-not (Test-Path $book)) { throw "opening book not found: $book" }
-    New-Item -ItemType Directory -Force $OutDir | Out-Null
+    # An absolute folder, and fastchess runs inside it: it drops a config.json
+    # into its working directory, which must not be the repository.
+    $OutDir = (New-Item -ItemType Directory -Force $OutDir).FullName
     $log = Join-Path $OutDir "$Id.log"
     $pgn = Join-Path $OutDir "$Id.pgn"
     $result = Join-Path $OutDir "$Id.result.txt"
@@ -116,6 +118,7 @@ function Invoke-SprtArm {
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = Get-FastChess
     $info.Arguments = ($arguments | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join " "
+    $info.WorkingDirectory = $OutDir
     $info.UseShellExecute = $false
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true

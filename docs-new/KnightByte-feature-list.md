@@ -485,6 +485,7 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       and skip silently otherwise; a name-scan unit test registers one dummy
       file per material family so CI covers the scan without the large tables.
 - [x] `EvalFile` and `Contempt`: removed 2026-11-19 (ADR-0014), neither is advertised or accepted.
+- [x] Lever test plan (2026-11-19): `docs/audit-tests-KB.md`, built on the predecessor's `audit-tests.md`: 60 arms (one per lever) in five priorities, each with its option string, a measured fixed-depth pre-flight total and a command; the standard (400 games, 10+0.1, one thread, SPRT 0 to 5, LLR +/-2), the results log and a quick reference. Tooling: `tools/sprt_arm.ps1` (`Invoke-SprtArm`, `Get-ArmBench`) and `tools/lever_campaign.ps1` (the resumable queue with a pre-flight guard). `bench` now runs with the configured levers, so a lever that does nothing prints the default total. Nothing has been measured yet.
 - [x] The sixty levers (2026-11-19, ADR-0014, `docs/LEVERS.md`): 24 reference levers,
       25 hard-coded constants exposed with defaults equal to their old values (null
       move, RFP damping, razor, futility, LMP, history pruning, SEE margins,
