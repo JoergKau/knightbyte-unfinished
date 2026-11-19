@@ -440,3 +440,24 @@ identical positions, aggregate NPS over all threads):
 Extra (`go movetime` on the start position, reported NPS): 12 threads
 20.6 M, 16 threads 23.3 M (SMT region). R4 (>= 5x at 8 threads on 8 cores) is
 reached. The 1-thread pins are unchanged.
+
+### 7.11 P6 - PGO and target-cpu (2026-11-19)
+
+* **`target-cpu=znver4`** (plain build): no gain (`bench 16` 2.17-2.18 M vs
+  2.17-2.21 M), so no per-CPU rung is worth shipping for this host class.
+* **PGO** (`tools/pgo_build.ps1`: instrumented build, `bench 12` + `bench 16`
+  profile runs, `llvm-profdata merge`, `-Cprofile-use` rebuild, node pins
+  verified): `bench 16` median 2.16-2.21 M -> 2.36-2.42 M (+7-12 %). Pins
+  exact at 6/12/16/18. The profile is per host and is never checked in
+  (`*.profdata` / `*.profraw` and `pgo-work/` are git-ignored).
+
+Same-session depth 20 (identical 18,662,358 nodes, interleaved):
+
+| Build | KnightByte NPS | Predecessor NPS | Ratio |
+| :--- | ---: | ---: | ---: |
+| plain release | 2,348,083 - 2,378,056 | 1,363,397 - 1,406,052 | 1.67 - 1.74 |
+| **PGO release** | **2,511,531 - 2,614,226** | 1,363,397 - 1,406,052 | **1.79 - 1.92** |
+
+The PGO build passes the formal R3 mark (>= 2.43 M) and the same-session form
+(>= 1.60 M). Shipping the PGO binary is a packaging decision (the universal
+Windows build and the per-ISA variants of ADR-0001 each need their own profile).

@@ -24,3 +24,6 @@ Thumbs.db
 
 # Python bytecode
 __pycache__/
+
+# PGO scratch directory (tools/pgo_build.ps1)
+/pgo-work/

@@ -250,6 +250,10 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       `nodes`/`nps` and the `go nodes` limit now cover all threads. Measured
       scaling 2.07x / 4.01x / 7.08x at 2/4/8 threads (aggregate NPS 16.4 M at
       8 threads).
+- [x] P6 (2026-11-19): `tools/pgo_build.ps1` builds a profile-guided binary
+      (instrumented build, deterministic bench workloads, merge, rebuild) and
+      verifies the four node pins; +7-12 % speed, same-session depth-20 ratio
+      vs the predecessor 1.79-1.92. Profiles stay local to the host.
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).

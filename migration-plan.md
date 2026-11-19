@@ -705,7 +705,9 @@ make/unmake was rejected by the profile (`make_move` 3.7 %). **P7.0** then showe
 the documented multi-thread "collapse" was a node-accounting bug (B44: helpers never
 published their blocks, the main thread counted itself twice): with it fixed the
 scaling is 2.07x / 4.01x / 7.08x at 2 / 4 / 8 threads (aggregate 16.4 M NPS at 8
-threads; the predecessor reaches 5.74x on the same host).
+threads; the predecessor reaches 5.74x on the same host). **P6**: the PGO workflow
+(`tools/pgo_build.ps1`, pins verified) adds +7-12 %: same-session depth 20 is
+2.51-2.61 M vs 1.36-1.41 M NPS (1.79-1.92x); `target-cpu=znver4` gave no gain.
 Full numbers and the composition table are in `docs/baselines.md` section 7.
 
 **Measurement protocol**
