@@ -753,3 +753,45 @@ SHA-256 of every file matches `SHA256SUMS.txt` after unpacking the zip.
 Not measured: the second Windows host (mainstream AVX2 CPU, where the `v3` against
 `v2` comparison should be repeated and the `v4-vnni` build cannot run), and a
 clean Windows 10 machine without the Visual C++ redistributable.
+
+
+
+### 7.21 Allocation audit of the search (2026-11-19)
+
+`tests/alloc_audit.rs` installs a counting global allocator that counts only the
+thread running the search, warms the process up (lazily built tables, the
+network, the kernel selection allocate once per process), then searches the four
+bench positions to depth 8 and to depth 12 with a cleared table and records the
+allocations of each search.
+
+| Position | Depth | Nodes | Iterations | Allocations | Bytes |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 8 | 29,604 | 8 | 16 | 108 |
+| 0 | 12 | 305,691 | 12 | 24 | 188 |
+| 1 | 8 | 7,832 | 8 | 16 | 92 |
+| 1 | 12 | 59,503 | 12 | 24 | 216 |
+| 2 | 8 | 4,237 | 8 | 16 | 180 |
+| 2 | 12 | 38,151 | 12 | 24 | 280 |
+| 3 | 8 | 9,686 | 8 | 16 | 164 |
+| 3 | 12 | 52,963 | 12 | 24 | 284 |
+
+Result: **exactly two allocations per completed iteration and none per node or
+per search.** They are the principal-variation vectors of the iteration report
+and the carried result, outside the node loop; a 305,691-node search allocates 24
+times. The search, move generation, the picker, the evaluation, the accumulator
+kernels, SEE and the transposition table therefore contain no `Vec` growth,
+`Box`, `String` or `format!` on the node path.
+
+The test asserts a budget of three per iteration plus a handful, and that the
+deeper search (several times the nodes) allocates no more than its extra
+iterations explain. Sensitivity: a `Box` added to the quiescence entry made it
+fail. Not covered: the UCI output path (it formats one line per iteration, by
+design), the helper threads' own `Searcher` construction (once per helper) and
+the diagnostic `nnueeval` command (builds an evaluator per call).
+
+### 7.22 Search diagnostics cost (2026-11-19)
+
+The runtime-checked version of `searchstats` cost -2.7 % at `bench 16`; the
+second-instantiation design of ADR-0012 costs nothing measurable (-0.07 % at
+`bench 18`, 16 runs each, balanced ABBA). The counters are byte-identical to the
+predecessor's on four positions.

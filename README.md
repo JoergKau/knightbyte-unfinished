@@ -116,7 +116,14 @@ the shipped configuration and changing them is for tuning experiments. A lever
 whose feature has not been ported is accepted and has no effect.
 
 Besides the standard commands the engine understands `bench [depth]` (the
-deterministic node-count benchmark), `perft <depth>`, `nnueeval` and `d`.
+deterministic node-count benchmark), `perft <depth>`, `nnueeval` and `d`, and
+two hidden developer diagnostics, both off by default:
+
+* `searchstats [reset|off]` counts, for the searches that follow, the share of
+  quiescence nodes, the transposition-table probes and hits and the index of the
+  cutoff move; a bare `searchstats` prints the last counted search.
+* `nnueregions [reset|off]` counts accumulator refreshes per king region of the
+  network; a bare `nnueregions` prints the histogram and its shares.
 
 ## Known limitations
 

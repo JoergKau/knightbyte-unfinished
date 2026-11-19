@@ -86,6 +86,13 @@ pub(crate) fn refresh_into(
     accumulator: &mut [i16],
 ) {
     crate::node_stat!(FullRefreshes);
+    if crate::tools::diagnostics::region_counting() {
+        crate::tools::diagnostics::record_region(crate::eval::nnue::features::region(
+            net,
+            position,
+            perspective,
+        ));
+    }
     let mut features = [0_usize; MAX_ACTIVE_FEATURES];
     let count = active_features(net, position, perspective, &mut features);
     let weights = net.feature_weights();

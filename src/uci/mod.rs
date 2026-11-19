@@ -265,11 +265,15 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
             parser::Command::Display => handle_display(position.as_ref(), &mut output)?,
             parser::Command::Eval => handle_eval(position.as_ref(), &mut output)?,
             parser::Command::CheckMoves => handle_check_moves(position.as_ref(), &mut output)?,
-            parser::Command::NnueRegions => output.line(
-                "info string nnueregions: the king-region instrumentation is not ported yet",
-            )?,
-            parser::Command::SearchStats => output
-                .line("info string searchstats: the search instrumentation is not ported yet")?,
+            parser::Command::NnueRegions => handle_nnue_regions(command, &mut output)?,
+            parser::Command::SearchStats => {
+                // A finished search may still have helpers merging their
+                // counters; wait for them before reading the snapshot.
+                if active.is_none() {
+                    pool.wait_until_idle();
+                }
+                handle_search_stats(command, &mut output)?
+            }
             // `quit` stops and joins first: the worker finishes its
             // `bestmove`, the helper pool shuts down, and the process exits
             // cleanly.
@@ -799,6 +803,11 @@ fn spawn_active_search(
     // the join-first fallback; every search polls it every 1024 nodes. A
     // ponder search answers no bestmove itself; the loop decides its ending.
     let stop = searcher.arm_stop_flag();
+    // `searchstats` reports the last counted search: start a fresh snapshot
+    // before any thread of this search can merge into it.
+    if crate::tools::diagnostics::search_stats_enabled() {
+        crate::tools::diagnostics::clear_last_search();
+    }
     if pool.threads() > 1 {
         let helper_limits = Limits {
             soft_time_ms: None,
@@ -1142,6 +1151,60 @@ fn handle_nnue_eval(position: Option<&Position>, output: &mut Output) -> io::Res
         Some(position) => output.line(&format!("nnueeval {}", evaluate_position(position))),
         None => output.line("nnueeval none"),
     }
+}
+
+/// Handles the hidden `nnueregions` command: the real-game king-region
+/// histogram of accumulator refreshes.
+///
+/// `reset` clears the counters and starts counting, `off` stops counting
+/// (the counts stay readable), and any other form only prints the histogram.
+fn handle_nnue_regions(line: &str, output: &mut Output) -> io::Result<()> {
+    use crate::tools::diagnostics;
+    match line.split_whitespace().nth(1) {
+        Some("reset") => {
+            diagnostics::reset_regions();
+            diagnostics::set_region_counting(true);
+            output.line("info string nnueregions: counters cleared, counting STARTED")?;
+        }
+        Some("off") => {
+            diagnostics::set_region_counting(false);
+            output.line("info string nnueregions: counting STOPPED")?;
+        }
+        _ => {}
+    }
+    let regions = crate::eval::nnue::embedded_net().region_count();
+    let (counts, total) = diagnostics::region_snapshot(regions);
+    output.line(&diagnostics::region_report(
+        &counts,
+        total,
+        diagnostics::region_counting(),
+    ))?;
+    if let Some(shares) = diagnostics::region_shares(&counts, total) {
+        output.line(&shares)?;
+    }
+    Ok(())
+}
+
+/// Handles the hidden `searchstats` command: the counters of the last search
+/// that ran with counting on.
+///
+/// `reset` clears the snapshot and counts the following searches, `off` stops
+/// counting, and any other form only prints the snapshot.
+fn handle_search_stats(line: &str, output: &mut Output) -> io::Result<()> {
+    use crate::tools::diagnostics;
+    match line.split_whitespace().nth(1) {
+        Some("reset") => {
+            diagnostics::set_search_stats_enabled(true);
+            diagnostics::clear_last_search();
+            output.line("info string searchstats: counters cleared, counting STARTED")?;
+        }
+        Some("off") => {
+            diagnostics::set_search_stats_enabled(false);
+            output.line("info string searchstats: counting STOPPED")?;
+        }
+        _ => {}
+    }
+    output.line(&diagnostics::last_search().report())
 }
 
 /// Handles the diagnostic `d` command: position, FEN and zobrist key.

@@ -41,7 +41,7 @@ const SEE_THRESHOLD: i32 = -50;
 
 impl Searcher {
     /// Resolves captures at a leaf node.
-    pub(crate) fn quiescence(
+    pub(crate) fn quiescence<const STATS: bool>(
         &mut self,
         position: &Position,
         mut alpha: i32,
@@ -50,6 +50,9 @@ impl Searcher {
         previous: Option<Previous>,
     ) -> i32 {
         self.nodes += 1;
+        if STATS {
+            self.stats.qnodes += 1;
+        }
         crate::node_stat!(QsearchNodes);
         if ply > self.seldepth {
             self.seldepth = ply;
@@ -82,9 +85,16 @@ impl Searcher {
 
         let mut tt_eval: Option<i32> = None;
         let mut tt_probe: Option<crate::search::tt::TtEntry> = None;
-        if self.params.use_qs_tt_probe
-            && let Some(entry) = self.tables.tt.probe(position.key())
-        {
+        let qs_found = if self.params.use_qs_tt_probe {
+            let found = self.tables.tt.probe(position.key());
+            if STATS {
+                self.stats.record_qtt_probe(found.is_some());
+            }
+            found
+        } else {
+            None
+        };
+        if let Some(entry) = qs_found {
             tt_probe = Some(entry);
             let stored_eval = i32::from(entry.eval);
             if stored_eval != NO_STATIC_EVAL {
@@ -226,7 +236,7 @@ impl Searcher {
             self.push_accumulators(position, &next, mv, ply);
             self.move_stack[ply] = mv;
             legal_moves += 1;
-            let score = -self.quiescence(
+            let score = -self.quiescence::<STATS>(
                 &next,
                 -beta,
                 -alpha,
@@ -242,6 +252,9 @@ impl Searcher {
                 best_move = mv;
             }
             if score >= beta {
+                if STATS {
+                    self.stats.record_qcutoff((legal_moves - 1) as usize);
+                }
                 if self.params.use_micro_riders {
                     break;
                 }

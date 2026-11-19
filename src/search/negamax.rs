@@ -126,7 +126,7 @@ impl Searcher {
     /// `path_extensions` is the extension budget already spent along this
     /// path.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn negamax(
+    pub(crate) fn negamax<const STATS: bool>(
         &mut self,
         position: &Position,
         mut alpha: i32,
@@ -216,7 +216,7 @@ impl Searcher {
         }
 
         if depth <= 0 {
-            return self.quiescence(position, alpha, beta, ply, previous);
+            return self.quiescence::<STATS>(position, alpha, beta, ply, previous);
         }
 
         // The exact-bound decision compares against the window as it stood
@@ -231,7 +231,11 @@ impl Searcher {
         let mut tt_move = Move::NONE;
         let mut tt_probe = None;
         let mut tt_eval = None;
-        if let Some(entry) = self.tables.tt.probe(position.key()) {
+        let tt_found = self.tables.tt.probe(position.key());
+        if STATS {
+            self.stats.record_tt_probe(tt_found.is_some());
+        }
+        if let Some(entry) = tt_found {
             // Bug B35 fix (reference bug 147): the table move is used as stored,
             // markers included. KnightByte's table packing keeps the full move,
             // so a stored castling or en-passant move compares equal to the
@@ -397,7 +401,7 @@ impl Searcher {
             if depth <= self.params.razor_max_depth {
                 let margin = razor_margin(depth);
                 if eval + margin <= alpha {
-                    let score = self.quiescence(position, alpha, beta, ply, previous);
+                    let score = self.quiescence::<STATS>(position, alpha, beta, ply, previous);
                     if self.stopped {
                         return 0;
                     }
@@ -436,7 +440,7 @@ impl Searcher {
             self.tables.tt.prefetch(next.key());
             self.copy_accumulators(ply);
             self.move_stack[ply] = Move::NONE;
-            let score = -self.negamax(
+            let score = -self.negamax::<STATS>(
                 &next,
                 -beta,
                 -beta + 1,
@@ -476,7 +480,7 @@ impl Searcher {
             let tt_score = Self::probe_score(&entry, ply);
             let singular_beta = tt_score - self.params.singular_beta_slope * depth;
             let singular_depth = depth / 2;
-            let alternative = self.negamax(
+            let alternative = self.negamax::<STATS>(
                 position,
                 singular_beta - 1,
                 singular_beta,
@@ -521,7 +525,7 @@ impl Searcher {
         }
 
         if depth <= 0 {
-            return self.quiescence(position, alpha, beta, ply, previous);
+            return self.quiescence::<STATS>(position, alpha, beta, ply, previous);
         }
 
         crate::node_stat!(NegamaxMoveLists);
@@ -812,7 +816,7 @@ impl Searcher {
                 // First legal move: a principal-variation child at PV nodes,
                 // otherwise the opposite node type.
                 let child_cut = if pv_node { false } else { !cut_node };
-                score = -self.negamax(
+                score = -self.negamax::<STATS>(
                     &next,
                     -beta,
                     -alpha,
@@ -827,7 +831,7 @@ impl Searcher {
             } else {
                 // Reduced scout of a late move: treated as an expected cut
                 // node.
-                score = -self.negamax(
+                score = -self.negamax::<STATS>(
                     &next,
                     -alpha - 1,
                     -alpha,
@@ -845,7 +849,7 @@ impl Searcher {
                         reduction,
                         self.params.use_re_search_reduction,
                     );
-                    score = -self.negamax(
+                    score = -self.negamax::<STATS>(
                         &next,
                         -alpha - 1,
                         -alpha,
@@ -861,7 +865,7 @@ impl Searcher {
                 if score > alpha && score < beta {
                     // Full-window re-search establishes the principal
                     // variation: a PV child, never a cut node.
-                    score = -self.negamax(
+                    score = -self.negamax::<STATS>(
                         &next,
                         -beta,
                         -alpha,
@@ -896,6 +900,9 @@ impl Searcher {
                     alpha = score;
                     self.pv.update(ply, mv);
                     if score >= beta {
+                        if STATS {
+                            self.stats.record_cutoff((legal_moves - 1) as usize);
+                        }
                         // The history branch is chosen by "not a capture", so a
                         // quiet promotion credits the quiet-move tables even
                         // though it is excluded from the failed-quiet list.

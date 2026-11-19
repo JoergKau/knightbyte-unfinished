@@ -747,7 +747,7 @@ Full numbers and the composition table are in `docs/baselines.md` section 7.
   already implemented (2026-11-19); the next open step is the measurement rig
   (P0) followed by the one-pass move path (P1).
 - [x] Profile the parity build; identify the top three costs. (Done 2026-11-19: `tools/profile_report.py`, first profile in `docs/baselines.md` 7.9.) Do not guess.
-- [ ] (No counting allocator exists yet.) Zero-allocation audit: counting allocator in tests; no `Vec` growth, `String` formatting, `Box` or `format!` in search/eval.
+- [x] Zero-allocation audit: counting allocator in tests; no `Vec` growth, `String` formatting, `Box` or `format!` in search/eval. (Done 2026-11-19: `tests/alloc_audit.rs`, `docs/baselines.md` 7.21: two allocations per completed iteration, none per node, none per search.)
 - [ ] Position representation: benchmark copy-make vs make/unmake on M4 and x86; pick the faster, document the ADR.
 - [ ] TT: prefetch, allocation strategy, generation aging, bucket probe order, hashfull behavior.
 - [ ] NNUE: incremental update validation, kernel selection per host, alignment, `loadu` vs aligned, accumulator layout.

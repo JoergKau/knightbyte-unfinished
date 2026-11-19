@@ -212,6 +212,12 @@ pub struct Searcher {
     /// own king moved falls back to a full refresh (the feature rows depend
     /// on the own king's region and mirror).
     accumulator_stack: Vec<[Vec<i16>; 2]>,
+    /// Whether this search counts the `searchstats` diagnostics. Copied once
+    /// per search from the process-wide switch, so the node path reads a
+    /// plain field and never an atomic.
+    pub(crate) collect_stats: bool,
+    /// This searcher's `searchstats` counters for the current search.
+    pub(crate) stats: crate::tools::diagnostics::SearchStats,
 }
 
 impl Searcher {
@@ -257,6 +263,8 @@ impl Searcher {
             completed_depth: 0,
             trace: std::env::var_os("KNIGHTBYTE_TRACE").is_some(),
             accumulator_stack: Self::accumulator_stack(),
+            collect_stats: false,
+            stats: crate::tools::diagnostics::SearchStats::new(),
         }
     }
 
@@ -406,8 +414,30 @@ impl Searcher {
     /// Runs iterative deepening and returns the best move.
     ///
     /// `observer` is called after every completed iteration; pass a closure
-    /// that ignores its argument when no reporting is needed.
+    /// that ignores its argument when no reporting is needed. When the
+    /// `searchstats` diagnostics are on, the searcher's counters are merged
+    /// into the process-wide snapshot as the search ends.
     pub fn search(
+        &mut self,
+        position: &Position,
+        limits: Limits,
+        observer: &mut dyn FnMut(SearchEvent),
+    ) -> SearchResult {
+        self.collect_stats = crate::tools::diagnostics::search_stats_enabled();
+        if self.collect_stats {
+            self.stats = crate::tools::diagnostics::SearchStats::new();
+        }
+        let result = self.search_inner(position, limits, observer);
+        if self.collect_stats {
+            self.stats.nodes = self.nodes;
+            crate::tools::diagnostics::merge_into_last_search(&self.stats);
+            self.collect_stats = false;
+        }
+        result
+    }
+
+    /// The iterative-deepening driver behind [`Self::search`].
+    fn search_inner(
         &mut self,
         position: &Position,
         limits: Limits,
@@ -532,7 +562,14 @@ impl Searcher {
             if self.stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            let Some((score, pv)) = self.search_root(position, depth, last_score, observer) else {
+            // The counting variant of the search is a separate instantiation:
+            // the normal one contains no statistics code at all.
+            let root = if self.collect_stats {
+                self.search_root::<true>(position, depth, last_score, observer)
+            } else {
+                self.search_root::<false>(position, depth, last_score, observer)
+            };
+            let Some((score, pv)) = root else {
                 break;
             };
             last_score = score;
@@ -611,7 +648,7 @@ impl Searcher {
     /// geometrically by half of itself per cycle. A mate score or an exhausted
     /// cycle budget drops the loop back to the full window, which terminates
     /// the iteration.
-    fn search_root(
+    fn search_root<const STATS: bool>(
         &mut self,
         position: &Position,
         depth: i32,
@@ -632,7 +669,7 @@ impl Searcher {
 
         let mut cycles = 0;
         loop {
-            let score = self.negamax(
+            let score = self.negamax::<STATS>(
                 position,
                 alpha,
                 beta,

@@ -360,9 +360,18 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       a normal search — is ignored. The `Ponder` option stays unadvertised
       (CCRL requires ponder off). The burst and zero-iteration ponderhit
       cases are byte-identical to the reference binary.
-- [ ] `nnueregions` / `searchstats` full instrumentation (the commands are
-      recognised and answer honestly; the king-region histogram and the search
-      instrumentation land with their features).
+- [x] `nnueregions` / `searchstats` full instrumentation (2026-11-19, ADR-0012):
+      `searchstats [reset|off]` reports nodes, quiescence share, TT probes and
+      hits (main search and quiescence) and the cutoff-move index, merged over all
+      threads, byte-identical to the predecessor on four positions; `nnueregions
+      [reset|off]` prints the per-king-region histogram of accumulator refreshes
+      and its shares (KnightByte's own refreshes, so absolute counts differ from
+      the predecessor's lazy ones). The counting search is a second instantiation
+      (`const STATS`), so the playing code is unchanged: no speed cost. Off by
+      default.
+- [x] Allocation audit (2026-11-19, docs/baselines.md 7.21): `tests/alloc_audit.rs`
+      counts allocations of a search with a counting allocator; exactly two per
+      completed iteration (the PV vectors), none per node.
 - [x] Real `stop` behaviour and the worker-thread search (step 4, above).
 - [x] Real `go ponder`/`ponderhit` behaviour (step 5, above).
 - [x] Step 6: `go mate N` stops at the first completed iteration proving a
