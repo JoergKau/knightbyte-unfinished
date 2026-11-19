@@ -2,8 +2,10 @@
 
 ## Runtime
 
-KnightByte has no third-party runtime dependencies. The release binary is built
-from the Rust standard library and the project's own source code.
+KnightByte has one third-party runtime dependency, `memmap2` (see "Runtime
+dependencies" below). Apart from it, the release binary is built from the Rust
+standard library and the project's own source code. The Windows executables link
+the C runtime statically; no Visual C++ redistributable is needed.
 
 ## Embedded network
 
@@ -23,6 +25,7 @@ The test suite uses the following crate; it is not linked into release builds.
 | Crate | Version | License | Purpose |
 | :--- | :--- | :--- | :--- |
 | `memmap2` | 0.9 | MIT OR Apache-2.0 | Read-only memory mapping of Syzygy tablebase files |
+| `libc` | 0.2 | MIT OR Apache-2.0 | Used by `memmap2` on macOS and Linux only (not part of the Windows executables) |
 
 The mapping is opened only when a `SyzygyPath` is configured; a build used
 without tablebases never calls it.

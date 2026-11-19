@@ -682,6 +682,15 @@ disagreed before versus 0 of 315 (400 samples each) after.
 - **Actual:** the port wrapped the failed read in `TableValue::ok(...)`, which resets the flag to success and invents a DTZ of 1 (or 101): the root probe "succeeded" and chose a bogus DTZ-optimal move. Any user with a WDL-only table set (no `.rtbz` files) was affected.
 - **Status:** fixed 2026-11-19 (`src/tb/syzygy/probe.rs`). `an_absent_dtz_file_leaves_wdl_working` asserts the root probe fails. Verified: 120 random positions with a WDL-only 3-4-5 set give identical score and best move in both engines.
 
+## B51 - the Windows executable needed the Visual C++ runtime
+
+- **Date:** 2026-11-19
+- **Build / commit:** `5e4eec4` (every Windows release build up to that point; found while checking the import table for the Windows 10 compatibility item)
+- **Command or FEN:** `python tools/pe_imports.py target/release/knightbyte.exe`
+- **Expected:** an executable that starts on a plain Windows 10 or 11 installation: only system DLLs are imported.
+- **Actual:** the default MSVC build links the C runtime dynamically and imported `VCRUNTIME140.dll` (and the `api-ms-win-crt-*` forwarders). A machine without the Visual C++ redistributable, which a tester's clean installation or a virtual machine often is, refuses to start the engine with a "VCRUNTIME140.dll was not found" dialog and no UCI output. On a development machine the DLL is always present, so no test could notice.
+- **Status:** fixed 2026-11-19. The C runtime is linked statically (`-Ctarget-feature=+crt-static` in `.cargo/config.toml`, repeated in `tools/pgo_build.ps1` because `RUSTFLAGS` replaces the config). The executable now imports only `KERNEL32`, `ntdll`, `bcryptprimitives` and the `api-ms-win-core-synch` forwarder. `tools/build_release.ps1` fails when any other DLL appears. Speed unchanged (+0.3 %, inside the noise). Not verified on a machine without the redistributable (none available here); the import table is the evidence.
+
 ## Predecessor behaviour
 
 Predecessor quirks are tracked in the local quirk register, which is not part of

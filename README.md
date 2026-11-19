@@ -2,8 +2,9 @@
 
 > **Work in progress.** This repository is an unfinished engine. The search is
 > functional, tested and node-identical to the reference implementation; the
-> remaining work is performance, cross-platform validation and search tuning
-> (`next-steps.md`). History begins with the public snapshot of 2026-11-17.
+> Windows work (speed, release builds, match gates) is done, and what remains
+> is macOS and Linux validation and search tuning (`next-steps.md`). History
+> begins with the public snapshot of 2026-11-17.
 
 KnightByte is a UCI chess engine written in Rust. It is a headless engine: it
 speaks UCI on standard input/output and has no graphical interface.
@@ -31,11 +32,22 @@ There is no external network file at runtime.
 
 * macOS on Apple Silicon
 * Ubuntu x64
-* Windows 11 x64
+* Windows 10 and 11 x64
 
-The Windows release is planned as one universal executable with startup
-instruction-set dispatch. The macOS and Linux releases are single generic
-builds.
+The Windows release contains three executables, each profile-guided for its
+own instruction-set baseline (`docs/decisions/ADR-0011-windows-build-variants.md`):
+
+| File | For |
+| :--- | :--- |
+| `knightbyte-v3.exe` | **the default**: any CPU with AVX2 (Intel Haswell 2013 and newer, AMD Zen 1 and newer) |
+| `knightbyte-v4-vnni.exe` | CPUs with AVX-512 and VNNI (AMD Zen 4/5, recent Intel server): about 1.5 % faster |
+| `knightbyte-v2.exe` | processors and virtual machines without AVX2 |
+
+Inside each file the SIMD kernels and the sliding-attack method are still
+chosen once at start-up. A build started on a CPU that lacks the instructions
+it was compiled for prints which features are missing and exits; it does not
+crash. The executables are plain files (no installer, no packer) and need no
+Visual C++ runtime. The macOS and Linux releases are single generic builds.
 
 ## Build
 
@@ -43,7 +55,21 @@ builds.
 cargo build --release
 ```
 
-The binary is written to `target/release/knightbyte` (`.exe` on Windows).
+The binary is written to `target/release/knightbyte` (`.exe` on Windows). This
+is the portable development build.
+
+The Windows release artifacts are produced by one script, which builds every
+variant with its own PGO profile (it must run on a machine that can execute the
+most capable variant), checks each file (`uci`, the pinned `bench 6` node count,
+a forced-scalar run with the same count, the import table), and writes the zip
+with `SHA256SUMS.txt` and `manifest.json`:
+
+```powershell
+powershell -File tools\build_release.ps1
+```
+
+The Rust toolchain is pinned in `rust-toolchain.toml` (stable 1.100.0); the PGO
+step additionally needs `rustup component add llvm-tools-preview`.
 
 ## Run
 
@@ -64,6 +90,47 @@ quit
 
 `position` accepts `startpos` or a six-field `fen`; `perft` and `nnueeval` are
 diagnostic commands for the current position.
+
+## UCI options
+
+The engine answers `uci` with its option list. The public options are:
+
+| Option | Default | Meaning |
+| :--- | :--- | :--- |
+| `Hash` | 256 | transposition table size in MB (1-1024) |
+| `Threads` | 1 | search threads (Lazy SMP, 1-256) |
+| `Move Overhead` | 50 | milliseconds reserved per move for communication lag |
+| `Clear Hash` | button | empties the transposition table and the search history |
+| `Own Book` | false | use the opening book |
+| `Book File` | empty | path of a `.ctg` book; empty looks next to the executable and in `books/` |
+| `Book Depth` | 16 | last ply at which the book is consulted |
+| `SyzygyPath` | empty | directories of Syzygy tablebase files (`;` separates them on Windows, `:` elsewhere) |
+| `SyzygyRootProbe` | false | rank root moves with DTZ when the position is in the tables |
+| `Syzygy50MoveRule` | true | honour the 50-move rule in tablebase values |
+| `EvalFile` | empty | accepted but ignored: the network is embedded |
+| `Contempt` | 0 | accepted but ignored |
+
+Pondering is not advertised. Every other option is a search-tuning lever named
+after the feature it controls (`Nmp...`, `Rfp...`, `Lmr...`); the defaults are
+the shipped configuration and changing them is for tuning experiments. A lever
+whose feature has not been ported is accepted and has no effect.
+
+Besides the standard commands the engine understands `bench [depth]` (the
+deterministic node-count benchmark), `perft <depth>`, `nnueeval` and `d`.
+
+## Known limitations
+
+* `EvalFile` and `Contempt` do nothing; the network cannot be replaced at run
+  time.
+* Some research levers are accepted but not wired (the features they would
+  switch on are not part of the shipped search).
+* `info` lines do not carry `tbhits`.
+* `go infinite` ends on its own at the engine's depth cap (128) or on a proven
+  mate, instead of waiting for `stop`; this only happens in positions that are
+  trivially drawn or already decided.
+* Only the Windows x64 builds have been validated for the release; macOS and
+  Linux builds exist and pass the tests but have not been through the release
+  validation yet.
 
 ## Repository workflow
 

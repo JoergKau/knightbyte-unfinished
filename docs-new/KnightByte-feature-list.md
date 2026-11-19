@@ -277,6 +277,14 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       build vs the predecessor at 8+0.08: 75.1 % (+191.8 Elo), no time loss,
       illegal move, disconnect or crash. The 2/4/8-thread matches were run by
       the project owner: no errors reported (figures to be added).
+- [x] Windows release engineering (2026-11-19, ADR-0011, docs/baselines.md 7.20):
+      three PGO executables (`v3` default, `v4-vnni`, `v2`) built, checked,
+      hashed and zipped by `tools/build_release.ps1` (SHA256SUMS.txt,
+      manifest.json); the universal-build gate measured on the Zen 4 host (a
+      `v3` baseline is within 1.5-1.8 % of dedicated `v4-vnni`); start-up guard
+      that rejects a CPU the build was not compiled for; static C runtime, no
+      Visual C++ redistributable needed (B51); README with the option table and
+      the known limitations.
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).

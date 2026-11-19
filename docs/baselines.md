@@ -715,3 +715,41 @@ the same predecessor and reports **no errors** in any configuration (no illegal
 moves, time losses or crashes) and a strong result; the figures and PGNs stay
 with the owner and are to be added here when supplied. A run that was started
 here for the 2-thread case was stopped on the owner's instruction and discarded.
+
+
+
+### 7.20 Windows build variants and the acceptance gate (2026-11-19)
+
+Measured for ADR-0011 on the Zen 4 host: PGO builds with their own profile per
+variant, node pins exact for all, balanced ABBA (`tools/ab_bench.py`), `bench 16`
+unless stated, 12-16 runs per side, A/A control +0.12 %. "Gain" is how much
+faster the second build is.
+
+| A | B | Gain |
+| :--- | :--- | ---: |
+| baseline x86-64 (the build as it was) | dedicated `v3` | +2.1 % |
+| baseline x86-64 | dedicated `v4-vnni` | +4.1 % (`bench 18`: +2.4 %) |
+| baseline x86-64 | `v2` baseline | +3.0 % |
+| `v2` baseline | dedicated `v3` | +1.0 % |
+| `v2` baseline | dedicated `v4-vnni` | +2.3 % (`bench 18`: +2.6 %) |
+| dedicated `v3` | dedicated `v4-vnni` | +1.5 % (`bench 18`: +1.8 %) |
+| dynamic C runtime (`v3`) | static C runtime (`v3`) | +0.3 % (noise) |
+
+Reading: the build that existed before this step (no `target-cpu`) loses 2.1-4.1 %
+to the dedicated builds and misses the 2 % gate; a `v2` baseline still misses it
+against `v4-vnni`; a `v3` baseline meets it (1.5-1.8 %). All builds run the same
+AVX-512 kernels on this host (the dispatch is at run time), so the differences
+are compiler code generation outside the kernels. Decision in ADR-0011: ship
+`v3` (default), `v4-vnni` and `v2`, each with its own profile, built by
+`tools/build_release.ps1`.
+
+`bench 16` on the shipped files, same session: `v3` 2.70 M NPS (balanced
+against the previous dynamic-runtime `v3`). The release script's checks (all
+three variants): `uci` answers `uciok`, `bench 6` = 15,528, a run forced to the
+scalar kernels reports the identical count, the import table lists only
+`KERNEL32`, `ntdll`, `bcryptprimitives` and `api-ms-win-core-synch`, the
+SHA-256 of every file matches `SHA256SUMS.txt` after unpacking the zip.
+
+Not measured: the second Windows host (mainstream AVX2 CPU, where the `v3` against
+`v2` comparison should be repeated and the `v4-vnni` build cannot run), and a
+clean Windows 10 machine without the Visual C++ redistributable.

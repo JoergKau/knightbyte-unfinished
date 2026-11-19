@@ -1,6 +1,6 @@
 # ADR-0001: Windows universal executable
 
-**Status:** accepted for the Phase 0 prototype  
+**Status:** accepted for the Phase 0 prototype; amended by ADR-0011 (2026-11-19): the baseline is `v3`, the Windows release ships three executables, and the acceptance gate was measured  
 **Date:** 2026-11-17
 
 ## Context

@@ -233,7 +233,7 @@ A phase is not done because the code compiles. It is done when its gate passes:
 - [x] Add `LICENSE`, `THIRD-PARTY-NOTICES.md`, `README.md` (build/run/test), `docs-new/KnightByte-feature-list.md`, `docs-new/new-bugs.md`.
 - [x] Add CI: macOS, Ubuntu and Windows; `fmt`, `clippy`, tests, release build.
 - [x] **Record the universal Windows direction.** `docs/decisions/ADR-0001-windows-universal-build.md` chooses design A and defines the `v2 â†’ v3 â†’ v3-vnni â†’ v4-vnni` ladder. `src/platform/cpu.rs` implements and tests the selector, including slow-BMI2 detection.
-- [ ] **Open item:** build the two-variant Windows prototype on the Windows host and run the 2% acceptance gate. This cannot be completed on the macOS host and is scheduled for the first Windows session (Phase 7/8).
+- [ ] **Open item (partly done 2026-11-19, ADR-0011):** the acceptance gate was measured on the Zen 4 host: a `v3` baseline is within 1.5-1.8 % of dedicated `v4-vnni`, the old no-`target-cpu` build was not (2.1-4.1 %). The second Windows host is still to be measured. Original item: build the two-variant Windows prototype on the Windows host and run the 2% acceptance gate. This cannot be completed on the macOS host and is scheduled for the first Windows session (Phase 7/8).
 - [x] Add the external FEN verification helper and a smoke test that exercises it; the verifier is supplied through `KNIGHTBYTE_FEN_VERIFIER`.
 
 **Phase 0 verification:** `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets` (10 library tests, 1 FEN-verification test, 2 UCI smoke tests) and `cargo build --release` pass on the M4 with no warnings. The UCI skeleton answers `uci`, `isready`, `bench` and `quit` cleanly. The library tests also pass when compiled for `x86_64-apple-darwin` and executed under Rosetta, which exercises the x86 selector code path; this is a development check only, not a supported release target. Initial commit: `81744a9`.
@@ -752,10 +752,10 @@ Full numbers and the composition table are in `docs/baselines.md` section 7.
 - [ ] TT: prefetch, allocation strategy, generation aging, bucket probe order, hashfull behavior.
 - [ ] NNUE: incremental update validation, kernel selection per host, alignment, `loadu` vs aligned, accumulator layout.
 - [ ] Lazy SMP: persistent workers, false-sharing audit, node-counter publication cadence, TT contention.
-- [ ] Compiler: `target-cpu=apple-m1` for macOS, `v3`/`v4-vnni` for Windows, PGO per artifact, LTO validation.
+- [ ] (Windows done 2026-11-19: `v3`/`v4-vnni`/`v2` with per-variant PGO and static C runtime; macOS open.) Compiler: `target-cpu=apple-m1` for macOS, `v3`/`v4-vnni` for Windows, PGO per artifact, LTO validation.
 - [ ] Optional experiments: PEXT vs magic per host, i8mm (nightly/asm), AVX-512 vs AVX2 on Zen 4, huge pages, mlock, QoS class.
-- [ ] Windows universal build: compare against dedicated `v3` and `v4-vnni`; accept only within 2%; force-ISA test every backend.
-- [ ] Update the performance notes in `docs-new/` with commands, host, and results.
+- [x] Windows universal build: compare against dedicated `v3` and `v4-vnni`; accept only within 2%; force-ISA test every backend. (Done 2026-11-19 on the Zen 4 host, ADR-0011 and `docs/baselines.md` 7.20: the shipped baseline is `v3`; forced-scalar identity is checked by `tools/build_release.ps1` and `tests/kernels_backends.rs`. The second host is open.)
+- [x] Update the performance notes in `docs-new/` with commands, host, and results. (`docs/baselines.md` 7.x and the feature list, kept current after every step.)
 
 **Exit gate G6 (performance part):** at least 1.5Ã— C# NPS on the M4 at identical bench nodes; time-to-depth improvement on the 20-position set; no node-count drift; no platform-specific correctness differences.
 
@@ -767,14 +767,14 @@ Full numbers and the composition table are in `docs/baselines.md` section 7.
 
 - [ ] macOS: `aarch64-apple-darwin`, `target-cpu=apple-m1`, PGO, strip; smoke test on M4 and M5 Pro.
 - [ ] Linux: `x86_64-unknown-linux-gnu`, `target-cpu=x86-64-v2`, PGO; smoke test on the Ryzen 5 5600H.
-- [ ] Windows: universal `.exe` with `v3`, `v3-vnni`, `v4-vnni` paths (and `v2` if the ADR keeps it); per-variant PGO; smoke test on i7-10750H and Ryzen 7 260.
+- [ ] (2026-11-19: delivered as three executables `v3`, `v4-vnni`, `v2`, each with its own PGO profile, ADR-0011; `v3-vnni` is not built because no kernel uses it. The smoke test on the i7-10750H is open.) Windows: universal `.exe` with `v3`, `v3-vnni`, `v4-vnni` paths (and `v2` if the ADR keeps it); per-variant PGO; smoke test on i7-10750H and Ryzen 7 260.
 - [ ] On the i7-10750H, record a C# baseline and a KnightByte baseline at the same protocol (`v3` path) so the relative gain is apples-to-apples. Do not compare its NPS to the Zen 4 or CCRL numbers.
-- [ ] Confirm Windows 10 compatibility if the CCRL host is not on Windows 11; avoid Win11-only APIs in the engine. The i7-10750H on Windows 11 does not cover this case.
-- [ ] `xtask` (or a checked-in script) builds all artifacts, verifies hashes, and emits a manifest.
-- [ ] Release package: engine, `README.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md`, source archive pointer, checksum file. The net is embedded; no separate net file is required.
-- [ ] README: UCI usage, options, supported platforms, build instructions, test instructions, known limitations.
+- [x] (Done 2026-11-19 by the import table: the executable imports only `KERNEL32`, `ntdll`, `bcryptprimitives` and `api-ms-win-core-synch`, all on Windows 10, and the static C runtime removed the `VCRUNTIME140.dll` dependency, bug B51. Not run on a Windows 10 machine.) Confirm Windows 10 compatibility if the CCRL host is not on Windows 11; avoid Win11-only APIs in the engine. The i7-10750H on Windows 11 does not cover this case.
+- [x] `xtask` (or a checked-in script) builds all artifacts, verifies hashes, and emits a manifest. (Windows done 2026-11-19: `tools/build_release.ps1`; the macOS and Linux scripts are open.)
+- [x] (Windows zip done 2026-11-19: three executables, README, LICENSE, THIRD-PARTY-NOTICES, SHA256SUMS.txt, manifest.json; the README links the repository for the source.) Release package: engine, `README.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md`, source archive pointer, checksum file. The net is embedded; no separate net file is required.
+- [x] README: UCI usage, options, supported platforms, build instructions, test instructions, known limitations. (Done 2026-11-19.)
 - [ ] CI release workflow: macOS + Linux on every tag; Windows universal on a manual/nightly job (build time and PGO), with the dedicated builds kept as CI artifacts.
-- [ ] Anti-virus sanity: avoid self-extracting/packed launchers in the release artifact; a plain `.exe` is preferable for CCRL testers.
+- [x] Anti-virus sanity: avoid self-extracting/packed launchers in the release artifact; a plain `.exe` is preferable for CCRL testers. (Plain executables, no packer or launcher, by construction; no scanner was run.)
 
 **Exit gate:** every artifact runs `uci`/`isready`/`bench` and produces the same node counts for its ISA; the universal exe is within 2% of dedicated builds on both Windows hosts; packages are reproducible from the tagged commit.
 
@@ -979,7 +979,7 @@ KnightByte 1.0 is done when:
 - [ ] Every C# option/lever is present, visible and functional; the count is documented.
 - [ ] 1,000-game safety match shows no illegal moves, crashes or time losses.
 - [ ] macOS, Linux and Windows artifacts run `uci`/`isready`/`bench` and agree on node counts.
-- [ ] The universal Windows `.exe` is within 2% of the dedicated builds on both Windows hosts.
+- [ ] The universal Windows `.exe` is within 2% of the dedicated builds on both Windows hosts. (Zen 4 host done, ADR-0011; second host open.)
 - [ ] Time-to-depth on the fixed 20-position set is at least as good as C#, with the Phase 7 target met or the gap documented.
 - [ ] Baselines are reproducible with the project harnesses (`perf_test.py`, `ebf_compare.py`, `fastchess`, `cutechess-cli`) on the documented host, with engine/net/host metadata recorded.
 - [ ] The net is embedded, checksum-verified and bit-identical to the C# evaluation.

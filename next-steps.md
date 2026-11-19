@@ -10,10 +10,13 @@ repository or archive any more; everything lives in the repository above.
 
 1. ~~**Phase 6: Syzygy (3-4-5 piece) and the opening book**~~ — **complete 2026-11-19** (see the session note below).
 2. **Finish `knightbyte_perf_diagnosis.md`** on Zen 4: ~~P1c (early-exit forced-reply count)~~ done 2026-11-19 (+1.1 %), P4 eval path ~~(fused push, madd head, fused refresh, lazy-pin SEE)~~ done 2026-11-19 (docs/baselines.md 7.13-7.16), ~~the match gate~~ done (500 games at 1 thread: 75.1 %, no errors; multi-thread matches run by the owner: no errors, docs/baselines.md 7.19) (legality, time losses, 1/2/4/8 threads, same time control against the predecessor).
-3. **macOS / Linux / M4 validation** (P4b NEON, P8, the universal Windows build against the variants) - deliberately last of the engineering work.
+2a. **Windows release engineering - done 2026-11-19** (ADR-0011): three PGO executables built, checked and zipped by `tools/build_release.ps1`; the universal-build gate measured on the Zen 4 host; static C runtime (B51); start-up guard; README. Open on Windows only what needs another machine: the second Windows host (i7-10750H: `v3` against `v2`, smoke test, baseline), a clean Windows 10 machine, and the owner's multi-thread match figures.
+3. **macOS / Linux / M4 validation** (P4b NEON, P8, the macOS and Linux release scripts and CI release workflow) - deliberately last of the engineering work.
 4. **Last step: search tuning for a lower effective branching factor** (`docs-new/enhancements-for-knightbyte.md` 1.9): EBF comparison on Zen 4 showed KnightByte at 2.01 vs 1.79 for a top engine of its class (identical to the predecessor at a fixed depth, so no gain yet); SPRT-gated experiments (LMR constants, pruning margins, singular extensions retest, the features that ship off, SPSA) on the frozen and pinned baseline. Then tag and submit to CCRL.
 
-## NEXT SESSION (top priority): finish the performance plan; then P4b / P8
+## NEXT SESSION: macOS / Linux / M4 (P4b NEON, P8); the Windows part is finished
+
+**2026-11-19 (Windows finish):** the performance plan is complete on Zen 4 (P1c, P4a-P4e, PGO, the match gate: docs/baselines.md 7.12-7.20; whole session +17.3 % balanced, then PGO +6.4 %; same-session depth 20 about 2.25x the predecessor; 500 games at 1 thread 75.1 % with no time loss, illegal move or crash). `tools/ab_bench.py` is the balanced A/B tool (a back-to-back pair is biased by 2-4 %). The Windows release is built by `tools/build_release.ps1` (ADR-0011). The remaining feature items are unchanged: `EvalFile`/`Contempt` inert, 47 unported levers, `nnueregions`/`searchstats` placeholders, the `tbhits` decision.
 
 **2026-11-19 (Phase 6):** Syzygy and the opening book are ported and tested.
 WDL/DTZ probing for 3-4-5 piece sets (and larger material names up to seven

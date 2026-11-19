@@ -1,0 +1,5 @@
+# Windows builds link the C runtime statically so the executable starts on a
+# machine without the Visual C++ redistributable (a plain Windows 10 install).
+# tools/pgo_build.ps1 repeats the flag because RUSTFLAGS replaces this table.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

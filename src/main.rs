@@ -9,6 +9,11 @@ use std::process::ExitCode;
 /// any other argument becomes a one-shot UCI command line that runs once and
 /// exits. With no arguments the engine reads standard input interactively.
 fn main() -> ExitCode {
+    // A dedicated build must not start on a CPU it was not compiled for.
+    if let Err(message) = knightbyte::platform::cpu::check_build_requirements() {
+        eprintln!("fatal: {message}");
+        return ExitCode::FAILURE;
+    }
     let argv: Vec<String> = std::env::args().skip(1).collect();
     match knightbyte::uci::run_with_argv(&argv) {
         Ok(()) => ExitCode::SUCCESS,

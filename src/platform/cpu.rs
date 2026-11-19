@@ -135,6 +135,76 @@ fn detect_x86() -> X86Features {
     }
 }
 
+/// Returns the instruction sets this binary was compiled to require.
+///
+/// A dedicated build (`-Ctarget-cpu=x86-64-v3`, `x86-64-v4`) lets the compiler
+/// emit those instructions anywhere in the program, not only in the dispatched
+/// kernels, so it cannot run on a CPU that lacks them.
+#[cfg(target_arch = "x86_64")]
+pub fn compiled_x86_features() -> X86Features {
+    X86Features {
+        sse42: cfg!(target_feature = "sse4.2"),
+        popcnt: cfg!(target_feature = "popcnt"),
+        avx2: cfg!(target_feature = "avx2"),
+        bmi2: cfg!(target_feature = "bmi2"),
+        avx512f: cfg!(target_feature = "avx512f"),
+        avx512cd: cfg!(target_feature = "avx512cd"),
+        avx512dq: cfg!(target_feature = "avx512dq"),
+        avx512bw: cfg!(target_feature = "avx512bw"),
+        avx512vl: cfg!(target_feature = "avx512vl"),
+        avx512vnni: cfg!(target_feature = "avx512vnni"),
+        avxvnni: cfg!(target_feature = "avxvnni"),
+        slow_bmi2: false,
+    }
+}
+
+/// Lists the features `required` demands that `host` does not provide.
+///
+/// Pure so the guard can be tested on any machine; [`slow_bmi2`] is a
+/// performance hint, not a requirement, and is ignored.
+///
+/// [`slow_bmi2`]: X86Features::slow_bmi2
+pub fn missing_x86_features(required: X86Features, host: X86Features) -> Vec<&'static str> {
+    let checks = [
+        ("SSE4.2", required.sse42, host.sse42),
+        ("POPCNT", required.popcnt, host.popcnt),
+        ("AVX2", required.avx2, host.avx2),
+        ("BMI2", required.bmi2, host.bmi2),
+        ("AVX-512F", required.avx512f, host.avx512f),
+        ("AVX-512CD", required.avx512cd, host.avx512cd),
+        ("AVX-512DQ", required.avx512dq, host.avx512dq),
+        ("AVX-512BW", required.avx512bw, host.avx512bw),
+        ("AVX-512VL", required.avx512vl, host.avx512vl),
+        ("AVX-512 VNNI", required.avx512vnni, host.avx512vnni),
+        ("AVX-VNNI", required.avxvnni, host.avxvnni),
+    ];
+    checks
+        .into_iter()
+        .filter(|&(_, needed, present)| needed && !present)
+        .map(|(name, _, _)| name)
+        .collect()
+}
+
+/// Verifies that the host CPU provides everything this build was compiled for.
+///
+/// Called first thing in `main`: a dedicated build started on an older CPU
+/// reports what is missing and which build to use, instead of dying with an
+/// illegal-instruction fault. Always succeeds on non-x86 hosts and for the
+/// baseline build.
+pub fn check_build_requirements() -> Result<(), String> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let missing = missing_x86_features(compiled_x86_features(), detect_x86());
+        if !missing.is_empty() {
+            return Err(format!(
+                "this build needs CPU features that this machine lacks ({}); \
+                 use the build for older processors (v2)",
+                missing.join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
 /// Returns whether BMI2 is microcoded on this CPU.
 ///
 /// Only AMD Excavator (family 15h) and Zen 1/2 (family 17h) are affected.
@@ -260,5 +330,38 @@ mod tests {
     #[test]
     fn slow_bmi2_detection_does_not_panic() {
         let _ = has_slow_bmi2();
+    }
+
+    #[test]
+    fn the_guard_names_every_missing_feature() {
+        let required = X86Features {
+            avx2: true,
+            bmi2: true,
+            avx512bw: true,
+            ..X86Features::default()
+        };
+        let mut host = full_features();
+        assert!(super::missing_x86_features(required, host).is_empty());
+
+        host.avx2 = false;
+        host.avx512bw = false;
+        assert_eq!(
+            super::missing_x86_features(required, host),
+            vec!["AVX2", "AVX-512BW"]
+        );
+
+        // A feature that is not required is never reported, and the slow-BMI2
+        // hint is not a requirement.
+        let none = X86Features::default();
+        assert!(super::missing_x86_features(none, X86Features::default()).is_empty());
+        host.slow_bmi2 = true;
+        assert!(super::missing_x86_features(none, host).is_empty());
+    }
+
+    #[test]
+    fn a_build_never_requires_more_than_the_host_running_the_tests_has() {
+        // The test binary itself is such a build; if this fails the guard
+        // would reject the very machine it was compiled for.
+        assert!(super::check_build_requirements().is_ok());
     }
 }
