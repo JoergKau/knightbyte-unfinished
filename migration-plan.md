@@ -785,7 +785,7 @@ Full numbers and the composition table are in `docs/baselines.md` section 7.
 **Objective:** a stable public version and a clean maintenance loop.
 
 - [ ] Run the CCRL pre-flight with `cutechess-cli`/`fastchess`: 40/15 and 40/4 games, 128/256 MB hash, 3-4-5 piece Syzygy, own book off, ponder off, no time losses.
-- [ ] Verify the exact UCI requirements: `uci`, `isready`, `ucinewgame`, `position`, `go`, `quit`; correct `bestmove` even after `stop`; no stray stdout.
+- [x] Verify the exact UCI requirements: `uci`, `isready`, `ucinewgame`, `position`, `go`, `quit`; correct `bestmove` even after `stop`; no stray stdout. (2026-11-19: all three release executables pass the 40-step `fastchess --compliance` check; the stop/ponder/banner behaviour is pinned by ADR-0010 and the transcript tests.)
 - [ ] Package the Windows x64 zip and host it publicly with source, readme and license.
 - [ ] Prepare the announcement text per `CCRL-chess-engine.md`: engine name, version, author/contact as the owner decides, protocol, supported platforms, source link, net description, known limitations.
 - [ ] Tag `1.0.0`; freeze the search and net for the submission. Do not submit moving targets.
