@@ -3,17 +3,33 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-19 (P7.0/B44 done: 7.08x at 8T; P3a/B43 done: depth-20 ratio 1.69-1.73; P1.0, P1, P2, P5-prefetch done: ratio 0.629 -> 1.08-1.11; P1.0 and P1 done: depth-20 ratio 0.629 -> 0.87-0.91; earlier: P0 complete: the measurement rig is reproducible; same-session depth-20 baseline 669,773 vs 1,064,034 NPS (1.59x, identical tree); the legal filter is 89.8 % of all makes and ~45-55 % of the gap; B42 found; P1 one-pass move path is next)
+**Last updated:** 2026-11-19 (Phase 6 complete: Syzygy WDL/DTZ + root DTZ ranking + `.ctg` opening book, 305 tests, bench pins unchanged; next: finish the performance plan, P4/P4b/P8, then search tuning)
 **Rule:** update this document at the end of every working session.
 
 ## ORDER OF WORK (decided 2026-11-19)
 
-1. **Phase 6: Syzygy (3-4-5 piece) and the opening book** - next. Windows / Zen 4 only.
+1. ~~**Phase 6: Syzygy (3-4-5 piece) and the opening book**~~ — **complete 2026-11-19** (see the session note below).
 2. **Finish `knightbyte_perf_diagnosis.md`** on Zen 4: P1c (early-exit forced-reply count), P4 (eval rows/head, SEE), the match gate (legality, time losses, 1/2/4/8 threads, same time control against the predecessor).
 3. **macOS / Linux / M4 validation** (P4b NEON, P8, the universal Windows build against the variants) - deliberately last of the engineering work.
 4. **Last step: search tuning for a lower effective branching factor** (`docs-new/enhancements-for-knightbyte.md` 1.9): EBF comparison on Zen 4 showed KnightByte at 2.01 vs 1.79 for a top engine of its class (identical to the predecessor at a fixed depth, so no gain yet); SPRT-gated experiments (LMR constants, pruning margins, singular extensions retest, the features that ship off, SPSA) on the frozen and pinned baseline. Then tag and submit to CCRL.
 
-## NEXT SESSION (top priority): Phase 6 first; then P4 / P4b / P8 (R2, R3 and R4 reached)
+## NEXT SESSION (top priority): finish the performance plan; then P4b / P8
+
+**2026-11-19 (Phase 6):** Syzygy and the opening book are ported and tested.
+WDL/DTZ probing for 3-4-5 piece sets (and larger material names up to seven
+pieces), depth-unconditional search and quiescence probes, 50-move-aware DTZ
+values, root DTZ ranking (Kd2-e2 on the reported 4-man fixture; the toggle-off
+lazy shuffle Kd2-c1 reproduces), and the `.ctg` reader with signature
+validation, weighted move choice and annotations. `Own Book` defaults off;
+`Book File` loads explicitly (empty value auto-detects next to the executable
+or in `books/`); `SyzygyPath`/`SyzygyRootProbe`/`Syzygy50MoveRule` are
+functional and report their state. Tests: 305 (the big-set DTZ-ranking tests skip when the variable is unset)
+(`KNIGHTBYTE_SYZYGY_PATH`); the DTZ-ranking tests skip when it is unset. Bench
+pins unchanged: 15,528 / 456,308 / 2,815,799 / 6,892,874. The table files are
+mapped lazily through `memmap2` (ADR-0009); the 3-man test tables are in
+`tests/data/tb/`; the book tests use a synthetic fixture, so no third-party
+book is published. Quirk Q9 (a failed DTZ load poisons WDL for the same
+material) is reproduced and recorded.
 
 **2026-11-19 (P6):** PGO (`tools/pgo_build.ps1`) gives +7-12 %: same-session depth 20 = **2.51-2.61 M vs 1.36-1.41 M NPS (1.79-1.92x)**, formal R3 (>= 2.43 M) reached; target-cpu=znver4 gave nothing (docs/baselines.md 7.11). The release workflow must run the PGO script per host/ISA variant.
 
@@ -122,7 +138,8 @@ what the line-by-line comparison of `MoveGenerator.cs`,
 
 ## 0. Current state in one paragraph
 
-Phases 0–4 are complete and verified, and the search is **node-identical to the
+Phases 0–4 are complete and verified, and Phase 6 (Syzygy and the opening
+book) completed on 2026-11-19, and the search is **node-identical to the
 bug-fixed reference**: `bench 6/12/16/18` = 15,528 / 456,308 / 2,815,799 /
 6,892,874 (the pins 14,979 / 416,533 / 3,169,859 / 6,925,762 described the
 pre-fix build). The Phase 1 restart adopted the predecessor's bug fixes 143–149
@@ -198,11 +215,13 @@ depth-only, and history/correction history reset every search). Step 11 was
 dropped (see §2.3). Step 13 (match gates) is tracked in `migration-plan.md`,
 where the project owner recorded 3 x 100 fastchess games.
 
-Verification status on the last run: all 264 tests pass locally on Windows
-with the Stockfish verifier from `C:\dev\c#-chess-engines\stockfish`;
-fmt/clippy clean; all four bench pins exact and `capture_bench.py compare`
-shows every per-position delta at +0. Node identity is verified on this
-Windows host only; macOS and Linux still have to confirm it (migration-plan G6).
+Verification status on the last run (2026-11-19, after Phase 6): all 305 tests
+pass locally on Windows (the full-set DTZ-ranking tests skip when
+`KNIGHTBYTE_SYZYGY_PATH` is unset) using the Stockfish verifier from
+`C:\dev\c#-chess-engines\stockfish`; fmt/clippy clean; all four bench pins
+exact and `capture_bench.py compare` shows every per-position delta at +0.
+Node identity is verified on this Windows host only; macOS and Linux still have
+to confirm it (migration-plan G6).
 
 ---
 
@@ -267,9 +286,9 @@ Windows host only; macOS and Linux still have to confirm it (migration-plan G6).
   `ClockImbalanceAheadScale/BehindScale`, `UseLmrHistoryPrecision`,
   `UseRefSeeThresholds`, `UseNegativeExtensions`, `UseTrioHindsight`,
   `HistPruneMargin`). `uci` advertises them; `setoption` applies them.
-  `Hash`, `Clear Hash` and `Move Overhead` are functional; the
-  book/tablebase/`EvalFile`/`Contempt` names are accepted and inert by
-  design.
+  `Hash`, `Clear Hash` and `Move Overhead` are functional; the book and
+  tablebase names became functional in Phase 6, and `EvalFile`/`Contempt` stay
+  accepted and inert by design.
 - The first iteration always completes, so a timed search always reports at
   least `info depth 1` and a `bestmove`.
 
@@ -353,9 +372,10 @@ Next action (Phase 5): steps 9 and 10 are done (stress gate, ADR-0007) and step
 
 ### 2.5 Inert public options
 
-`Own Book`, `Book File`, `Book Depth`, `SyzygyPath`, `SyzygyRootProbe`,
-`Syzygy50MoveRule`, `EvalFile`, `Contempt` are advertised and accepted but do
-nothing. This is documented on purpose; do not report them as working.
+`EvalFile` and `Contempt` are advertised and accepted but do nothing. This is
+documented on purpose; do not report them as working. The book and tablebase
+options (`Own Book`, `Book File`, `Book Depth`, `SyzygyPath`, `SyzygyRootProbe`,
+`Syzygy50MoveRule`) are functional since Phase 6.
 
 ### 2.6 Performance (Phase 7) — decomposition after the incremental accumulator and the SIMD kernels
 
@@ -479,10 +499,10 @@ Syzygy optional.
 | No time losses | two real causes fixed (B30 clock restarted late; B32 silent `go`); a 216-search compliance grid (clocks 40 ms-10 s, increments 0/100/1000, `movestogo` none/1/3/40) shows no overrun. **Still open:** a 40/15 and a 40/4 run with zero timeouts on record |
 | No illegal moves | `fastchess` flags them; all 904 finished games of the singular-extension experiment (8+0.08, ADR-0006) had no illegal move, time loss or crash. A dedicated self-play legality check of every PV and bestmove is not written yet |
 | Repetitions of earlier game positions | fixed (B31); bench could never have shown it |
-| Own book off, ponder off | trivially true: the book and ponder options are accepted and inert |
+| Own book off, ponder off | `Own Book` defaults false (Phase 6) and the `Ponder` option is not advertised |
 | Hash 128/256 MB | the `Hash` option accepts 1-1024 MB (default 256) |
 | Threads | implemented (Phase 5 step 8, Lazy SMP pool; multi-thread play is stress-gated in step 9) |
-| Syzygy | not implemented (optional for CCRL, Phase 6) |
+| Syzygy | implemented (Phase 6): WDL/DTZ probing, 3-4-5 and larger sets, root DTZ ranking; optional, off until `SyzygyPath` is set |
 | Windows x64 zip, README, licence | README and MIT licence exist; the release packaging, a tagged public release and a Linux build are Phase 8 |
 
 The lesson of this round: node identity says nothing about *time* or *game
@@ -645,10 +665,10 @@ and false-sharing checks. Gate: the stress walk and the match gates; the
 move the number, revert it and record why. When 1.617 MNPS is crossed, the
 goal rises to ≥1.5× the predecessor (≥2.43 MNPS) per the migration plan.
 
-**Phase 6 (Syzygy/book) stays deferred until the performance target is met**
-(the project-owner decision of 2026-11-18, reaffirmed: deferral, not
-cancellation) — the features gate the 100 %-compliance goal, not CCRL, and
-they land with their own parity steps after the performance work.
+**Phase 6 (Syzygy/book) is complete (2026-11-19)** and no longer blocks the
+performance work: both features are optional, load nothing by default, and
+leave the bench pins untouched. The remaining performance items are the ones
+listed above.
 
 **What is explicitly NOT portable (recorded so nobody re-tries):** Cinder's
 `i8` sparse feature rows and `f32` network layers belong to its own net

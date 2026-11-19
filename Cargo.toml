@@ -8,6 +8,9 @@ description = "A UCI chess engine written in Rust"
 publish = false
 
 [dependencies]
+# Read-only memory mapping for tablebase files: a 3-4-5 set is roughly one
+# gigabyte, so it is mapped lazily instead of copied into the heap.
+memmap2 = "0.9"
 
 [features]
 # Compile-time node counters for the performance composition report.

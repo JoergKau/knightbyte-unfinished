@@ -68,6 +68,18 @@ impl Searcher {
 
         let in_check = self.params.use_check_aware_quiescence && position.in_check(position.side());
 
+        // Exact tablebase values. A checkmate inside the tables must be
+        // reported as a mate, not as the flat tablebase loss: only that one
+        // node type (in check and no legal move) diverges from returning the
+        // exact value, and every other in-check position keeps it.
+        let tb_wdl = self.tb_wdl(position);
+        if in_check && tb_wdl.is_some() && movegen::legal(position).is_empty() {
+            return mated_in(ply as i32);
+        }
+        if let Some(wdl) = tb_wdl {
+            return crate::tb::syzygy::wdl_to_score(wdl);
+        }
+
         let mut tt_eval: Option<i32> = None;
         let mut tt_probe: Option<crate::search::tt::TtEntry> = None;
         if self.params.use_qs_tt_probe

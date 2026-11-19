@@ -416,3 +416,24 @@ then the full table.
    scores, reduction terms, history cells, table hits) on both sides until one
    input differs. The ledger needs an instrumented local build of the reference
    that writes the same line format; keep that build out of the repository.
+
+## 9. Phase 6 - tablebase and book parity (2026-11-19)
+
+The optional knowledge sources do not change the default search, so the four
+bench pins are unchanged. Their parity surface is checked separately:
+
+| Reference behaviour | KnightByte module | Test |
+| :--- | :--- | :--- |
+| WDL probe with capture/en-passant resolution | `src/tb/syzygy/probe.rs` | `tests/syzygy.rs` known values |
+| DTZ probe and pawn-move resolution | `src/tb/syzygy/probe.rs` | `tests/syzygy.rs` root values |
+| 3-4-5 (and larger) material scan, lazy mapping | `src/tb/syzygy/table.rs` | full-set run through `KNIGHTBYTE_SYZYGY_PATH` |
+| Depth-unconditional non-root WDL probe | `src/search/negamax.rs` | `search_scores_tablebase_wins_exactly` |
+| Quiescence WDL probe and mate correction | `src/search/quiescence.rs` | `search_announces_mate_when_pv_cutoff_is_disabled` |
+| Root DTZ ranking and the 50-move score clamp | `src/search/searcher.rs` | `dtz_root_ranking_drives_the_search_result` (4-man fixture) |
+| Root probe direct play (`SyzygyRootProbe`) | `src/uci/mod.rs` | `tests/uci_book_syzygy.rs` |
+| `.ctg` signature and reader | `src/tb/book/` | `tests/book.rs` signature vectors and synthetic book |
+| Book move before search, depth gate, off by default | `src/uci/mod.rs` | `tests/uci_book_syzygy.rs` |
+
+The reference's coarser error flag (a failed DTZ load also disables WDL for the
+same material) is reproduced as quirk Q9; ADR-0009 records the file-access and
+dependency decisions.

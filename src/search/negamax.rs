@@ -196,11 +196,29 @@ impl Searcher {
             extensions_used += 1;
         }
 
+        // Exact tablebase values. The probe is unconditional on depth: inside
+        // the tables the value is exact, and a depth gate would let the
+        // heuristic pruning stack mask it. The root is excluded so it always
+        // completes its move loop and reports a real best move.
+        let pv_node = beta > alpha + 1;
+        if !is_root && let Some(wdl) = self.tb_wdl(position) {
+            if pv_node && !self.params.allow_syzygy_cutoff_on_pv_nodes {
+                // A PV node is graded by the distance to the next zeroing move,
+                // and a value whose distance fits in the remaining depth is
+                // searched so the search can reach the real mate itself.
+                let dtz_abs = self.tb_dtz(position).map_or(0, |dtz| dtz.abs());
+                if dtz_abs <= 0 || dtz_abs > depth {
+                    return crate::tb::syzygy::wdl_to_score_graded(wdl, dtz_abs);
+                }
+            } else {
+                return crate::tb::syzygy::wdl_to_score(wdl);
+            }
+        }
+
         if depth <= 0 {
             return self.quiescence(position, alpha, beta, ply, previous);
         }
 
-        let pv_node = beta > alpha + 1;
         // The exact-bound decision compares against the window as it stood
         // before the transposition-table narrowing below.
         let alpha_window = alpha;
@@ -289,6 +307,14 @@ impl Searcher {
                     return score;
                 }
             }
+        }
+
+        // DTZ root ranking: try the 50-move-aware tablebase move first. The
+        // picker validates pseudo-legality, the root restriction filters it,
+        // and a repeating move evaluates as a draw at its child, so this stays
+        // an ordering hint rather than a bypass.
+        if is_root && self.params.use_syzygy_dtz_root_ranking && !self.root_tb_move.is_none() {
+            tt_move = self.root_tb_move;
         }
 
         let raw_eval = tt_eval.unwrap_or_else(|| self.evaluate_stacked(position, ply));

@@ -26,6 +26,8 @@ use crate::search::searcher::{
     MATE_LIMIT, MATE_SCORE, SearchEvent, SearchInfo, SearchResult, Searcher,
 };
 use crate::search::time_manager::TimeControl;
+use crate::tb::book::{BookRng, CtgBook, find_default_book_path};
+use crate::tb::syzygy;
 use crate::tools::bench;
 use crate::tools::net::NET_SOURCE_NAME;
 
@@ -37,6 +39,44 @@ const DEFAULT_GO_DEPTH: u32 = 6;
 
 /// Transposition-table size for the command loop, in megabytes.
 const DEFAULT_TT_MEGABYTES: usize = 256;
+
+/// Default maximum book depth in plies (0 = no limit).
+const DEFAULT_BOOK_DEPTH: u32 = 16;
+
+/// Optional engine features that live outside the search state.
+///
+/// The opening book keeps its loaded index between commands, and the book
+/// depth is counted from the start of the current game position (`position`
+/// commands reset it). `SyzygyRootProbe` is the UCI-level direct-play switch;
+/// the tablebase tables themselves live in the process-wide set.
+struct EngineExtras {
+    /// Loaded opening book (empty when none is loaded).
+    book: CtgBook,
+    /// `Own Book` option.
+    book_enabled: bool,
+    /// `Book Depth` option, in plies from the game start.
+    book_depth: u32,
+    /// Plies applied by the last `position` command.
+    book_plies: u32,
+    /// `SyzygyRootProbe` option.
+    syzygy_root_probe: bool,
+    /// Weighted book-move selection source.
+    rng: BookRng,
+}
+
+impl EngineExtras {
+    /// Creates the default feature state: book off, no book loaded.
+    fn new() -> Self {
+        Self {
+            book: CtgBook::default(),
+            book_enabled: false,
+            book_depth: DEFAULT_BOOK_DEPTH,
+            book_plies: 0,
+            syzygy_root_probe: false,
+            rng: BookRng::from_entropy(),
+        }
+    }
+}
 
 /// Runs the UCI event loop over standard input without arguments.
 ///
@@ -115,6 +155,9 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
     // `setoption Threads` grows and shrinks it without touching the main
     // searcher's state.
     let mut pool = crate::search::pool::WorkerPool::new();
+    // The optional book and root-probe state; the book starts unloaded and
+    // disabled (`Own Book` off), and no directory is scanned at startup.
+    let mut extras = EngineExtras::new();
 
     let mut debug_mode = false;
     for line in reader.lines() {
@@ -125,7 +168,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
         }
 
         match parser::parse(command) {
-            parser::Command::Uci => handshake(&mut output)?,
+            parser::Command::Uci => handshake(&extras, &mut output)?,
             // The eval-source line is restated on every `isready` (the step-0
             // transcript shows it before each `readyok`, including during a
             // search): a GUI that attaches late still learns which evaluation
@@ -144,6 +187,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                 state.clear();
                 position = Some(start_position());
                 state.set_game_history(&[]);
+                extras.book_plies = 0;
             }
             parser::Command::Bench => {
                 stop_search(&mut active, &mut searcher, &pool, &mut output);
@@ -155,6 +199,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                     command,
                     searcher.as_mut().expect("restored by the join"),
                     &mut pool,
+                    &mut extras,
                     &mut output,
                 )?
             }
@@ -165,6 +210,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                     Ok((next, earlier_keys)) => {
                         state.set_game_history(&earlier_keys);
                         position = Some(next);
+                        extras.book_plies = earlier_keys.len() as u32;
                     }
                     // Reference parity (the predecessor's bug-144/145
                     // decision): a rejected `position` command is reported
@@ -182,6 +228,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                     &mut searcher,
                     &mut active,
                     &mut pool,
+                    &mut extras,
                     &mut output,
                 )?
             }
@@ -199,6 +246,7 @@ fn run_from<R: BufRead>(reader: &mut R, params: &[String]) -> io::Result<()> {
                 &mut searcher,
                 &mut position,
                 &mut pool,
+                &mut extras,
                 &mut output,
             )?,
             parser::Command::Debug => {
@@ -625,6 +673,7 @@ fn handle_go(
     state: &mut Option<Searcher>,
     active: &mut Option<ActiveSearch>,
     pool: &mut WorkerPool,
+    extras: &mut EngineExtras,
     output: &mut Output,
 ) -> io::Result<()> {
     let limits = parse_go(line);
@@ -639,6 +688,47 @@ fn handle_go(
         output.line("info string no position set")?;
         return answer_without_search(None, output);
     };
+
+    // Opening book: when enabled, inside the book and within the book depth,
+    // play the book move immediately. Skipped for `go searchmoves` (the
+    // restriction must be honoured) and for pondering (the search predicts the
+    // opponent's move).
+    if !limits.ponder
+        && limits.search_moves.is_empty()
+        && extras.book_enabled
+        && extras.book.is_loaded()
+        && (extras.book_depth == 0 || extras.book_plies < extras.book_depth)
+    {
+        let book_move = extras.book.pick_book_move(&position, &mut extras.rng);
+        if !book_move.is_none() {
+            output.line(&format!("info string book move: {}", book_move.to_uci()))?;
+            return output.line(&format!("bestmove {}", book_move.to_uci()));
+        }
+    }
+
+    // Direct tablebase play: a root position inside the tables is answered
+    // from the DTZ probe without searching. Default off; the sound path is the
+    // search's leaf probe, which keeps repetition handling and finds mates.
+    if extras.syzygy_root_probe
+        && !limits.ponder
+        && limits.search_moves.is_empty()
+        && let Some(tables) = syzygy::current()
+        && tables.covers(&position)
+    {
+        let result = tables.probe_root(&position);
+        if result.is_checkmate || result.is_stalemate {
+            return output.line("bestmove 0000");
+        }
+        if !result.failed && !result.mv.is_none() {
+            output.line(&format!(
+                "info string tablebase move: {} (wdl {}, dtz {})",
+                result.mv.to_uci(),
+                result.wdl,
+                result.dtz
+            ))?;
+            return output.line(&format!("bestmove {}", result.mv.to_uci()));
+        }
+    }
 
     // Quirk Q8 (reference parity, not while pondering): with exactly one
     // legal move there is nothing to consider — the move is answered at once
@@ -819,6 +909,7 @@ fn handle_ponder_hit(
     state: &mut Option<Searcher>,
     position: &mut Option<Position>,
     pool: &mut WorkerPool,
+    extras: &mut EngineExtras,
     output: &mut Output,
 ) -> io::Result<()> {
     use std::sync::atomic::Ordering;
@@ -848,6 +939,7 @@ fn handle_ponder_hit(
             let mut game = searcher.game_history().to_vec();
             game.push(position.key());
             searcher.set_game_history(&game);
+            extras.book_plies = extras.book_plies.saturating_add(1);
             position.make_move(ponder_move)
         }
         None => position,
@@ -909,7 +1001,10 @@ fn init_search_limits(
         searcher.init_infinite();
     }
 
-    let mut search_limits = Limits::default();
+    let mut search_limits = Limits {
+        ponder,
+        ..Limits::default()
+    };
     if limits.depth > 0 {
         search_limits.depth = Some(limits.depth);
     }
@@ -1087,15 +1182,15 @@ fn handle_check_moves(position: Option<&Position>, output: &mut Output) -> io::R
 /// lines themselves are KnightByte's documented superset of the transcript —
 /// the reference keeps its 83 research levers hidden, the ground rules expose
 /// the full catalogue as visible options.
-fn handshake(output: &mut Output) -> io::Result<()> {
-    for line in handshake_lines() {
+fn handshake(extras: &EngineExtras, output: &mut Output) -> io::Result<()> {
+    for line in handshake_lines(&extras.book) {
         output.line(&line)?;
     }
     Ok(())
 }
 
 /// Builds every line of the UCI handshake reply.
-fn handshake_lines() -> Vec<String> {
+fn handshake_lines(book: &CtgBook) -> Vec<String> {
     let mut lines = Vec::new();
     lines.push(format!("id name KnightByte {}", env!("CARGO_PKG_VERSION")));
     lines.push("id author KnightByte project".to_owned());
@@ -1134,11 +1229,34 @@ fn handshake_lines() -> Vec<String> {
     }
     // Reference parity: the book, tablebase and eval-source state lines close
     // the handshake, before `uciok`.
-    lines.push("info string no opening book loaded".to_owned());
-    lines.push("info string syzygy tablebases: none (set SyzygyPath)".to_owned());
+    lines.push(book_status_line(book));
+    lines.push(syzygy_status_line());
     lines.push(eval_source_line());
     lines.push("uciok".to_owned());
     lines
+}
+
+/// The `info string` describing the loaded opening book.
+fn book_status_line(book: &CtgBook) -> String {
+    if book.is_loaded() {
+        format!(
+            "info string opening book loaded: {} ({} positions)",
+            book.book_path(),
+            book.entry_count()
+        )
+    } else {
+        "info string no opening book loaded".to_owned()
+    }
+}
+
+/// The `info string` describing the loaded tablebases.
+fn syzygy_status_line() -> String {
+    let (tables, max_pieces) = syzygy::status();
+    if max_pieces > 0 {
+        format!("info string syzygy tablebases: {tables} WDL tables, up to {max_pieces} pieces")
+    } else {
+        "info string syzygy tablebases: none (set SyzygyPath)".to_owned()
+    }
 }
 
 /// The `info string` naming the evaluation source (the embedded net file).
@@ -1169,9 +1287,10 @@ fn handle_set_option(
     line: &str,
     searcher: &mut Searcher,
     pool: &mut WorkerPool,
+    extras: &mut EngineExtras,
     output: &mut Output,
 ) -> io::Result<()> {
-    if let Some(reply) = apply_set_option(line, searcher, pool) {
+    if let Some(reply) = apply_set_option(line, searcher, pool, extras) {
         output.line(&reply)?;
     }
     Ok(())
@@ -1181,7 +1300,12 @@ fn handle_set_option(
 ///
 /// `None` means the command was accepted silently or rejected silently —
 /// both leave no trace on the wire, exactly like the reference.
-fn apply_set_option(line: &str, searcher: &mut Searcher, pool: &mut WorkerPool) -> Option<String> {
+fn apply_set_option(
+    line: &str,
+    searcher: &mut Searcher,
+    pool: &mut WorkerPool,
+    extras: &mut EngineExtras,
+) -> Option<String> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
     if tokens.get(1).copied() != Some("name") {
         return Some("info string setoption expects 'name <name>'".to_owned());
@@ -1196,6 +1320,40 @@ fn apply_set_option(line: &str, searcher: &mut Searcher, pool: &mut WorkerPool) 
     }
 
     if let Some(spec) = public(&name) {
+        // The book and tablebase options act outside the search state and
+        // report their resulting state, so a failure is never silent.
+        match spec.name {
+            "Own Book" => {
+                if value == "true" || value == "false" {
+                    extras.book_enabled = value == "true";
+                }
+                return None;
+            }
+            "Book File" => return Some(load_book(&value, extras)),
+            "Book Depth" => {
+                if spin_value_is_valid(spec.min, spec.max, &value) {
+                    extras.book_depth = value.parse::<u32>().expect("validated above");
+                }
+                return None;
+            }
+            "SyzygyPath" => {
+                syzygy::initialize(&value);
+                return Some(syzygy_status_line());
+            }
+            "SyzygyRootProbe" => {
+                if value == "true" || value == "false" {
+                    extras.syzygy_root_probe = value == "true";
+                }
+                return None;
+            }
+            "Syzygy50MoveRule" => {
+                if value == "true" || value == "false" {
+                    syzygy::set_use_rule50(value == "true");
+                }
+                return None;
+            }
+            _ => {}
+        }
         apply_public_option(spec, &value, searcher, pool);
         return None;
     }
@@ -1205,6 +1363,31 @@ fn apply_set_option(line: &str, searcher: &mut Searcher, pool: &mut WorkerPool) 
     }
     // Reference parity: an unknown name is the one reported rejection.
     Some(format!("info string Unknown option: {name}"))
+}
+
+/// Loads (or auto-detects) the opening book and returns the diagnostic line.
+///
+/// An empty value requests auto-detection next to the executable or in a
+/// `books/` subdirectory; a named file that cannot be read is reported and the
+/// previous book is dropped rather than silently kept.
+fn load_book(value: &str, extras: &mut EngineExtras) -> String {
+    let path = if value.is_empty() {
+        match find_default_book_path() {
+            Some(path) => path.to_string_lossy().into_owned(),
+            None => {
+                extras.book.clear();
+                return "info string no opening book loaded".to_owned();
+            }
+        }
+    } else {
+        value.to_owned()
+    };
+    if extras.book.load(&path) {
+        book_status_line(&extras.book)
+    } else {
+        extras.book.clear();
+        format!("info string book file not loaded: {path}")
+    }
 }
 
 /// True when `value` is a valid spin value for `spec`.
@@ -1298,10 +1481,17 @@ fn apply_lever(spec: &LeverSpec, value: &str, searcher: &mut Searcher) {
 
 #[cfg(test)]
 mod tests {
-    use super::{GoLimits, apply_set_option, eval_source_line, handshake_lines, parse_go};
+    use super::{
+        EngineExtras, GoLimits, apply_set_option, eval_source_line, handshake_lines, parse_go,
+    };
     use crate::search::options::{get, lever, public};
     use crate::search::pool::WorkerPool;
     use crate::search::searcher::Searcher;
+
+    /// Applies one `setoption` line with fresh feature state.
+    fn apply_option(line: &str, searcher: &mut Searcher, pool: &mut WorkerPool) -> Option<String> {
+        apply_set_option(line, searcher, pool, &mut EngineExtras::new())
+    }
 
     /// Applies `line` to a fresh 2 MB searcher and returns (reply, value read
     /// back through the lever accessor).
@@ -1313,7 +1503,7 @@ mod tests {
             Some(value) => format!("setoption name {name} value {value}"),
             None => format!("setoption name {name}"),
         };
-        let reply = apply_set_option(&line, &mut searcher, &mut pool);
+        let reply = apply_option(&line, &mut searcher, &mut pool);
         let state = get(searcher.params(), spec);
         (reply, state)
     }
@@ -1455,7 +1645,7 @@ mod tests {
         let mut searcher = Searcher::new(2);
         let mut pool = WorkerPool::new();
         assert_eq!(
-            apply_set_option(
+            apply_option(
                 "setoption name NoSuchOption value 5",
                 &mut searcher,
                 &mut pool,
@@ -1518,11 +1708,11 @@ mod tests {
         let mut pool = WorkerPool::new();
         // Both forms act silently: the bare button and one with a stray value.
         assert_eq!(
-            apply_set_option("setoption name Clear Hash", &mut searcher, &mut pool),
+            apply_option("setoption name Clear Hash", &mut searcher, &mut pool),
             None
         );
         assert_eq!(
-            apply_set_option(
+            apply_option(
                 "setoption name Clear Hash value 5",
                 &mut searcher,
                 &mut pool
@@ -1537,7 +1727,7 @@ mod tests {
         let mut pool = WorkerPool::new();
         for bad in ["0", "999999", "abc"] {
             assert_eq!(
-                apply_set_option(
+                apply_option(
                     &format!("setoption name Hash value {bad}"),
                     &mut searcher,
                     &mut pool,
@@ -1548,7 +1738,7 @@ mod tests {
         }
         // A valid value is accepted silently.
         assert_eq!(
-            apply_set_option("setoption name Hash value 32", &mut searcher, &mut pool),
+            apply_option("setoption name Hash value 32", &mut searcher, &mut pool),
             None
         );
     }
@@ -1560,7 +1750,7 @@ mod tests {
         // Below the minimum and above the maximum: rejected silently.
         for bad in ["0", "999"] {
             assert_eq!(
-                apply_set_option(
+                apply_option(
                     &format!("setoption name Threads value {bad}"),
                     &mut searcher,
                     &mut pool,
@@ -1574,7 +1764,7 @@ mod tests {
         // the step-8 pool tests).
         for good in ["1", "256"] {
             assert_eq!(
-                apply_set_option(
+                apply_option(
                     &format!("setoption name Threads value {good}"),
                     &mut searcher,
                     &mut pool,
@@ -1598,37 +1788,62 @@ mod tests {
     }
 
     #[test]
-    fn public_inert_options_are_accepted_silently() {
+    fn public_options_outside_the_search_are_known_and_validated() {
         let mut searcher = Searcher::new(2);
         let mut pool = WorkerPool::new();
-        // Book, tablebase, EvalFile and Contempt names are known (advertised)
-        // but inert until their phases land; they must not be reported as
+        // The book, tablebase, EvalFile and Contempt names are advertised. The
+        // functional book/tablebase options report their resulting state; the
+        // still-inert names stay silent. None of them may be reported as
         // unknown.
         for line in [
             "setoption name Own Book value true",
-            "setoption name Book File value book.ctg",
             "setoption name Book Depth value 8",
-            "setoption name SyzygyPath value C:\\tb",
             "setoption name SyzygyRootProbe value false",
             "setoption name Syzygy50MoveRule value false",
             "setoption name EvalFile value other.nnue",
             "setoption name Contempt value -10",
         ] {
-            assert_eq!(
-                apply_set_option(line, &mut searcher, &mut pool),
-                None,
-                "{line} must be accepted silently"
+            let reply = apply_option(line, &mut searcher, &mut pool);
+            assert!(
+                reply
+                    .as_deref()
+                    .is_none_or(|reply| !reply.contains("Unknown option")),
+                "{line} must be a known option"
             );
         }
-        // Their spin/check values are still validated.
+        // A missing book file is reported instead of silently ignored.
+        let reply = apply_option(
+            "setoption name Book File value book.ctg",
+            &mut searcher,
+            &mut pool,
+        );
+        assert!(
+            reply
+                .as_deref()
+                .is_some_and(|reply| reply.contains("book file not loaded")),
+            "a missing book must be reported: {reply:?}"
+        );
+        // A tablebase path with no tables reports "none".
+        let reply = apply_option(
+            "setoption name SyzygyPath value C:\\definitely-no-tables",
+            &mut searcher,
+            &mut pool,
+        );
+        assert!(
+            reply
+                .as_deref()
+                .is_some_and(|reply| reply.contains("syzygy tablebases: none")),
+            "an empty tablebase path must be reported: {reply:?}"
+        );
+        // The spin/check values are still validated.
         assert_eq!(
-            apply_set_option(
+            apply_option(
                 "setoption name Book Depth value 200",
                 &mut searcher,
                 &mut pool
             ),
             None,
-            "an out-of-range inert value must be rejected silently, not applied"
+            "an out-of-range book depth must be rejected silently, not applied"
         );
     }
 
@@ -1636,13 +1851,13 @@ mod tests {
     fn a_malformed_setoption_is_reported() {
         let mut searcher = Searcher::new(2);
         let mut pool = WorkerPool::new();
-        assert!(apply_set_option("setoption value 5", &mut searcher, &mut pool).is_some());
-        assert!(apply_set_option("setoption", &mut searcher, &mut pool).is_some());
+        assert!(apply_option("setoption value 5", &mut searcher, &mut pool).is_some());
+        assert!(apply_option("setoption", &mut searcher, &mut pool).is_some());
     }
 
     #[test]
     fn the_handshake_carries_the_reference_info_lines() {
-        let lines = handshake_lines();
+        let lines = handshake_lines(&EngineExtras::new().book);
         let last = lines.last().map(String::as_str).expect("non-empty");
         assert_eq!(last, "uciok");
         assert!(lines.contains(&"info string no opening book loaded".to_owned()));
@@ -1801,7 +2016,7 @@ mod tests {
             } else {
                 format!("setoption name {name} value {value}")
             };
-            reply = apply_set_option(&line, &mut searcher, &mut pool);
+            reply = apply_option(&line, &mut searcher, &mut pool);
         }
         (reply, get(searcher.params(), spec))
     }

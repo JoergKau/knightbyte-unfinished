@@ -4,7 +4,11 @@ KnightByte is a UCI chess engine written in Rust. The neural network is fixed
 and embedded in the binary. This list tracks what is implemented and what is
 still planned; it is updated after every migration step.
 
-## Current status — Phases 0–3 complete; Phase 4 complete with full node identity (2026-11-17)
+## Current status — Phases 0–6 complete; Phase 4 with full node identity (2026-11-17)
+
+Phase 6 (Syzygy WDL/DTZ probing, root DTZ ranking and the `.ctg` opening book)
+completed 2026-11-19; the bench pins are unchanged because the default
+configuration loads neither tables nor a book.
 
 Parity status: the search is **node-identical** to the bug-fixed reference
 (2026-11-18, predecessor commits bffe98a and f274b39) at every captured depth
@@ -196,8 +200,8 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       `src/search/lever_table.rs`), plus three KnightByte-only research
       levers. 36 reference levers are wired into the search; the other 47
       carry `wired: false` and stay validated-but-inert until their feature
-      lands (ProbCut, SEE-reach, LMR v2 and its terms, quiescence checks,
-      book, tablebases). The catalogue is pinned against
+      lands (ProbCut, SEE-reach, LMR v2 and its terms, quiescence checks). The
+      catalogue is pinned against
       `tests/golden/levers.json`, with no names outside the 83 plus the
       marked KnightByte-only three.
 - [x] Full `setoption` validation (step 2): an unknown name prints
@@ -368,10 +372,57 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       history reset every search — the predecessor builds a fresh per-thread
       state for every `go`).
 
-### Endgame and book
+### Phase 6 — Syzygy and opening book (complete 2026-11-19)
 
-- [ ] Syzygy WDL/DTZ probing and root ranking.
-- [ ] Own opening book, off by default.
+- [x] Syzygy WDL and DTZ probing (`src/tb/syzygy/`): on-disk format, Pairs
+      decompression, piece/pawn placement encoding, the two-king triangle
+      encoding, capture and en-passant resolution, winning-pawn-move
+      resolution, and 50-move-aware DTZ values.
+- [x] 3-4-5 piece support and the larger material names (up to seven pieces):
+      the material list is enumerated by name and each file is mapped and
+      parsed on first use; a missing, truncated or corrupt file fails the
+      probe for that material without panicking.
+- [x] Material gating, castling refusal, position validation and the exact
+      WDL score band (`±29 900`, below the mate bound, DTZ-graded above
+      `±28 900` for ordering).
+- [x] Search integration: a depth-unconditional WDL probe at non-root nodes,
+      the checkmated-inside-the-tables mate correction in quiescence, and the
+      measured PV policy (`allow_syzygy_cutoff_on_pv_nodes`, default on).
+- [x] Root DTZ ranking (`UseSyzygyDtzRootRanking`, internal default on): the
+      50-move-aware root probe supplies the DTZ-optimal move as an ordering
+      hint, and a cursed root result clamps a flat tablebase win to a draw.
+      The toggle-off behaviour reproduces the reference's lazy shuffle
+      (verified on the 4-man fixture).
+- [x] `SyzygyPath`, `SyzygyRootProbe` (default off) and `Syzygy50MoveRule`
+      (default on) are functional; `setoption name SyzygyPath` prints the
+      resulting table state.
+- [x] `.ctg` opening book (`src/tb/book/`): signature encoding with the
+      canonical rank flip / file mirror and the en-passant availability rule,
+      one-pass page scanning into an FNV-indexed position map, move-byte
+      decoding, child-statistic weighting, annotations (including
+      "recommended" and "avoid") and weighted random selection.
+- [x] `Own Book` (default false), `Book File` (explicit load; empty value
+      auto-detects next to the executable or in `books/`) and `Book Depth`
+      (0-100, default 16) are functional. A book move is answered before any
+      search with `info string book move:` + `bestmove`, and is skipped for
+      `go searchmoves` and pondering.
+- [x] Diagnostics: `uci`/`setoption` report the loaded book and tablebase
+      state; a missing book file or empty table path is reported with an
+      `info string` and never panics.
+- [x] Tests (`tests/syzygy.rs`, `tests/book.rs`,
+      `tests/uci_book_syzygy.rs`): known WDL values, root win/draw/mate/
+      stalemate, illegal/castling/out-of-range rejection, exact tablebase
+      search scores and mate announcement, missing/corrupt tables, signature
+      vectors, a synthetic book (weights, recommendation, annotation,
+      unknown position), the UCI book/root-probe flows and the option
+      diagnostics. The 3-man tables live in `tests/data/tb/`; the DTZ-ranking
+      tests use the full set through `KNIGHTBYTE_SYZYGY_PATH` and skip when it
+      is unset.
+- [x] Bench pins unchanged: `bench 6/12/16/18` =
+      15,528 / 456,308 / 2,815,799 / 6,892,874 (tables and book are absent in
+      the default configuration).
+- [ ] `EvalFile` net override and `Contempt` remain inert (outside Phase 6's
+      scope; carried in the feature-compliance list).
 
 ### Packaging
 

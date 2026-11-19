@@ -1,32 +1,28 @@
 # KnightByte
 
 > **Work in progress.** This repository is an unfinished engine. The search is
-> functional and tested, but it does not yet reproduce the reference node counts
-> exactly (`bench 12` is within ~1 %); the remaining parity work, threading,
-> tablebases and the opening book are tracked in `next-steps.md`.
-> History begins with the public snapshot of 2026-11-17.
+> functional, tested and node-identical to the reference implementation; the
+> remaining work is performance, cross-platform validation and search tuning
+> (`next-steps.md`). History begins with the public snapshot of 2026-11-17.
 
 KnightByte is a UCI chess engine written in Rust. It is a headless engine: it
 speaks UCI on standard input/output and has no graphical interface.
 
 ## Status
 
-**Phases 0–3 complete. Phase 4 complete except the exact search-parity gate:**
-search foundations, move ordering, alpha-beta search, quiescence, time
-management and a UCI option catalogue are in place. The engine has a validated
-board and legal move generator, a perft suite, a v5 network loader, the
-scheme-2 feature mapping, a bit-exact scalar evaluation, Zobrist keys, a
-transposition table, static exchange evaluation, a staged move picker with
-history tables, and an iterative-deepening PVS search with quiescence, reachable
-through `go depth`/`go nodes`/`go movetime`/clock limiters, with 12 public
-options and 29 research levers, and the deterministic `bench` command.
+**Phases 0–6 complete.** The engine has a validated board and legal move
+generator, a perft suite, a v5 network loader with a bit-exact incremental
+evaluation, Zobrist keys, a transposition table, static exchange evaluation, a
+staged move picker with history tables, an iterative-deepening PVS search with
+quiescence, full time management, a persistent Lazy SMP worker pool, the full
+UCI option and lever surface, deterministic `bench`, Syzygy WDL/DTZ probing
+with root DTZ ranking, and a `.ctg` opening book (off by default).
 
-Exact node-count parity with the reference implementation is still open: the
-oracle is captured per position and depth, the gate is `bench 12` within 1.1 %
-today, and the remaining work is one coupled port of the reference search
-features (`docs/SEARCH-PARITY.md`, `next-steps.md` §3.1). Threading,
-tablebases and the opening book are not implemented; the public book, Syzygy,
-`EvalFile` and `Contempt` options are accepted and inert.
+Exact node-count parity with the reference implementation holds at every
+captured depth and position (`bench 6/12/16/18` = 15,528 / 456,308 / 2,815,799 /
+6,892,874, `docs/SEARCH-PARITY.md`). Performance work and cross-platform
+validation are tracked in `next-steps.md`. `EvalFile` and `Contempt` remain
+accepted-but-inert options.
 
 The production network is embedded in the binary from `net/jokausch.nnue`.
 There is no external network file at runtime.

@@ -151,6 +151,22 @@ pub struct SearchParams {
     pub clock_imbalance_ahead_scale: i32,
     /// Behind-side clock-imbalance scale, in percent of the ratio deficit.
     pub clock_imbalance_behind_scale: i32,
+    /// Whether the root move of a tablebase position is ordered by DTZ.
+    ///
+    /// Without it every win-preserving move scores the same flat tablebase
+    /// value and the root keeps whichever move the ordering happens to put
+    /// first, which can shuffle a won endgame into a fifty-move draw. This is
+    /// a tie-break, not a search bypass: the search still runs, still handles
+    /// repetitions, and a real mate still outranks the tablebase score.
+    pub use_syzygy_dtz_root_ranking: bool,
+    /// Whether an exact tablebase value may cut off a principal-variation node.
+    ///
+    /// On (the default) the probe returns the exact value everywhere, which is
+    /// what makes endgame move selection perfect. Off, a PV node is instead
+    /// graded by DTZ, and a node whose distance fits in the remaining depth is
+    /// searched so the real mate can be announced. The default is the measured
+    /// stronger policy; the off state exists for the mechanism's tests.
+    pub allow_syzygy_cutoff_on_pv_nodes: bool,
 }
 
 impl Default for SearchParams {
@@ -213,6 +229,8 @@ impl Default for SearchParams {
             use_clock_imbalance: false,
             clock_imbalance_ahead_scale: 50,
             clock_imbalance_behind_scale: 50,
+            use_syzygy_dtz_root_ranking: true,
+            allow_syzygy_cutoff_on_pv_nodes: true,
         }
     }
 }

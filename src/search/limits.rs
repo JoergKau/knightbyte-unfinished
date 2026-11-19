@@ -33,6 +33,9 @@ pub struct Limits {
     /// legal in the root position; a list whose every entry is illegal is
     /// ignored, exactly like the reference (verified 2026-11-18).
     pub root_moves: Vec<Move>,
+    /// Whether this is a ponder search. The reference does not volunteer a
+    /// tablebase root move while pondering, and neither does KnightByte.
+    pub ponder: bool,
 }
 
 impl Limits {

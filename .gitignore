@@ -4,6 +4,9 @@
 # Local analysis scripts (kept local, see next-steps.md)
 /perf-test/
 
+# Local opening books and book/reference material (third-party, never published)
+/books/
+
 # Local benchmark output and captures
 *.pgn
 *.log

@@ -33,6 +33,7 @@ pub mod eval;
 pub mod output;
 pub mod platform;
 pub mod search;
+pub mod tb;
 pub mod tools;
 pub mod types;
 pub mod uci;

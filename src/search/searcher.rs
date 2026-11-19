@@ -171,6 +171,18 @@ pub struct Searcher {
     /// for the current search. Empty means no restriction. Set once per
     /// search in [`Searcher::search`], read at every root node.
     pub(crate) root_filter: Vec<Move>,
+    /// Tablebase set for this search, or `None` when no `SyzygyPath` is set.
+    /// Taken once per search so a probe costs no global lock.
+    pub(crate) tb: Option<Arc<crate::tb::syzygy::Syzygy>>,
+    /// Whether tablebase probing is enabled for this search. Snapshotted from
+    /// the process-wide switch at the start, so the node path never reads an
+    /// atomic.
+    pub(crate) tb_probing: bool,
+    /// DTZ-optimal root move of the current search (root ranking, main thread
+    /// only); [`Move::NONE`] when the root is not in the tables.
+    pub(crate) root_tb_move: Move,
+    /// Fifty-move-aware WDL class of the root, when the root probe succeeded.
+    pub(crate) root_tb_wdl: Option<i32>,
     /// Step 8 (Lazy SMP): the shared node counter of a multi-threaded search.
     /// The main thread only READS it (its own count stays exact, which is
     /// what keeps the `Threads=1` node pins bit-identical); each helper
@@ -234,6 +246,10 @@ impl Searcher {
             start: std::time::Instant::now(),
             stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             root_filter: Vec::new(),
+            tb: None,
+            tb_probing: false,
+            root_tb_move: Move::NONE,
+            root_tb_wdl: None,
             helper_nodes: None,
             publishes_nodes: false,
             published_nodes: 0,
@@ -408,6 +424,12 @@ impl Searcher {
         self.currmove_reported = false;
         self.pv.reset();
         self.killers.clear();
+        // The tablebase set is looked up once per search: a `SyzygyPath`
+        // reload only happens while no search runs (the UCI loop joins first).
+        self.tb = crate::tb::syzygy::current();
+        self.tb_probing = crate::tb::syzygy::probing_enabled();
+        self.root_tb_move = Move::NONE;
+        self.root_tb_wdl = None;
         // The learned tables start cold every search, as in the predecessor:
         // its UCI layer builds a fresh per-thread state object for each `go`,
         // so history and correction history never survive a search (B41).
@@ -459,6 +481,31 @@ impl Searcher {
             self.root_filter[0]
         };
 
+        // DTZ root ranking. The leaf probe makes every win-preserving move
+        // score the same tablebase value, so the root would otherwise keep
+        // whichever move the ordering yields first. Probing the root once and
+        // trying the DTZ-optimal move first is a tie-break only: the search
+        // still runs and a real mate still outranks the tablebase value. Only
+        // the main thread ranks (helpers search the same job but their result
+        // is never played) and a ponder search never volunteers a move.
+        if self.params.use_syzygy_dtz_root_ranking
+            && self.tb_probing
+            && !self.limits.ponder
+            && !self.publishes_nodes
+            && let Some(tables) = self.tb.as_ref()
+            && tables.covers(position)
+        {
+            let result = tables.probe_root(position);
+            if !result.failed
+                && !result.is_checkmate
+                && !result.is_stalemate
+                && !result.mv.is_none()
+            {
+                self.root_tb_move = result.mv;
+                self.root_tb_wdl = Some(result.wdl);
+            }
+        }
+
         let max_depth = self.limits.depth_limit();
         // Reporting clock for the `info` lines: it starts with the search,
         // so every iteration publishes the elapsed time from the `go` (the
@@ -487,6 +534,18 @@ impl Searcher {
             }
             let Some((score, pv)) = self.search_root(position, depth, last_score, observer) else {
                 break;
+            };
+            // Fifty-move-aware root correction: the leaf probe ignores the real
+            // counter, so a WDL win that the actual counter turns into a cursed
+            // win or draw must not be reported as a decisive +TB_WIN_SCORE.
+            // Mate scores and genuine tablebase wins are untouched.
+            let score = if self.root_tb_wdl.is_some_and(|wdl| matches!(wdl, -1..=1))
+                && score.abs() >= crate::tb::syzygy::TB_WIN_SCORE_MIN
+                && score.abs() < MATE_LIMIT
+            {
+                0
+            } else {
+                score
             };
             last_score = score;
             best.score = score;
