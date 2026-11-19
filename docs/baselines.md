@@ -473,6 +473,11 @@ without own pieces), the answer is "no" as soon as a second move is seen, and
 only pawn moves and castles are built, and only when the pieces produced
 fewer than two. The plan predicted under 1 %.
 
+**Correction (same day, section 7.15):** the three-round table below used an
+unbalanced back-to-back order and overstated the gain. The balanced ABBA
+measurement is **+1.1 %** (2,222,125 -> 2,246,433 NPS, 12 runs each); the table
+is kept as the record of what was first measured.
+
 Interleaved A/B, plain release, `bench 16` median of three after a warm-up
 (2,815,799 nodes both):
 
@@ -517,8 +522,9 @@ commit (P1c) against this one:
 | `bench 18` round 2 | 2,363,001 | 2,421,100 | +2.5 % |
 | `bench 18` round 3 | 2,359,765 | 2,444,281 | +3.6 % |
 
-The gain is positive in every round and about 4-6 % typically (the spread is
-the machine state, not the code). Pins exact; every per-depth delta +0.
+The gain is positive in every round (the spread is the machine state, not the
+code). Balanced ABBA re-measurement (section 7.15): **+5.1 %** (2,269,895 ->
+2,385,101 NPS, 12 runs each). Pins exact; every per-depth delta +0.
 `tests/` and the kernel unit tests compare the fused kernels with
 copy-then-apply for the production width, a width that is not a multiple of 32
 and an awkward tail, for every backend the host supports.
@@ -543,8 +549,51 @@ Interleaved A/B, plain release, `bench 16` median of three after a warm-up,
 previous commit (P4a) against this one: 2,336,762 -> 2,388,294 (+2.2 %),
 2,366,217 -> 2,392,352 (+1.1 %), 2,400,510 -> 2,448,520 (+2.0 %),
 2,358,290 -> 2,398,465 (+1.7 %). Small, but positive in every round, and
-bit-exact: pins exact, per-depth deltas +0.
+bit-exact: pins exact, per-depth deltas +0. Balanced ABBA re-measurement
+(section 7.15): **+4.6 %** (2,311,972 -> 2,418,333 NPS, 12 runs each); the
+unbalanced rounds above understated it.
 `every_supported_head_kernel_matches_the_scalar_reference` runs each backend
 the host supports against the scalar oracle on random data at widths 16, 48,
 64, 512 and 1040 and on the overflow worst case at the maximum width (2048
 saturated activations against `i16::MAX` and `i16::MIN` weights).
+
+
+### 7.15 P4d - fused full refresh, and the balanced A/B method (2026-11-19)
+
+**Method correction.** A back-to-back pair is biased: two byte-identical
+binaries measured 1.7-4.5 % apart in four rounds, always in favour of the one
+that ran first. `tools/ab_bench.py` replaces it: each round runs the engines in
+the order A B B A, every run checks the node pin, and the change is the ratio of
+the mean NPS over all runs. The A/A control (same binary on both sides, 8 runs
+each) reads -0.76 % with a per-run spread of about 2 %, so a change under about
+1.5 % needs more rounds before it is believed. From here on every speed claim
+uses this tool; the earlier P1c, P4a and P4c figures were re-measured with it
+(see 7.12-7.14).
+
+**P4d.** `refresh_into` copied the bias and then made one load-modify-store pass
+over the whole accumulator for each of the 20-30 active feature rows. The new
+`kernels::refresh_rows` loops over vector chunks on the outside: each chunk
+starts from the bias, collects the matching chunk of every row in a register and
+is stored once. Row addition is wrapping `i16`, so the result is bit-identical;
+SSE4.1, AVX2 and AVX-512 kernels plus the scalar reference exist, and `add_row`
+(now unused) is removed. A refresh happens 156 K times in `bench 16` (own-king
+moves and the root), against 1.89 M incremental pushes.
+
+| Comparison (balanced ABBA, plain release) | Runs | A | B | Change |
+| :--- | ---: | ---: | ---: | ---: |
+| P4c -> P4d, `bench 16` | 12 + 12 | 2,399,267 | 2,442,504 | **+1.8 %** |
+| P4c -> P4d, `bench 18` | 8 + 8 | 2,518,949 | 2,550,952 | **+1.3 %** |
+| P1c -> P4a (fused push), `bench 16` | 12 + 12 | 2,269,895 | 2,385,101 | +5.1 % |
+| P4a -> P4c (madd head), `bench 16` | 12 + 12 | 2,311,972 | 2,418,333 | +4.6 % |
+| pre-P1c -> P4d (this session), `bench 16` | 12 + 12 | 2,195,128 | 2,514,758 | **+14.6 %** |
+
+Pins exact and every per-depth delta +0.
+`the_fused_refresh_matches_adding_the_rows_one_by_one` compares the dispatcher,
+the scalar reference and every backend the host supports against adding the rows
+one at a time (0 to 32 rows; widths 512, 48 and 37).
+
+**Profile after P4c (`bench 18`, self time, main thread):** picker `next` +
+`pick_best` 14.7 %, `negamax` 11.4 %, `evaluate_head` 9.7 % (before P4c),
+`push_accumulators` 8.1 %, `make_move` 6.6 %, `legal` 5.7 %, `push_rows` 6.2 %,
+`correction` 4.7 %, `add_row` 4.7 % (before P4d), SEE (`see_ge`,
+`allowed_attackers`, `pinned_pieces`) 6.2 %.

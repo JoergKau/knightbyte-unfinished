@@ -1,7 +1,8 @@
 //! SIMD kernels for the accumulator arithmetic and the output head.
 //!
-//! The evaluation calls three bulk operations per node: adding a weight row,
-//! subtracting one, and running the SCReLU output head over a ready
+//! The evaluation calls three bulk operations: the fused incremental update
+//! of a child accumulator from its parent (`push_rows`), the full refresh of
+//! one perspective (`refresh_rows`), and the SCReLU output head over a ready
 //! accumulator pair. All three are integer-exact, so every instruction-set
 //! backend must produce bit-identical results — the parity and bench tests
 //! depend on it.
@@ -80,26 +81,6 @@ fn detected_kernel() -> KernelKind {
     KernelKind::Scalar
 }
 
-/// Adds (`add`) or subtracts the weight row `row` from `acc`.
-///
-/// The row width is `acc.len()`; the network validation guarantees a width
-/// that is a multiple of 16, so the 128-bit and 256-bit kernels need no tail
-/// loop.
-pub(crate) fn add_row(acc: &mut [i16], weights: &[i16], row: usize, add: bool) {
-    let l1 = acc.len();
-    let base = row * l1;
-    let row_weights = &weights[base..base + l1];
-    match kernel() {
-        KernelKind::Scalar => scalar::add_row(acc, row_weights, add),
-        #[cfg(target_arch = "x86_64")]
-        KernelKind::Sse41 => unsafe { wide::add_row_sse41(acc, row_weights, add) },
-        #[cfg(target_arch = "x86_64")]
-        KernelKind::Avx2 => unsafe { wide::add_row_avx2(acc, row_weights, add) },
-        #[cfg(target_arch = "x86_64")]
-        KernelKind::Avx512 => unsafe { wide::add_row_avx512(acc, row_weights, add) },
-    }
-}
-
 /// Computes `dst = src - sum(subs) + sum(adds)` in one pass.
 ///
 /// This is the incremental accumulator update: the parent perspective is
@@ -163,6 +144,33 @@ pub(crate) fn push_rows(dst: &mut [i16], src: &[i16], adds: &[&[i16]], subs: &[&
         KernelKind::Avx512 => by_shape!(push_rows_avx512),
     }
 }
+/// Computes `dst = bias + sum(rows)` in one pass.
+///
+/// This is the full refresh of one perspective: every vector chunk starts from
+/// the bias, collects the matching chunk of each active feature row in a
+/// register and is stored once, instead of one load-modify-store pass over the
+/// whole accumulator per row. Wrapping `i16` addition is associative and
+/// commutative, so the result is bit-identical to adding the rows one by one.
+///
+/// `bias` and every row must be at least `dst.len()` long.
+pub(crate) fn refresh_rows(dst: &mut [i16], bias: &[i16], rows: &[&[i16]]) {
+    let n = dst.len();
+    assert!(
+        bias.len() >= n && rows.iter().all(|row| row.len() >= n),
+        "accumulator rows must cover the destination"
+    );
+    match kernel() {
+        KernelKind::Scalar => scalar::refresh_rows(dst, bias, rows),
+        // SAFETY: the backend was selected from the detected (or forced and
+        // verified) instruction set, and every slice covers `n`.
+        #[cfg(target_arch = "x86_64")]
+        KernelKind::Sse41 => unsafe { wide::refresh_rows_sse41(dst, bias, rows) },
+        #[cfg(target_arch = "x86_64")]
+        KernelKind::Avx2 => unsafe { wide::refresh_rows_avx2(dst, bias, rows) },
+        #[cfg(target_arch = "x86_64")]
+        KernelKind::Avx512 => unsafe { wide::refresh_rows_avx512(dst, bias, rows) },
+    }
+}
 /// Runs the SCReLU output head over a ready accumulator pair and returns the
 /// scaled evaluation in centipawns from the side-to-move perspective.
 pub(crate) fn evaluate_head(
@@ -212,17 +220,16 @@ pub(crate) mod scalar {
     use super::{output, screlu};
     use crate::types::color::Color;
 
-    /// Adds or subtracts one weight row with wrapping `i16` arithmetic.
-    pub(crate) fn add_row(acc: &mut [i16], row_weights: &[i16], add: bool) {
-        for (index, value) in acc.iter_mut().enumerate() {
-            if add {
-                *value = value.wrapping_add(row_weights[index]);
-            } else {
-                *value = value.wrapping_sub(row_weights[index]);
+    /// `dst = bias + sum(rows)` with wrapping `i16` arithmetic.
+    pub(crate) fn refresh_rows(dst: &mut [i16], bias: &[i16], rows: &[&[i16]]) {
+        for index in 0..dst.len() {
+            let mut value = bias[index];
+            for row in rows {
+                value = value.wrapping_add(row[index]);
             }
+            dst[index] = value;
         }
     }
-
     /// `dst = src - sum(subs) + sum(adds)` with wrapping `i16` arithmetic.
     pub(crate) fn push_rows(dst: &mut [i16], src: &[i16], adds: &[&[i16]], subs: &[&[i16]]) {
         for index in 0..dst.len() {
@@ -278,29 +285,6 @@ pub(crate) mod wide {
 
     use super::{output, screlu};
     use crate::types::color::Color;
-
-    /// Adds or subtracts one weight row with 128-bit chunks.
-    ///
-    /// # Safety
-    ///
-    /// The host CPU must support SSE4.1 (the x86-64 v2 baseline).
-    #[target_feature(enable = "sse4.1")]
-    pub(super) unsafe fn add_row_sse41(acc: &mut [i16], row_weights: &[i16], add: bool) {
-        let (acc_chunks, _) = acc.as_chunks_mut::<8>();
-        let (row_chunks, _) = row_weights.as_chunks::<8>();
-        for (acc_chunk, row_chunk) in acc_chunks.iter_mut().zip(row_chunks) {
-            unsafe {
-                let value = _mm_loadu_si128(acc_chunk.as_ptr() as *const __m128i);
-                let row = _mm_loadu_si128(row_chunk.as_ptr() as *const __m128i);
-                let result = if add {
-                    _mm_add_epi16(value, row)
-                } else {
-                    _mm_sub_epi16(value, row)
-                };
-                _mm_storeu_si128(acc_chunk.as_mut_ptr() as *mut __m128i, result);
-            }
-        }
-    }
 
     /// Generates one output-head kernel for a vector width.
     ///
@@ -428,53 +412,6 @@ pub(crate) mod wide {
         fold_lanes512
     );
 
-    /// Adds or subtracts one weight row with 256-bit chunks.
-    ///
-    /// # Safety
-    ///
-    /// The host CPU must support AVX2 (the x86-64 v3 baseline).
-    #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn add_row_avx2(acc: &mut [i16], row_weights: &[i16], add: bool) {
-        let (acc_chunks, _) = acc.as_chunks_mut::<16>();
-        let (row_chunks, _) = row_weights.as_chunks::<16>();
-        for (acc_chunk, row_chunk) in acc_chunks.iter_mut().zip(row_chunks) {
-            unsafe {
-                let value = _mm256_loadu_si256(acc_chunk.as_ptr() as *const __m256i);
-                let row = _mm256_loadu_si256(row_chunk.as_ptr() as *const __m256i);
-                let result = if add {
-                    _mm256_add_epi16(value, row)
-                } else {
-                    _mm256_sub_epi16(value, row)
-                };
-                _mm256_storeu_si256(acc_chunk.as_mut_ptr() as *mut __m256i, result);
-            }
-        }
-    }
-
-    /// Adds or subtracts one weight row with 512-bit chunks.
-    ///
-    /// # Safety
-    ///
-    /// The host CPU must support AVX-512 Foundation and BW (the x86-64 v4
-    /// baseline).
-    #[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-    pub(super) unsafe fn add_row_avx512(acc: &mut [i16], row_weights: &[i16], add: bool) {
-        let (acc_chunks, _) = acc.as_chunks_mut::<32>();
-        let (row_chunks, _) = row_weights.as_chunks::<32>();
-        for (acc_chunk, row_chunk) in acc_chunks.iter_mut().zip(row_chunks) {
-            unsafe {
-                let value = _mm512_loadu_si512(acc_chunk.as_ptr() as *const __m512i);
-                let row = _mm512_loadu_si512(row_chunk.as_ptr() as *const __m512i);
-                let result = if add {
-                    _mm512_add_epi16(value, row)
-                } else {
-                    _mm512_sub_epi16(value, row)
-                };
-                _mm512_storeu_si512(acc_chunk.as_mut_ptr() as *mut __m512i, result);
-            }
-        }
-    }
-
     /// Generates one fused row-update kernel: `dst = src - sum(subs) + sum(adds)`.
     ///
     /// The shape (`A` rows added, `S` rows subtracted) is a const generic so
@@ -525,6 +462,71 @@ pub(crate) mod wide {
         };
     }
 
+    /// Generates one full-refresh kernel: `dst = bias + sum(rows)`.
+    ///
+    /// The chunk loop is outermost, so each vector chunk stays in a register
+    /// while every row contributes to it; a scalar loop finishes any tail
+    /// narrower than one vector.
+    macro_rules! refresh_rows_kernel {
+        ($name:ident, $feature:literal, $lanes:expr, $load:ident, $store:ident,
+         $add:ident, $vector:ty) => {
+            /// # Safety
+            ///
+            /// The host CPU must support the instruction set named in the
+            /// attribute, and `bias` and every row must hold at least
+            /// `dst.len()` elements.
+            #[target_feature(enable = $feature)]
+            pub(super) unsafe fn $name(dst: &mut [i16], bias: &[i16], rows: &[&[i16]]) {
+                let n = dst.len();
+                let mut offset = 0;
+                while offset + $lanes <= n {
+                    unsafe {
+                        let mut value = $load(bias.as_ptr().add(offset) as *const $vector);
+                        for row in rows {
+                            value = $add(value, $load(row.as_ptr().add(offset) as *const $vector));
+                        }
+                        $store(dst.as_mut_ptr().add(offset) as *mut $vector, value);
+                    }
+                    offset += $lanes;
+                }
+                for index in offset..n {
+                    let mut value = bias[index];
+                    for row in rows {
+                        value = value.wrapping_add(row[index]);
+                    }
+                    dst[index] = value;
+                }
+            }
+        };
+    }
+
+    refresh_rows_kernel!(
+        refresh_rows_sse41,
+        "sse4.1",
+        8,
+        _mm_loadu_si128,
+        _mm_storeu_si128,
+        _mm_add_epi16,
+        __m128i
+    );
+    refresh_rows_kernel!(
+        refresh_rows_avx2,
+        "avx2",
+        16,
+        _mm256_loadu_si256,
+        _mm256_storeu_si256,
+        _mm256_add_epi16,
+        __m256i
+    );
+    refresh_rows_kernel!(
+        refresh_rows_avx512,
+        "avx512f,avx512bw,avx512vl",
+        32,
+        _mm512_loadu_si512,
+        _mm512_storeu_si512,
+        _mm512_add_epi16,
+        __m512i
+    );
     push_rows_kernel!(
         push_rows_sse41,
         "sse4.1",
@@ -579,7 +581,7 @@ pub(crate) mod wide {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_row, evaluate_head, push_rows, scalar};
+    use super::{evaluate_head, push_rows, refresh_rows, scalar};
     use crate::eval::nnue::net::{EVAL_SCALE_MUL, EVAL_SCALE_SHIFT};
     use crate::types::color::{BLACK, WHITE};
 
@@ -607,24 +609,6 @@ mod tests {
     fn the_dispatched_backend_matches_the_scalar_reference() {
         let mut rng = Lcg(0x5EED);
         let l1 = 512;
-        let weights: Vec<i16> = (0..4 * l1).map(|_| rng.i16()).collect();
-
-        // Row add and row subtract against the scalar reference.
-        let mut acc: Vec<i16> = (0..l1).map(|_| rng.i16()).collect();
-        let reference = acc.clone();
-        let row = 3;
-        add_row(&mut acc, &weights, row, true);
-        for (index, value) in acc.iter().enumerate() {
-            assert_eq!(
-                *value,
-                reference[index].wrapping_add(weights[row * l1 + index]),
-                "row add diverges at {index}"
-            );
-        }
-        add_row(&mut acc, &weights, row, false);
-        for (index, value) in acc.iter().enumerate() {
-            assert_eq!(*value, reference[index], "row subtract diverges at {index}");
-        }
 
         // The output head over random pairs, both perspectives.
         let output_weights: Vec<i16> = (0..2 * l1).map(|_| rng.i16()).collect();
@@ -780,6 +764,57 @@ mod tests {
                 for (name, kernel) in &kernels {
                     let got = unsafe { kernel(stm, &pair, &output_weights, -777) };
                     assert_eq!(got, expected, "{name} head diverges at l1 {l1}, side {stm}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_fused_refresh_matches_adding_the_rows_one_by_one() {
+        let mut rng = Lcg(0xC0DE);
+        for n in [512, 48, 37] {
+            for row_count in [0, 1, 2, 7, 30, 32] {
+                let bias: Vec<i16> = (0..n).map(|_| rng.i16()).collect();
+                let rows = random_rows(&mut rng, row_count, n);
+                let refs: Vec<&[i16]> = rows.iter().map(Vec::as_slice).collect();
+
+                let mut expected = bias.clone();
+                for row in &rows {
+                    for (value, weight) in expected.iter_mut().zip(row) {
+                        *value = value.wrapping_add(*weight);
+                    }
+                }
+
+                let mut dispatched = vec![0_i16; n];
+                refresh_rows(&mut dispatched, &bias, &refs);
+                assert_eq!(dispatched, expected, "dispatched n={n} rows={row_count}");
+
+                let mut reference = vec![0_i16; n];
+                scalar::refresh_rows(&mut reference, &bias, &refs);
+                assert_eq!(reference, expected, "scalar n={n} rows={row_count}");
+
+                #[cfg(target_arch = "x86_64")]
+                {
+                    use super::wide;
+                    // Each kernel runs only on a host that supports it.
+                    if is_x86_feature_detected!("sse4.1") {
+                        let mut out = vec![0_i16; n];
+                        unsafe { wide::refresh_rows_sse41(&mut out, &bias, &refs) };
+                        assert_eq!(out, expected, "sse4.1 n={n} rows={row_count}");
+                    }
+                    if is_x86_feature_detected!("avx2") {
+                        let mut out = vec![0_i16; n];
+                        unsafe { wide::refresh_rows_avx2(&mut out, &bias, &refs) };
+                        assert_eq!(out, expected, "avx2 n={n} rows={row_count}");
+                    }
+                    if is_x86_feature_detected!("avx512f")
+                        && is_x86_feature_detected!("avx512bw")
+                        && is_x86_feature_detected!("avx512vl")
+                    {
+                        let mut out = vec![0_i16; n];
+                        unsafe { wide::refresh_rows_avx512(&mut out, &bias, &refs) };
+                        assert_eq!(out, expected, "avx512 n={n} rows={row_count}");
+                    }
                 }
             }
         }

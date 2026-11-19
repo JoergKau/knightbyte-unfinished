@@ -259,8 +259,15 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       verifies the four node pins; +7-12 % speed, same-session depth-20 ratio
       vs the predecessor 1.79-1.92. Profiles stay local to the host.
 - [x] P1c (2026-11-19): the forced-reply extension counts pseudo-legal moves with an
-      early exit (movegen::has_exactly_one_pseudo_move) instead of building the
-      list; about +5 % at ench 16 (docs/baselines.md 7.12), pins exact.
+      early exit (`movegen::has_exactly_one_pseudo_move`) instead of building the
+      list; +1.1 % balanced (docs/baselines.md 7.12), pins exact.
+- [x] P4 eval path (2026-11-19, balanced ABBA, docs/baselines.md 7.13-7.15): the
+      incremental push is one fused pass (child = parent - rows + rows, +5.1 %),
+      the output head is an exact 16-bit `mullo`/`madd` kernel (+4.6 %), and the
+      full refresh keeps each chunk in a register across all rows (+1.3-1.8 %);
+      SSE4.1, AVX2 and AVX-512 kernels, scalar oracle, pins exact. Together with
+      P1c: +14.6 % over the pre-P1c build. `tools/ab_bench.py` is the balanced
+      A/B tool (a back-to-back pair is biased by 2-4 %).
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).

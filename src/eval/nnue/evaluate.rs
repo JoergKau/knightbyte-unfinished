@@ -77,8 +77,8 @@ impl<'a> Evaluator<'a> {
 /// Rebuilds one perspective's accumulator from the feature biases and every
 /// active feature row of `position`.
 ///
-/// The SIMD kernels add each row; a row add is exact wrapping `i16`
-/// arithmetic, so the result is identical to the scalar oracle.
+/// One fused kernel pass adds every row to the bias; row addition is exact
+/// wrapping `i16` arithmetic, so the result is identical to the scalar oracle.
 pub(crate) fn refresh_into(
     net: &Net,
     position: &Position,
@@ -86,15 +86,17 @@ pub(crate) fn refresh_into(
     accumulator: &mut [i16],
 ) {
     crate::node_stat!(FullRefreshes);
-    accumulator.copy_from_slice(net.feature_biases());
-
     let mut features = [0_usize; MAX_ACTIVE_FEATURES];
     let count = active_features(net, position, perspective, &mut features);
     let weights = net.feature_weights();
+    let l1 = net.l1();
 
-    for &feature in &features[..count] {
-        kernels::add_row(accumulator, weights, feature, true);
+    let no_row: &[i16] = &[];
+    let mut rows = [no_row; MAX_ACTIVE_FEATURES];
+    for (slot, &feature) in rows.iter_mut().zip(&features[..count]) {
+        *slot = &weights[feature * l1..(feature + 1) * l1];
     }
+    kernels::refresh_rows(accumulator, net.feature_biases(), &rows[..count]);
 }
 
 /// Computes the accumulator pair at `ply + 1` by applying `mv` to the
