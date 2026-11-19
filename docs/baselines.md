@@ -361,3 +361,57 @@ Both steps are node-neutral (pins exact, `capture_bench.py compare` all +0,
 Milestone R2 (predecessor parity, same session) is reached: KnightByte is
 ~8-11 % faster per node than the predecessor at depth 20 on this host. R3 (the
 1.5x project goal) and R4 (thread scaling) remain open.
+
+### 7.9 P3 (board hot path) and the first sampling profile (2026-11-19)
+
+**P3.1 incremental occupancy - measured, no gain, reverted.** Replacing the
+six-iteration occupancy rebuild in `make_move` with moved/captured bit
+updates was node-neutral and correct (a random-walk assertion compared it with
+the recomputed union), but interleaved A/B runs showed no measurable gain:
+`bench 16` medians 1.446 / 1.434 / 1.458 M (before) vs 1.440 / 1.477 / 1.445 M
+(after), `bench 12` 1.250 / 1.220 M vs 1.240 / 1.230 M. After P1 the engine
+makes one move per searched move (about 11 M makes in `bench 20`), so the
+rebuild is well under 1 % of the run. Project rule: no gain, no merge.
+
+**Profile-driven pivot.** The make/unmake decision of P3 needs a profile, so
+the profiling rig was finished: `samply record --save-only
+--unstable-presymbolicate` on the `release-with-debug` build, aggregated per
+function by the new `tools/profile_report.py` (dbghelp symbol table of the
+PDB; Windows). The first profile of `bench 18` (self time):
+
+| Share | Function |
+| ---: | :--- |
+| 12.2 % | `add_row_avx512` (accumulator rows) |
+| **7.1 %** | `std::sys::pal::windows::to_u16s` (environment name conversion) |
+| 6.3 % | `evaluate_head_avx512` |
+| 5.4 % | `movegen::pseudo_legal` |
+| 5.4 % | `Searcher::negamax` |
+| 4.9 % | `PickerState::next` |
+| 3.7 % | `Position::make_move` |
+| 2.8 % | `CorrectionHistory::correction` |
+| **1.5 %** + ~8 % in ntdll/kernelbase | `std::sys::env::getenv` and its system calls |
+
+`make_move` is 3.7 %, below the 5 % threshold: **make/unmake is not worth
+doing** (the plan's rule). The surprise was the environment lookup: the move
+picker called `std::env::var_os("KNIGHTBYTE_PICKER_TRACE")` once per node and
+once per scored quiet move, about **18-20 % of all samples** (bug B43).
+
+**P3a fix:** the flag is read once into a `OnceLock<bool>`. Pins exact,
+`capture_bench.py compare` +0, all tests green.
+
+| Measurement | Before | After |
+| :--- | ---: | ---: |
+| `bench 12` median (interleaved) | 1.20 - 1.23 M | 1.68 - 1.74 M |
+| `bench 16` single run | 1.46 M | 2.10 M |
+| `bench 18` single run | 1.42 M | 2.28 M |
+
+**Same-session depth 20** (identical 18,662,358 nodes, interleaved):
+
+| KnightByte NPS | Predecessor NPS | Ratio |
+| ---: | ---: | ---: |
+| 2,431,939 | 1,408,798 | 1.73 |
+| 2,381,957 | 1,408,108 | 1.69 |
+
+This passes the same-session form of milestone R3 (>= 1.60 M, i.e. 1.5x the
+predecessor) and is at the formal 2.43 M mark. R4 (thread scaling) and R5
+(Apple Silicon) remain open.

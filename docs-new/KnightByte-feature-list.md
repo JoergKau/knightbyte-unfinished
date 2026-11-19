@@ -240,6 +240,11 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       non-x86 targets build without the x86 feature macro) and a TT bucket
       prefetch after every make and null move. Node counts unchanged;
       same-session depth-20 ratio vs the predecessor: ~1.08-1.11.
+- [x] P3a (2026-11-19): B43 fixed - the picker's trace switch is read once per
+      process instead of per node/move (it cost 18-20 % of all samples).
+      Profiling rig: `samply` + `tools/profile_report.py`. Same-session
+      depth-20 ratio vs the predecessor: ~1.7 (2.4 M NPS). Incremental
+      occupancy was measured (no gain) and not merged; make/unmake rejected.
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).

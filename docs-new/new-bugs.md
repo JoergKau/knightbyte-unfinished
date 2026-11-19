@@ -664,6 +664,13 @@ Consequences for KnightByte:
     `bench 12` median 799-833 K -> 847-863 K NPS (about +3-4 %, three
     interleaved five-run pairs).
 
+- **B43 - the move picker read the environment on every node and every scored quiet move (found by the first sampling profile, 2026-11-19; fixed same day).**
+  - Build / commit: `a867fbe` (release-with-debug), Windows 11, AMD Ryzen 7 260.
+  - Command: `samply record --save-only --unstable-presymbolicate ... knightbyte.exe bench 18`, aggregated per function with `tools/profile_report.py`.
+  - Expected: a debug trace switch is read once per process.
+  - Actual: `PickerState::trace_reset` (per node) and the quiet-scoring stage (per move) called `std::env::var_os("KNIGHTBYTE_PICKER_TRACE")`. On Windows that is a UTF-16 conversion plus a kernel environment query: `to_u16s`, `getenv` and the ntdll environment routines together took roughly **18-20 % of all samples**. Node counts were unaffected; this is a pure performance defect.
+  - Status: **fixed 2026-11-19 (P3a)**. The flag is read once into a `OnceLock<bool>` (`picker_trace()` in `src/search/move_picker.rs`); the trace output itself is unchanged. Measured: `bench 12` 1.20-1.23 M -> 1.68-1.74 M NPS; same-session depth 20 1.54 M -> 2.38-2.43 M (identical nodes, pins exact).
+
 - **B41 — warm-transposition-table node divergence (found by Phase 5 step 12, fixed 2026-11-18).**
   - Build / commit: step-12 release build; bench pins exact (`capture_bench.py compare`, all deltas +0).
   - Platform / CPU: Windows 11, AMD Ryzen 7 260.

@@ -3,10 +3,12 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-19 (P1.0, P1, P2, P5-prefetch done: depth-20 ratio 0.629 -> 1.08-1.11; P1.0 and P1 done: depth-20 ratio 0.629 -> 0.87-0.91; earlier: P0 complete: the measurement rig is reproducible; same-session depth-20 baseline 669,773 vs 1,064,034 NPS (1.59x, identical tree); the legal filter is 89.8 % of all makes and ~45-55 % of the gap; B42 found; P1 one-pass move path is next)
+**Last updated:** 2026-11-19 (P3a/B43 done: depth-20 ratio 1.69-1.73; P1.0, P1, P2, P5-prefetch done: ratio 0.629 -> 1.08-1.11; P1.0 and P1 done: depth-20 ratio 0.629 -> 0.87-0.91; earlier: P0 complete: the measurement rig is reproducible; same-session depth-20 baseline 669,773 vs 1,064,034 NPS (1.59x, identical tree); the legal filter is 89.8 % of all makes and ~45-55 % of the gap; B42 found; P1 one-pass move path is next)
 **Rule:** update this document at the end of every working session.
 
-## NEXT SESSION (top priority): beyond parity - P3 / P4 / P6 / P7 (R2 reached)
+## NEXT SESSION (top priority): P4 / P6 / P7 (R2 and the same-session R3 reached)
+
+**2026-11-19 (later):** the first sampling profile (`tools/profile_report.py`) found B43 - the move picker read an environment variable per node (18-20 % of samples). Fixed (P3a). Same-session depth 20: **2.38-2.43 M vs 1.41 M NPS = 1.69-1.73x** (docs/baselines.md 7.9). P3.1 (incremental occupancy) measured no gain and was reverted; make/unmake is rejected (make_move 3.7 % of samples). The profile now leads: `add_row_avx512` 12 %, `evaluate_head` 6 %, `pseudo_legal` 5 %, picker 5 %, `correction` 3 %. Next: P4 (eval rows/head, SEE), P6 (PGO / target-cpu), then P7 (thread scaling, the biggest open gap).
 
 **2026-11-19 update:** P2 (hardware `pext`) and the P5 prefetch are also done. Same-session depth 20 (identical tree): KnightByte 1.54-1.57 M vs predecessor 1.42-1.43 M NPS = **1.08-1.11x** (docs/baselines.md 7.8). The parity milestone R2 is reached; the project goal (1.5x) and thread scaling (P7) remain.
 

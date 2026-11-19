@@ -698,6 +698,10 @@ evaluation while `UseEvalCache` is off); **fixed in P1.0 (2026-11-19)**, about
 (hardware `pext`) and the **P5 prefetch** followed the same day: the same-session
 depth-20 ratio against the predecessor went 0.629 -> 1.08-1.11 (KnightByte
 1.54-1.57 M vs 1.42-1.43 M NPS, identical 18,662,358-node tree), every pin exact.
+P3 then found by profile that the move picker read an environment variable per
+node (B43, 18-20 % of samples; fixed): depth-20 ratio **1.69-1.73** (2.38-2.43 M
+vs 1.41 M NPS); incremental occupancy measured no gain and was reverted, and
+make/unmake was rejected by the profile (`make_move` 3.7 %).
 Full numbers and the composition table are in `docs/baselines.md` section 7.
 
 **Measurement protocol**

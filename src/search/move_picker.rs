@@ -36,6 +36,17 @@ use crate::types::piece::{PAWN, color_of, piece_type};
 /// exchange values the search's SEE returns.
 pub(crate) const ORDER_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20_000];
 
+/// Returns whether the picker trace is enabled (`KNIGHTBYTE_PICKER_TRACE`).
+///
+/// The environment is read once per process: the flag is consulted for every
+/// node and every scored quiet move, and an environment lookup is a system
+/// call sequence that would otherwise dominate the move picker.
+#[inline(always)]
+fn picker_trace() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("KNIGHTBYTE_PICKER_TRACE").is_some())
+}
+
 /// Maximum number of moves a position can have; matches the generator's list.
 pub const MAX_MOVES: usize = 256;
 
@@ -176,7 +187,7 @@ impl PickerState {
     /// Writes the parity-picker trace line (the killers and the mode) with
     /// the caller's node number.
     pub fn trace_reset(&self, node: u64) {
-        if !std::env::var_os("KNIGHTBYTE_PICKER_TRACE").is_some() {
+        if !picker_trace() {
             return;
         }
         let killers_text = self
@@ -317,7 +328,7 @@ impl PickerState {
                             } else {
                                 history.picker_score(color_of(moving), mv, &self.cont)
                             };
-                            if std::env::var_os("KNIGHTBYTE_PICKER_TRACE").is_some() {
+                            if picker_trace() {
                                 eprintln!("P quiet {} {}", mv.to_uci(), self.quiet_scores[kept]);
                             }
                             kept += 1;
