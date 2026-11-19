@@ -97,8 +97,12 @@ struct HashSlot {
     pawn: bool,
     /// Index into the piece or pawn entry vector.
     index: usize,
-    /// Set when this table's file failed to load.
-    error: bool,
+    /// One bit per table kind (`1 << WDL`, `1 << DTZ`) whose file failed to
+    /// load. The flag is per kind on purpose: a present but corrupt DTZ file
+    /// must only fail DTZ probes, never switch off the healthy WDL table of the
+    /// same material (a shared flag did exactly that and silently dropped the
+    /// exact tablebase scores).
+    error_mask: u8,
 }
 
 /// The result of one table read: value plus the reference success code.
@@ -399,7 +403,7 @@ impl Inner {
             key,
             pawn,
             index,
-            error: false,
+            error_mask: 0,
         });
     }
 
@@ -435,7 +439,7 @@ impl Inner {
             }
         }
         let slot = self.hash[slot_index].expect("checked above");
-        if slot.error {
+        if slot.error_mask & (1 << kind) != 0 {
             return TableValue::FAILED;
         }
 
@@ -476,7 +480,10 @@ impl Inner {
         });
         let suffix = TB_SUFFIX[if kind == WDL { 0 } else { 2 }];
         let Some(path) = self.resolve(&name, suffix) else {
-            self.hash[slot_index].as_mut().expect("slot exists").error = true;
+            self.hash[slot_index]
+                .as_mut()
+                .expect("slot exists")
+                .error_mask |= 1 << kind;
             return TableValue::FAILED;
         };
         let mut entry = if has_pawns {
@@ -502,7 +509,10 @@ impl Inner {
             self.piece_entries[entry_index] = entry;
         }
         if error {
-            self.hash[slot_index].as_mut().expect("slot exists").error = true;
+            self.hash[slot_index]
+                .as_mut()
+                .expect("slot exists")
+                .error_mask |= 1 << kind;
             return TableValue::FAILED;
         }
         if !ready {

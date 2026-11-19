@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-19 (Phase 6 complete: Syzygy WDL/DTZ + root DTZ ranking + `.ctg` opening book, 312 tests, bench pins unchanged; next: finish the performance plan, P4/P4b/P8, then search tuning)
+**Last updated:** 2026-11-19 (Phase 6 complete: Syzygy WDL/DTZ + root DTZ ranking + `.ctg` opening book, 318 tests, bench pins unchanged; next: finish the performance plan, P4/P4b/P8, then search tuning)
 **Rule:** update this document at the end of every working session.
 
 ## ORDER OF WORK (decided 2026-11-19)
@@ -23,14 +23,27 @@ lazy shuffle Kd2-c1 reproduces), and the `.ctg` reader with signature
 validation, weighted move choice and annotations. `Own Book` defaults off;
 `Book File` loads explicitly (empty value auto-detects next to the executable
 or in `books/`); `SyzygyPath`/`SyzygyRootProbe`/`Syzygy50MoveRule` are
-functional and report their state. Tests: 312 (the full-set tests skip when
+functional and report their state. Tests: 318 (the full-set tests skip when
 `KNIGHTBYTE_SYZYGY_PATH` is unset, the real-book tests when no book is
 present). Bench pins unchanged: 15,528 / 456,308 / 2,815,799 / 6,892,874. The
 table files are mapped lazily through `memmap2` (ADR-0009); the 3-man test
 tables are in `tests/data/tb/`; the book tests use a synthetic fixture plus a
 local real book, so no third-party book is published. Quirk Q9 (a failed DTZ
-load of a present but corrupt file poisons WDL for the same material) is
-reproduced and recorded.
+load of a present but corrupt file poisons WDL for the same material) was
+reproduced first, then fixed in both engines as Bug 151 / B49 (see the quirk
+clean-up below).
+
+**Quirk clean-up (2026-11-19, ADR-0010).** Q5-Q9 are fixed in both engines and
+only Q1 remains in the register: a stopped ponder search answers its best move
+(Q5); the banner never reaches stdout (Q6); the warm-up uses a private table
+(Q7); the single-legal-move instant answer serves clock/`movetime` searches
+only (Q8); one tablebase error flag per table kind (Q9 = Bug 151 = B49). The
+Rust regression test also found B50 (a failed DTZ read was reported as a
+success, so a WDL-only table set chose a bogus root move). Predecessor first:
+755/755 tests, published binary rebuilt, `bench 6` unchanged. KnightByte: 318
+tests, bench pins unchanged, step-0 transcripts re-captured from the fixed
+predecessor, differentials clean. **Anything that says "reproduces the
+predecessor" must now name the 2026-11-19 predecessor build.**
 
 **Post-phase audit (2026-11-19): lesson and result.** The ported unit tests
 passed while four real defects were present (B45-B48: capture sign, trailing
@@ -179,7 +192,8 @@ legal move>` and exactly one `bestmove` per `go` comes from the worker. The
 burst go+quit and one-shot argv semantics were verified against the
 reference binary itself (both engines answer the depth-0 line). **Step 5**
 implemented `go ponder`/`ponderhit`: the ponder search runs unbounded, a
-`stop` without `ponderhit` answers `bestmove 0000` (Q5), and a
+`stop` without `ponderhit` answers `bestmove 0000` (Q5; **superseded
+2026-11-19**: it now answers the best move so far, ADR-0010), and a
 `ponderhit` applies the ponder move and starts a fresh search with the
 clock beginning at the ponderhit moment; the zero-iteration and burst
 cases were verified byte-for-byte against the reference binary. **Step 6**
@@ -228,7 +242,7 @@ depth-only, and history/correction history reset every search). Step 11 was
 dropped (see §2.3). Step 13 (match gates) is tracked in `migration-plan.md`,
 where the project owner recorded 3 x 100 fastchess games.
 
-Verification status on the last run (2026-11-19, after Phase 6): all 312 tests
+Verification status on the last run (2026-11-19, after Phase 6): all 318 tests
 pass locally on Windows (the full-set DTZ-ranking tests skip when
 `KNIGHTBYTE_SYZYGY_PATH` is unset) using the Stockfish verifier from
 `C:\dev\c#-chess-engines\stockfish`; fmt/clippy clean; all four bench pins
@@ -562,13 +576,14 @@ step 13 (match gates).** Details in `migration-plan.md`, Phase 5.
 - ~~Step 4: search thread with `stop`~~ — done (2026-11-18): 16 MB worker
   thread, shared stop flag polled every 1024 nodes (no per-node clock read),
   `quit`/EOF and state-touching commands stop and join first, the Q8
-  single-legal-move fast path, and the stop-before-depth-1 depth-0 answer;
+  single-legal-move fast path (**narrowed 2026-11-19** to time-managed
+  searches, ADR-0010), and the stop-before-depth-1 depth-0 answer;
   the burst go+quit and one-shot argv semantics verified against the
   reference binary. The former burst-style smoke tests now use the
   interactive pattern (wait for `bestmove`, then `quit`).
 - ~~Step 5: `go ponder`/`ponderhit`~~ — done (2026-11-18): unbounded ponder
   search printing its iterations, `stop`/burst-`quit` answer `bestmove 0000`
-  (Q5, plus the interrupted-search depth-0 line — byte-identical to the
+  (Q5, **superseded 2026-11-19**: now the best move so far; plus the interrupted-search depth-0 line — byte-identical to the
   reference binary), `ponderhit` applies the ponder move and starts the
   fresh search with the clock at the hit; with zero completed ponder
   iterations the reference re-searches the unchanged position (verified

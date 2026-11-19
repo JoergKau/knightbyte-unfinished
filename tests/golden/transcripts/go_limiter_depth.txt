@@ -1,9 +1,8 @@
 # UCI transcript: go with deterministic limiters (none, depth, nodes, movestogo, perft)
-# Captured 2026-11-18 (migration plan, Phase 5 step 0). Identity lines are
+# Captured 2026-11-19 (migration plan, Phase 5 step 0). Identity lines are
 # placeholders; time, nps, hashfull, tbhits and (where noted) nodes
 # values are masked. Lines starting with '>' are commands sent to the
 # engine, '#' lines are derived measurements, the rest is engine output.
-<start-up banner>
 > position startpos
 # a) bare go (no limiter)
 > go
@@ -53,4 +52,4 @@ bestmove d2d4
 > go perft 3
 Nodes: 8902
 Time: 2ms
-NPS: 3708549
+NPS: 3705924

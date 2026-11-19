@@ -434,9 +434,11 @@ bench pins are unchanged. Their parity surface is checked separately:
 | `.ctg` signature and reader | `src/tb/book/` | `tests/book.rs` signature vectors and synthetic book |
 | Book move before search, depth gate, off by default | `src/uci/mod.rs` | `tests/uci_book_syzygy.rs` |
 
-The reference's coarser error flag (a failed DTZ load also disables WDL for the
-same material) is reproduced as quirk Q9; ADR-0009 records the file-access and
-dependency decisions.
+The reference's coarser error flag (a failed DTZ load also disabled WDL for the
+same material) was first reproduced as quirk Q9, then fixed in both engines as
+Bug 151 / B49 (ADR-0010); ADR-0009 records the file-access and dependency
+decisions. Since 2026-11-19 "the reference" means the fixed predecessor build
+(quirks Q5-Q9 resolved).
 
 ### 9.1 Differential evidence (2026-11-19)
 

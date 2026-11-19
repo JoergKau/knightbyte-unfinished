@@ -194,7 +194,14 @@ pub(crate) fn probe_dtz(inner: &mut Inner, pos: &Pos) -> TableValue {
     }
 
     let dtz = inner.probe_table(pos, wdl, DTZ);
-    if dtz.success >= 0 {
+    // A table that could not be read (absent, corrupt, not covered) is a failed
+    // probe, never a value: the reference lets the zero success flag flow out
+    // unchanged. Wrapping it in `ok` would invent a DTZ of 1 or 101 and feed
+    // the root ranking a made-up "optimal" move.
+    if dtz.success == 0 {
+        return TableValue::FAILED;
+    }
+    if dtz.success > 0 {
         let base = WDL_TO_DTZ[(wdl + 2) as usize];
         return TableValue::ok(if wdl > 0 {
             base + dtz.value

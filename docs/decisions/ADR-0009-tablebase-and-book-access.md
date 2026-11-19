@@ -44,13 +44,14 @@ Three decisions are not obvious from the port itself:
    running search before any `setoption`, so a reload can never race a worker.
    Probes inside one table set are serialized by the set's own mutex, exactly
    like the reference's single prober lock; this is endgame-only traffic.
-4. **The reference's coarser error flag is reproduced.** A material's hash
-   slot carries one "file failed" flag for both WDL and DTZ. A present but
-   unreadable or corrupt `.rtbz` therefore also disables WDL probing for that
-   material until a reload (an absent `.rtbz` does not: the probe fails early
-   without touching the flag). This is recorded as quirk Q9 in the migration
-   register; the graceful-degradation behaviour (no panic, no crash) is the
-   important part.
+4. **One error flag per table kind.** This item first reproduced the
+   reference's single "file failed" flag per material, under which a present
+   but unreadable or corrupt `.rtbz` also disabled the healthy WDL table
+   (quirk Q9). It was reclassified as a bug (predecessor Bug 151 / KnightByte
+   B49) and fixed in both engines on 2026-11-19 (ADR-0010): the material hash
+   now keeps one failure bit per table kind, so a bad DTZ file only fails DTZ
+   probes. A DTZ probe that cannot read its table is a failed probe (B50), so
+   root ranking and the direct root probe are skipped for such a material.
 5. **Test data is small and public.** `tests/data/tb/` holds the three 3-man
    WDL/DTZ pairs (KQvK, KRvK, KPvK), which are part of the public Syzygy set.
    Book tests build a synthetic `.ctg` fixture in memory, so no third-party

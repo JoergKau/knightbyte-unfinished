@@ -1,9 +1,8 @@
 # UCI transcript: which thread reports the result with Threads=4
-# Captured 2026-11-18 (migration plan, Phase 5 step 0). Identity lines are
+# Captured 2026-11-19 (migration plan, Phase 5 step 0). Identity lines are
 # placeholders; time, nps, hashfull, tbhits and (where noted) nodes
 # values are masked. Lines starting with '>' are commands sent to the
 # engine, '#' lines are derived measurements, the rest is engine output.
-<start-up banner>
 > position startpos
 # single-thread reference run: go depth 12
 > go depth 12
@@ -25,19 +24,19 @@ bestmove e2e4
 > setoption name Threads value 4
 # four threads: go depth 12
 > go depth 12
-info currmove d2d4 currmovenumber 1 nodes <nodes>
-info depth 1 seldepth 1 score cp 45 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv c2c4
+info currmove e2e4 currmovenumber 1 nodes <nodes>
+info depth 1 seldepth 1 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
 info depth 2 seldepth 1 score cp 29 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
 info depth 3 seldepth 1 score cp 29 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
-info depth 4 seldepth 4 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
-info depth 5 seldepth 4 score cp 31 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv g1f3
-info depth 6 seldepth 4 score cp 34 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
-info depth 7 seldepth 4 score cp 34 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
-info depth 8 seldepth 4 score cp 32 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
-info depth 9 seldepth 7 score cp 32 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
-info depth 10 seldepth 8 score cp 32 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
-info depth 11 seldepth 16 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4 d7d5 e2e3
-info depth 12 seldepth 18 score cp 21 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4 d7d5 c2c4
-bestmove d2d4
-# reported nodes at depth 12 with 4 threads: 392906
+info depth 4 seldepth 2 score cp 37 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 5 seldepth 2 score cp 33 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv d2d4
+info depth 6 seldepth 7 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 7 seldepth 7 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 8 seldepth 7 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 9 seldepth 7 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 10 seldepth 10 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 11 seldepth 10 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
+info depth 12 seldepth 14 score cp 30 nodes <nodes> nps <nps> hashfull <permille> time <ms> pv e2e4
+bestmove e2e4
+# reported nodes at depth 12 with 4 threads: 97794
 > setoption name Threads value 1

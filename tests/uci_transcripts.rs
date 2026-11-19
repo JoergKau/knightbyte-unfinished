@@ -216,11 +216,7 @@ fn run_burst(commands: &str, wait_for: &str) -> Vec<String> {
 /// placeholders; field names, score kinds and line kinds stay exact.
 fn normalize(line: &str) -> Option<String> {
     let line = line.trim_end();
-    if line.is_empty()
-        || line.starts_with('#')
-        || line.starts_with("> ")
-        || line == "<start-up banner>"
-    {
+    if line.is_empty() || line.starts_with('#') || line.starts_with("> ") {
         return None;
     }
     if let Some(rest) = line.strip_prefix("info depth ") {
@@ -538,7 +534,7 @@ fn ponder_transcript_matches_step0() {
     engine.send("go ponder wtime 5000 btime 5000 winc 100 binc 100");
     engine.wait_for("info depth ", 2, Duration::from_secs(10));
     engine.send("stop");
-    engine.wait_bestmove(0); // Q5: 0000
+    engine.wait_bestmove(0); // Q5 fix: the best move so far, not 0000
 
     engine.send("go ponder wtime 5000 btime 5000 winc 100 binc 100");
     // Wait for a NEW iteration: counting from zero would be satisfied by the

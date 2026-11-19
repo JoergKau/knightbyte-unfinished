@@ -671,7 +671,16 @@ disagreed before versus 0 of 315 (400 samples each) after.
 - **Expected:** `score cp 29900` (the WDL table is healthy; only DTZ is unavailable, so root ranking is skipped).
 - **Actual:** `score cp 783`: the failed DTZ load marked the material's single error flag, and every later WDL probe answered "not covered". An absent DTZ file is fine (`cp 29900`).
 - **Cause:** one error flag per material slot (reproduced as quirk Q9, ADR-0009).
-- **Status:** open. Decided 2026-11-19 to fix in both engines with one error flag per table kind (predecessor Bug 151); the fix, a regression test and the re-measurement follow in the next step.
+- **Status:** fixed 2026-11-19 (ADR-0010). One error flag per table kind in the material hash (`src/tb/syzygy/table.rs`), identical to the predecessor's Bug 151 fix. Regression tests in `tests/syzygy.rs` (`a_corrupt_dtz_file_does_not_disable_wdl`, `an_absent_dtz_file_leaves_wdl_working`, `a_corrupt_wdl_file_still_fails_wdl`, `the_search_keeps_the_exact_score_with_a_corrupt_dtz_file`), each shown to fail against the reverted fix. Re-measured: the corrupt-DTZ position scores `cp 29900` in both engines (it was `cp 783`).
+
+## B50 - a DTZ probe that failed to read its table returned a made-up value
+
+- **Date:** 2026-11-19
+- **Build / commit:** `3e73f2e` (Phase 6 port; found by the B49 regression test)
+- **Command or FEN:** `8/8/8/8/8/1Q6/8/K6k w - - 0 1` with a table directory that has `KQvK.rtbw` but no (or a corrupt) `KQvK.rtbz`; `probe_dtz`, `probe_root`, `go` with `SyzygyRootProbe true`.
+- **Expected:** the DTZ probe fails (the reference lets the zero success flag of the failed table read flow out unchanged), so the root probe fails, root ranking is skipped and no direct tablebase move is played.
+- **Actual:** the port wrapped the failed read in `TableValue::ok(...)`, which resets the flag to success and invents a DTZ of 1 (or 101): the root probe "succeeded" and chose a bogus DTZ-optimal move. Any user with a WDL-only table set (no `.rtbz` files) was affected.
+- **Status:** fixed 2026-11-19 (`src/tb/syzygy/probe.rs`). `an_absent_dtz_file_leaves_wdl_working` asserts the root probe fails. Verified: 120 random positions with a WDL-only 3-4-5 set give identical score and best move in both engines.
 
 ## Predecessor behaviour
 

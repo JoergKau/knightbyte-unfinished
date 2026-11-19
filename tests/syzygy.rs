@@ -373,6 +373,107 @@ fn six_piece_three_versus_three_material_is_covered() {
     assert_eq!(result.wdl, 2);
     assert_eq!(result.dtz, 5);
 }
+/// Builds a temporary table directory from the committed KQvK pair.
+///
+/// A corrupt variant zeroes the file magic but keeps the size, so the loader's
+/// size check passes and the failure happens when the file is mapped: the
+/// "present but unreadable" case.
+fn make_table_dir(
+    wdl: bool,
+    dtz: bool,
+    corrupt_wdl: bool,
+    corrupt_dtz: bool,
+) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "knightbyte-bug49-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).expect("create temp table directory");
+    let copy = |name: &str, corrupt: bool| {
+        let mut bytes = std::fs::read(format!("{}/{name}", table_dir())).expect("read table");
+        if corrupt {
+            bytes[..4].fill(0);
+        }
+        std::fs::write(directory.join(name), bytes).expect("write table");
+    };
+    if wdl {
+        copy("KQvK.rtbw", corrupt_wdl);
+    }
+    if dtz {
+        copy("KQvK.rtbz", corrupt_dtz);
+    }
+    directory
+}
+
+#[test]
+fn a_corrupt_dtz_file_does_not_disable_wdl() {
+    // B49 / predecessor Bug 151: one error flag per material used to let a
+    // present-but-corrupt DTZ file switch off the healthy WDL table too.
+    let _guard = tb_lock();
+    let directory = make_table_dir(true, true, false, true);
+    assert!(syzygy::initialize(&directory.to_string_lossy()));
+    let tables = syzygy::current().expect("tables were loaded");
+    let position = verified("8/8/8/8/8/1Q6/8/K6k w - - 0 1");
+
+    // DTZ first: that is the order that used to poison the material.
+    assert_eq!(tables.probe_dtz(&position), None);
+    assert_eq!(tables.probe_wdl(&position), Some(2));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn an_absent_dtz_file_leaves_wdl_working() {
+    let _guard = tb_lock();
+    let directory = make_table_dir(true, false, false, false);
+    assert!(syzygy::initialize(&directory.to_string_lossy()));
+    let tables = syzygy::current().expect("tables were loaded");
+    let position = verified("8/8/8/8/8/1Q6/8/K6k w - - 0 1");
+
+    assert_eq!(tables.probe_dtz(&position), None);
+    assert_eq!(tables.probe_wdl(&position), Some(2));
+    // B50: with no DTZ table the root probe must FAIL (so root ranking and the
+    // direct root probe are skipped), not invent a DTZ-optimal move from a
+    // made-up value.
+    assert!(tables.probe_root(&position).failed);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_corrupt_wdl_file_still_fails_wdl() {
+    let _guard = tb_lock();
+    let directory = make_table_dir(true, true, true, false);
+    assert!(syzygy::initialize(&directory.to_string_lossy()));
+    let tables = syzygy::current().expect("tables were loaded");
+    let position = verified("8/8/8/8/8/1Q6/8/K6k w - - 0 1");
+
+    assert_eq!(tables.probe_wdl(&position), None);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn the_search_keeps_the_exact_score_with_a_corrupt_dtz_file() {
+    // Root ranking cannot run (its table is corrupt), but the leaf WDL probe
+    // must still return the exact win: before the fix the search reported an
+    // ordinary evaluation (cp 783).
+    let _guard = tb_lock();
+    let directory = make_table_dir(true, true, false, true);
+    assert!(syzygy::initialize(&directory.to_string_lossy()));
+    let position = verified("8/8/8/8/8/1Q6/8/K6k w - - 0 1");
+
+    let (infos, _searcher) = search_with_tables(&position, 4, true);
+    assert!(
+        infos
+            .iter()
+            .any(|info| info.score.abs() >= TB_WIN_SCORE_MIN),
+        "no tablebase score with a corrupt DTZ file: {:?}",
+        infos.iter().map(|info| info.score).collect::<Vec<_>>()
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 #[test]
 fn missing_and_corrupt_tables_are_harmless() {
     let _guard = tb_lock();

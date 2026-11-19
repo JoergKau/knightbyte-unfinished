@@ -341,13 +341,22 @@ fn stop_search(
     if let Some(job) = active.take() {
         use std::sync::atomic::Ordering;
         job.stop.store(true, Ordering::Relaxed);
-        let (state, _result) = job
+        let (state, result) = job
             .worker
             .join()
             .expect("the search worker must return the searcher");
         *searcher = Some(state);
         if job.ponder {
-            let _ = output.line("bestmove 0000");
+            // A stopped ponder search is answered like any stopped search: with
+            // the best move of the last completed iteration (the first legal
+            // move when none completed). The null move is only the answer for
+            // a position without legal moves.
+            let answer = if result.best_move.is_none() {
+                "0000".to_owned()
+            } else {
+                result.best_move.to_uci()
+            };
+            let _ = output.line(&format!("bestmove {answer}"));
         }
     }
     pool.wait_until_idle();
@@ -730,11 +739,14 @@ fn handle_go(
         }
     }
 
-    // Quirk Q8 (reference parity, not while pondering): with exactly one
-    // legal move there is nothing to consider — the move is answered at once
-    // with a depth-0 info line carrying the static evaluation, and no search
-    // runs.
-    if !limits.ponder {
+    // Single-legal-move shortcut (formerly quirk Q8): with exactly one legal
+    // move there is nothing to consider, so a TIME-MANAGED search (a clock or
+    // `go movetime`) answers at once with a depth-0 info line carrying the
+    // static evaluation and runs no search. Searches without a budget —
+    // `go infinite`, `go depth/nodes/mate`, and pondering — run normally:
+    // an infinite search must wait for `stop`, and an analysis search must
+    // report its iterations.
+    if !limits.ponder && !limits.infinite && limits.has_time_control() {
         let root_moves = legal(&position);
         if root_moves.len() == 1 {
             let only = root_moves.as_slice()[0];

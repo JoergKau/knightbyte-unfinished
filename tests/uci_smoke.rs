@@ -187,10 +187,12 @@ fn run_interactively(commands: &[u8]) -> String {
 // see the step 4/5/6 tests below.
 
 #[test]
-fn a_quit_ends_a_ponder_search_with_the_null_move() {
-    // Verified against the reference binary (2026-11-18): a burst
-    // `go ponder` + `quit` prints the interrupted-search depth-0 line and
-    // answers the null move — the ponder search never got its ponderhit.
+fn a_quit_ends_a_ponder_search_with_its_best_move() {
+    // A burst `go ponder` + `quit` prints the interrupted-search depth-0 line
+    // and answers the best move so far — here the first legal move, since no
+    // iteration completed. (Quirk Q5 fix, 2026-11-19: the ponder stop used to
+    // answer the null move `bestmove 0000`, which UCI does not allow after a
+    // `stop`; both engines now answer a real move.)
     let stdout =
         run_engine(b"position startpos\ngo ponder wtime 5000 btime 5000 winc 100 binc 100\nquit\n");
     let depth_lines: Vec<&str> = stdout
@@ -206,7 +208,7 @@ fn a_quit_ends_a_ponder_search_with_the_null_move() {
         .lines()
         .filter(|line| line.starts_with("bestmove "))
         .collect();
-    assert_eq!(bestmoves, vec!["bestmove 0000"], "Q5: {stdout}");
+    assert_eq!(bestmoves, vec!["bestmove a2a3"], "Q5: {stdout}");
 }
 
 #[test]
@@ -632,14 +634,19 @@ fn isready_is_answered_during_a_search() {
     );
 }
 
+/// The only legal move of this position is Kb1 (the FEN is verified against
+/// the external oracle at test time, per the project rules).
+const FORCED_MOVE_FEN: &str = "7k/8/8/8/8/1p6/r7/K7 w - - 0 1";
+
 #[test]
-fn a_single_legal_move_is_answered_at_once() {
-    // Quirk Q8 (reference parity): nothing to consider, so the move is
-    // answered with a depth-0 info line carrying the static evaluation and
-    // no search runs. The FEN is verified against the external oracle at
-    // test time, per the project rules.
-    common::verify_fen("7k/8/8/8/8/1p6/r7/K7 w - - 0 1");
-    let stdout = run_engine(b"position fen 7k/8/8/8/8/1p6/r7/K7 w - - 0 1\ngo depth 5\nquit\n");
+fn a_single_legal_move_is_answered_at_once_under_a_clock() {
+    // Single-legal-move shortcut (formerly quirk Q8): with a clock or
+    // `go movetime` there is nothing to consider, so the move is answered with
+    // a depth-0 info line carrying the static evaluation and no search runs.
+    common::verify_fen(FORCED_MOVE_FEN);
+    let stdout = run_interactively(
+        format!("position fen {FORCED_MOVE_FEN}\ngo wtime 60000 btime 60000\n").as_bytes(),
+    );
     let depth_lines: Vec<&str> = stdout
         .lines()
         .filter(|line| line.starts_with("info depth "))
@@ -657,6 +664,43 @@ fn a_single_legal_move_is_answered_at_once() {
     assert!(
         stdout.contains("bestmove a1b1"),
         "the only move is the bestmove: {stdout}"
+    );
+}
+
+#[test]
+fn a_single_legal_move_is_searched_without_a_time_budget() {
+    // Quirk Q8 fix (2026-11-19): a fixed-depth analysis of a forced move
+    // reports its iterations instead of the instant depth-0 answer.
+    common::verify_fen(FORCED_MOVE_FEN);
+    let stdout =
+        run_interactively(format!("position fen {FORCED_MOVE_FEN}\ngo depth 4\n").as_bytes());
+    assert!(
+        stdout.contains("info depth 1 "),
+        "iteration lines expected: {stdout}"
+    );
+    assert!(
+        !stdout.contains("info depth 0 "),
+        "no instant depth-0 answer without a time budget: {stdout}"
+    );
+    assert!(stdout.contains("bestmove a1b1"), "{stdout}");
+}
+
+#[test]
+fn go_infinite_on_a_single_legal_move_does_not_answer_instantly() {
+    // Quirk Q8 fix (2026-11-19): `go infinite` must keep searching, not hand
+    // back a bestmove at once (UCI: do not leave an infinite search until
+    // told to). The search here ends by itself only because the position is a
+    // forced loss; what matters is that iterations are reported first.
+    common::verify_fen(FORCED_MOVE_FEN);
+    let stdout =
+        run_interactively(format!("position fen {FORCED_MOVE_FEN}\ngo infinite\n").as_bytes());
+    assert!(
+        stdout.contains("info depth 1 "),
+        "iteration lines expected: {stdout}"
+    );
+    assert!(
+        !stdout.contains("info depth 0 "),
+        "no instant depth-0 answer for an infinite search: {stdout}"
     );
 }
 
@@ -707,11 +751,12 @@ fn a_command_touching_the_state_joins_the_running_search() {
 // ----------------------------------------------------------------------
 
 #[test]
-fn a_stop_ends_a_ponder_search_with_the_null_move() {
-    // Quirk Q5 (the step-0 capture, scenario a): a stop without ponderhit
-    // ends a ponder search with `bestmove 0000`, no matter how many
-    // iterations completed. The ponder phase runs 400 ms first, so the stop
-    // hits a search with completed iterations, like the capture.
+fn a_stop_ends_a_ponder_search_with_its_best_move() {
+    // Quirk Q5 fix (2026-11-19): a stop without ponderhit ends a ponder search
+    // like any stopped search — with the best move of the last completed
+    // iteration, never the null move (the step-0 capture recorded the old
+    // `bestmove 0000`). The ponder phase runs 400 ms first, so the stop hits a
+    // search with completed iterations.
     let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let (mut child, reader) = spawn_with_reader(&lines);
     let mut stdin = child.stdin.take().expect("stdin");
@@ -726,15 +771,27 @@ fn a_stop_ends_a_ponder_search_with_the_null_move() {
     reader.join().expect("reader");
 
     let captured = lines.lock().expect("reader lock").clone();
-    // Q5's core does not depend on how far the search got: the stop without
-    // ponderhit answers the null move, whether or not an iteration had
-    // completed (under full-suite load even depth 1 can still be running).
+    // The answer does not depend on how far the search got: a real, legal move
+    // whether or not an iteration had completed (under full-suite load even
+    // depth 1 can still be running, and the first legal move answers then).
     let bestmoves: Vec<&str> = captured
         .iter()
         .filter(|(_, line)| line.starts_with("bestmove "))
         .map(|(_, line)| line.as_str())
         .collect();
-    assert_eq!(bestmoves, vec!["bestmove 0000"], "Q5: {captured:?}");
+    assert_eq!(bestmoves.len(), 1, "exactly one bestmove: {captured:?}");
+    let answer = bestmoves[0].trim_start_matches("bestmove ").trim();
+    assert_ne!(answer, "0000", "Q5: the null move is no longer the answer");
+    let start =
+        knightbyte::board::position::Position::from_fen(knightbyte::board::fen::STARTPOS_FEN)
+            .expect("the start position parses");
+    assert!(
+        knightbyte::board::movegen::legal(&start)
+            .as_slice()
+            .iter()
+            .any(|mv| mv.to_uci() == answer),
+        "Q5: {answer} is not a legal move of the start position"
+    );
 }
 
 #[test]

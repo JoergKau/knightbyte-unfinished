@@ -318,12 +318,17 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       before depth 1 finishes answers `info depth 0 score cp <eval> pv
       <first legal move>` (the step-0 capture, scenario b — verified against
       the reference binary, whose `quit` during a search behaves the same).
-      A single legal move is answered at once with the depth-0 line (quirk
-      Q8, not while pondering).
+      A single legal move is answered at once with the depth-0 line for
+      time-managed searches only (clock or `go movetime`; since 2026-11-19,
+      ADR-0010 - formerly quirk Q8 it applied to every `go`, so `go infinite`
+      answered instantly; infinite, depth, nodes, mate and ponder searches now
+      run normally).
 - [x] Step 5: `go ponder` runs unbounded (the stored clock limiters start
       only at `ponderhit`, whose fresh search restarts at depth 1 with the
       ponder move applied; the pondered time is not deducted). A `stop`
-      without `ponderhit` answers `bestmove 0000` (quirk Q5) after the
+      without `ponderhit` answers the best move of the last completed
+      iteration (the first legal move when none completed; since 2026-11-19,
+      ADR-0010 - formerly quirk Q5 it answered `bestmove 0000`), after the
       interrupted-search depth-0 line; a stray `ponderhit` — and one during
       a normal search — is ignored. The `Ponder` option stays unadvertised
       (CCRL requires ponder off). The burst and zero-iteration ponderhit
@@ -421,6 +426,14 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
 - [x] Bench pins unchanged: `bench 6/12/16/18` =
       15,528 / 456,308 / 2,815,799 / 6,892,874 (tables and book are absent in
       the default configuration).
+- [x] Quirk clean-up (2026-11-19, ADR-0010): the predecessor's quirks Q5-Q9
+      are fixed in both engines (only Q1 remains). B49: one tablebase error
+      flag per table kind, so a corrupt DTZ file no longer disables WDL; B50:
+      a failed DTZ read is a failed probe, not a made-up value (a WDL-only
+      table set no longer produces a bogus root move). Q5/Q8 as above; Q6 (no
+      stdout banner) and Q7 (private warm-up table) already held for
+      KnightByte. The step-0 transcripts were re-captured from the fixed
+      predecessor.
 - [x] Differential verification tools: `tools/tb_compare.py` (random positions
       of every material: WDL, DTZ and chosen move against an independent
       reader and a second engine) and `tools/book_compare.py` (book move sets
