@@ -597,3 +597,61 @@ one at a time (0 to 32 rows; widths 512, 48 and 37).
 `push_accumulators` 8.1 %, `make_move` 6.6 %, `legal` 5.7 %, `push_rows` 6.2 %,
 `correction` 4.7 %, `add_row` 4.7 % (before P4d), SEE (`see_ge`,
 `allowed_attackers`, `pinned_pieces`) 6.2 %.
+
+### 7.16 P4e - lazy pins in SEE, and the close of P4 (2026-11-19)
+
+SEE computed the pin masks of both colours up front for every exchange that
+reached the attacker walk, and each mask used a `between` that walked the line
+square by square. Most exchanges end at the first step because the opponent has
+no recapture, so the pin question was asked and never used. Now:
+
+* the pin mask of a colour is computed on first use (`LazyAllowed`), and only
+  for a side that actually has an attacker. A colour's mask is only ever applied
+  to that colour's own pieces and the position never changes during the walk,
+  so this is exactly the old answer;
+* `between` is the shared 64 x 64 table of `board::legality`; the old
+  geometric walk stays in the test module as the oracle
+  (`the_shared_between_table_matches_the_geometric_walk`, all 4,096 pairs);
+* `attackers_to` receives the slider masks instead of rebuilding them.
+
+| Comparison (balanced ABBA, plain release) | Runs | A (P4d) | B (P4e) | Change |
+| :--- | ---: | ---: | ---: | ---: |
+| `bench 16` | 12 + 12 | 2,493,721 | 2,579,408 | **+3.4 %** |
+| `bench 18` | 8 + 8 | 2,412,218 | 2,456,943 | **+1.9 %** |
+
+Pins exact, every per-depth delta +0 (SEE feeds pruning and ordering, so a wrong
+answer anywhere would have moved a node count).
+
+**P4 is closed.** Items of the plan: fused push (P4a), exact `madd` head (P4c),
+fused refresh (P4d) and SEE (P4e) are done. The *contiguous accumulator pair*
+is dropped: its purpose was one allocation and one 2 KB `memcpy` per make, and
+the fused push already removed the copy (the child is written straight from the
+parent while the rows are applied); only the null-move copy remains, which is a
+rare path. The *dispatch hoist* is dropped as well: the kernel kind is a
+process-wide `OnceLock` read once per call and the branch is perfectly
+predicted; the kernels now run once per perspective per node instead of once
+per row.
+
+
+### 7.17 Same-session state after P1c and P4 (2026-11-19)
+
+Same host (Ryzen 7 260), same session, plain release (no PGO), `perf_test.py
+--depth 20 --threads 1 --hash 256`, engines interleaved K P P K K P P K, identical
+tree for both (18,662,358 nodes, EBF 2.131):
+
+| Engine | Runs (NPS) | Mean |
+| :--- | :--- | ---: |
+| KnightByte (P4e) | 2,186,574 / 2,170,190 / 2,215,064 / 2,174,246 | 2,186,519 |
+| predecessor | 1,026,414 / 1,029,158 / 1,047,705 / 998,163 | 1,025,360 |
+
+Ratio **2.13x**. The machine was in a slower state than during the earlier
+depth-20 comparison (7.11: plain 2.35-2.38 M against 1.36-1.41 M, 1.67-1.74x),
+so the absolute figures are lower and the ratio is not directly comparable to
+that row; compare only within one session.
+
+Single-thread speed of this session's steps, balanced ABBA, `bench 16`:
+pre-P1c build 2,086,964 -> P4e 2,447,169 NPS (**+17.3 %**, 12 runs each). Steps:
+P1c +1.1 %, P4a +5.1 %, P4c +4.6 %, P4d +1.8 %, P4e +3.4 %.
+
+Open on this host: the match gate and a PGO build of the new code (the PGO
+profile of 7.11 was recorded before these changes).

@@ -268,6 +268,10 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       SSE4.1, AVX2 and AVX-512 kernels, scalar oracle, pins exact. Together with
       P1c: +14.6 % over the pre-P1c build. `tools/ab_bench.py` is the balanced
       A/B tool (a back-to-back pair is biased by 2-4 %).
+- [x] P4e (2026-11-19): SEE computes pins lazily per colour and uses the shared
+      `between` table: +1.9-3.4 % balanced, pins exact. P4 is closed (the
+      contiguous accumulator pair and the dispatch hoist are dropped, see
+      docs/baselines.md 7.16). Whole session since the pre-P1c build: see 7.17.
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).

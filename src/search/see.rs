@@ -23,11 +23,12 @@ use crate::board::attacks::{
     bishop_attacks, king_attacks, knight_attacks, pawn_attacks, rook_attacks,
 };
 use crate::board::bitboard::lsb;
+use crate::board::legality::between;
 use crate::board::position::Position;
 use crate::types::color::{BLACK, Color, WHITE, flip};
 use crate::types::r#move::{Move, flags};
 use crate::types::piece::{BISHOP, EMPTY, KING, KNIGHT, PAWN, QUEEN, ROOK, piece_type};
-use crate::types::square::{Square, bit, file, rank};
+use crate::types::square::{Square, bit};
 
 /// Material values used by the exchange evaluation, in the reference scale.
 pub const PIECE_VALUES: [i32; 6] = [109, 403, 435, 679, 1_242, 20_000];
@@ -96,17 +97,21 @@ pub fn see_value(position: &Position, mv: Move) -> i32 {
         scores[0] = piece_value(PAWN);
     }
 
-    let mut attackers = attackers_to(position, to, occupied) & occupied;
-    let mut side = flip(position.side());
     let diagonal = diagonal_sliders(position);
     let orthogonal = orthogonal_sliders(position);
-    let allowed = allowed_attackers(position, to);
+    let mut attackers = attackers_to(position, to, occupied, diagonal, orthogonal) & occupied;
+    let mut side = flip(position.side());
+    let mut allowed = LazyAllowed::new(to);
 
     loop {
         if index >= MAX_EXCHANGES {
             break;
         }
-        let ours = attackers & allowed & position.occupancy(side);
+        let candidates_of_side = attackers & position.occupancy(side);
+        if candidates_of_side == 0 {
+            break;
+        }
+        let ours = candidates_of_side & allowed.get(position, side);
         if ours == 0 {
             break;
         }
@@ -172,14 +177,18 @@ pub fn see_ge(position: &Position, mv: Move, threshold: i32) -> bool {
         occupied &= !bit(to ^ 8);
     }
 
-    let mut attackers = attackers_to(position, to, occupied) & occupied;
-    let mut stm = flip(side);
     let diagonal = diagonal_sliders(position);
     let orthogonal = orthogonal_sliders(position);
-    let allowed = allowed_attackers(position, to);
+    let mut attackers = attackers_to(position, to, occupied, diagonal, orthogonal) & occupied;
+    let mut stm = flip(side);
+    let mut allowed = LazyAllowed::new(to);
 
     loop {
-        let ours = attackers & allowed & position.occupancy(stm);
+        let candidates_of_side = attackers & position.occupancy(stm);
+        if candidates_of_side == 0 {
+            break;
+        }
+        let ours = candidates_of_side & allowed.get(position, stm);
         if ours == 0 {
             break;
         }
@@ -227,7 +236,13 @@ fn promotion_type(mv: Move) -> usize {
 }
 
 /// Returns every piece of either colour that attacks `square` under `occupied`.
-fn attackers_to(position: &Position, square: Square, occupied: u64) -> u64 {
+fn attackers_to(
+    position: &Position,
+    square: Square,
+    occupied: u64,
+    diagonal: u64,
+    orthogonal: u64,
+) -> u64 {
     let mut attackers = 0;
     attackers |= pawn_attacks(BLACK, square) & position.pieces(WHITE, PAWN);
     attackers |= pawn_attacks(WHITE, square) & position.pieces(BLACK, PAWN);
@@ -235,8 +250,8 @@ fn attackers_to(position: &Position, square: Square, occupied: u64) -> u64 {
         knight_attacks(square) & (position.pieces(WHITE, KNIGHT) | position.pieces(BLACK, KNIGHT));
     attackers |=
         king_attacks(square) & (position.pieces(WHITE, KING) | position.pieces(BLACK, KING));
-    attackers |= bishop_attacks(square, occupied) & diagonal_sliders(position);
-    attackers |= rook_attacks(square, occupied) & orthogonal_sliders(position);
+    attackers |= bishop_attacks(square, occupied) & diagonal;
+    attackers |= rook_attacks(square, occupied) & orthogonal;
     attackers
 }
 
@@ -271,14 +286,39 @@ fn least_valuable_attacker(position: &Position, candidates: u64) -> usize {
     KING
 }
 
-/// Returns the attackers allowed to move without exposing their king.
+/// The attackers of each colour that may move without exposing their king,
+/// computed on first use.
 ///
 /// A pinned piece may still capture on the pin line, which always includes the
-/// target square; every other pin removes the piece from the exchange.
-fn allowed_attackers(position: &Position, target: Square) -> u64 {
-    let white = pinned_pieces(position, WHITE) & !between(position.king_square(WHITE), target);
-    let black = pinned_pieces(position, BLACK) & !between(position.king_square(BLACK), target);
-    !(white | black)
+/// target square; every other pin removes the piece from the exchange. The
+/// pins are a property of the original position and a colour's mask is only
+/// ever applied to that colour's own pieces, so computing it lazily, and only
+/// for a side that actually has an attacker, gives the same answer as
+/// computing both up front. Most exchanges end at the first step (no recapture
+/// exists), where no pin question is asked at all.
+struct LazyAllowed {
+    target: Square,
+    masks: [Option<u64>; 2],
+}
+
+impl LazyAllowed {
+    fn new(target: Square) -> Self {
+        Self {
+            target,
+            masks: [None; 2],
+        }
+    }
+
+    /// Returns the allowed-attacker mask for `color`.
+    #[inline]
+    fn get(&mut self, position: &Position, color: Color) -> u64 {
+        let target = self.target;
+        *self.masks[color as usize].get_or_insert_with(|| {
+            let pinned =
+                pinned_pieces(position, color) & !between(position.king_square(color), target);
+            !pinned
+        })
+    }
 }
 
 /// Returns the pieces of `color` that stand between their king and an enemy
@@ -308,38 +348,47 @@ fn pinned_pieces(position: &Position, color: Color) -> u64 {
     pinned
 }
 
-/// Returns the squares strictly between two aligned squares, or zero.
-fn between(first: Square, second: Square) -> u64 {
-    let first_file = i32::from(file(first));
-    let first_rank = i32::from(rank(first));
-    let second_file = i32::from(file(second));
-    let second_rank = i32::from(rank(second));
-
-    let delta_file = second_file - first_file;
-    let delta_rank = second_rank - first_rank;
-    let aligned = delta_file == 0 || delta_rank == 0 || delta_file.abs() == delta_rank.abs();
-    if !aligned || (delta_file == 0 && delta_rank == 0) {
-        return 0;
-    }
-
-    let step_file = delta_file.signum();
-    let step_rank = delta_rank.signum();
-    let mut mask = 0;
-    let mut current_file = first_file + step_file;
-    let mut current_rank = first_rank + step_rank;
-    while current_file != second_file || current_rank != second_rank {
-        let square = (current_rank * 8 + current_file) as u8;
-        mask |= bit(square);
-        current_file += step_file;
-        current_rank += step_rank;
-    }
-    mask
-}
-
 #[cfg(test)]
 mod tests {
     use super::{PIECE_VALUES, between};
-    use crate::types::square::{from_algebraic, from_file_rank};
+    use crate::types::square::{Square, bit, file, from_algebraic, from_file_rank, rank};
+
+    /// The original geometric walk, kept as the oracle for the shared table.
+    fn between_by_walking(first: Square, second: Square) -> u64 {
+        let first_file = i32::from(file(first));
+        let first_rank = i32::from(rank(first));
+        let second_file = i32::from(file(second));
+        let second_rank = i32::from(rank(second));
+
+        let delta_file = second_file - first_file;
+        let delta_rank = second_rank - first_rank;
+        let aligned = delta_file == 0 || delta_rank == 0 || delta_file.abs() == delta_rank.abs();
+        if !aligned || (delta_file == 0 && delta_rank == 0) {
+            return 0;
+        }
+
+        let step_file = delta_file.signum();
+        let step_rank = delta_rank.signum();
+        let mut mask = 0;
+        let mut current_file = first_file + step_file;
+        let mut current_rank = first_rank + step_rank;
+        while current_file != second_file || current_rank != second_rank {
+            let square = (current_rank * 8 + current_file) as u8;
+            mask |= bit(square);
+            current_file += step_file;
+            current_rank += step_rank;
+        }
+        mask
+    }
+
+    #[test]
+    fn the_shared_between_table_matches_the_geometric_walk() {
+        for first in 0..64 as Square {
+            for second in 0..64 as Square {
+                assert_eq!(between(first, second), between_by_walking(first, second));
+            }
+        }
+    }
 
     #[test]
     fn values_match_the_reference_scale() {
