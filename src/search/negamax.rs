@@ -190,7 +190,7 @@ impl Searcher {
             && ply > 0
             && depth >= 3
             && extensions_used < cap
-            && movegen::pseudo_legal(position).len() == 1
+            && movegen::has_exactly_one_pseudo_move(position)
         {
             depth += 1;
             extensions_used += 1;

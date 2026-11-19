@@ -9,7 +9,9 @@
 mod common;
 
 use knightbyte::board::legality::Legality;
-use knightbyte::board::movegen::{legal, legal_by_making, pseudo_legal};
+use knightbyte::board::movegen::{
+    has_exactly_one_pseudo_move, legal, legal_by_making, pseudo_legal,
+};
 use knightbyte::board::position::Position;
 
 /// The perft suite's positions: they cover every special case (castling both
@@ -85,4 +87,71 @@ fn the_make_free_test_matches_the_making_filter_on_random_walks() {
     assert!(double_check > 0, "no double check visited");
     assert!(with_pins > 1_000, "too few pinned positions: {with_pins}");
     assert!(rejected > 10_000, "too few illegal moves: {rejected}");
+}
+
+/// Positions with few pieces, where a side often has very few pseudo-legal
+/// moves: the forced-reply count must agree with the full generator there too.
+const SPARSE_FENS: [&str; 5] = [
+    "8/8/8/8/8/8/6k1/K7 w - - 0 1",
+    "8/8/2k5/8/8/8/1P6/K7 w - - 0 1",
+    "7k/8/5QK1/8/8/8/8/8 b - - 0 1",
+    "8/8/8/4k3/8/8/PP6/KB6 w - - 0 1",
+    "6k1/5ppp/8/8/8/8/5PPP/6K1 w - - 0 1",
+];
+
+/// Positions where the side to move has exactly one pseudo-legal move (its
+/// king is walled in by its own pieces). A random walk never reaches such a
+/// position, so they are listed; each was found by a search and is checked
+/// below, and the verifier confirms every one is a legal position.
+const ONE_MOVE_FENS: [&str; 4] = [
+    "5n2/b6n/2q1n3/q1P1k3/PbPb4/RP2p3/PP1p4/KRr3n1 w - - 0 1",
+    "3b4/8/1p1kn3/1p2q1p1/1P2r3/BP1b4/PP6/KRr2n1r w - - 0 1",
+    "8/p7/1p2pbp1/1r2kb2/1P3r2/BP6/PP1q2bn/KRq4q w - - 0 1",
+    "8/8/1ppk1p1p/1b6/pP3p2/PP1n4/PP1P4/KRBr4 w - - 0 1",
+];
+
+#[test]
+fn the_early_exit_forced_reply_count_matches_the_full_generator() {
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+    let mut checked = 0_u64;
+    for fen in ONE_MOVE_FENS {
+        common::verify_fen(fen);
+        let position = Position::from_fen(fen).expect("the FEN must parse");
+        assert_eq!(
+            pseudo_legal(&position).len(),
+            1,
+            "fixture lost its property: {fen}"
+        );
+        assert!(
+            has_exactly_one_pseudo_move(&position),
+            "missed a forced reply: {fen}"
+        );
+    }
+    for fen in FENS
+        .iter()
+        .chain(SPARSE_FENS.iter())
+        .chain(ONE_MOVE_FENS.iter())
+    {
+        common::verify_fen(fen);
+        for _ in 0..300 {
+            let mut position = Position::from_fen(fen).expect("the FEN must parse");
+            for _ in 0..120 {
+                let full = pseudo_legal(&position);
+                assert_eq!(
+                    has_exactly_one_pseudo_move(&position),
+                    full.len() == 1,
+                    "forced-reply count mismatch from {fen} ({} moves)",
+                    full.len()
+                );
+                checked += 1;
+                let legal_moves = legal(&position);
+                if legal_moves.is_empty() {
+                    break;
+                }
+                let pick = (rng.next() % legal_moves.len() as u64) as usize;
+                position = position.make_move(legal_moves.as_slice()[pick]);
+            }
+        }
+    }
+    assert!(checked > 50_000, "walks too short: {checked}");
 }

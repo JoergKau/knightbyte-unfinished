@@ -258,6 +258,9 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       (instrumented build, deterministic bench workloads, merge, rebuild) and
       verifies the four node pins; +7-12 % speed, same-session depth-20 ratio
       vs the predecessor 1.79-1.92. Profiles stay local to the host.
+- [x] P1c (2026-11-19): the forced-reply extension counts pseudo-legal moves with an
+      early exit (movegen::has_exactly_one_pseudo_move) instead of building the
+      list; about +5 % at ench 16 (docs/baselines.md 7.12), pins exact.
 - [x] Game history: repetitions of positions from earlier in the game are seen
       by the search (B31). Timed searches are measured from the `go` command
       (B30). Every `go` is answered with a `bestmove` (B32).

@@ -461,3 +461,31 @@ Same-session depth 20 (identical 18,662,358 nodes, interleaved):
 The PGO build passes the formal R3 mark (>= 2.43 M) and the same-session form
 (>= 1.60 M). Shipping the PGO binary is a packaging decision (the universal
 Windows build and the per-ISA variants of ADR-0001 each need their own profile).
+
+### 7.12 P1c - early-exit forced-reply count (2026-11-19)
+
+The forced-reply extension asked `pseudo_legal(position).len() == 1`, which
+builds the whole move list at every eligible node (not in check, depth >= 3,
+extension budget left) just to learn whether it holds exactly one move.
+`movegen::has_exactly_one_pseudo_move` gives the same answer without the list:
+knight, slider and king targets are only counted (popcount of the attack set
+without own pieces), the answer is "no" as soon as a second move is seen, and
+only pawn moves and castles are built, and only when the pieces produced
+fewer than two. The plan predicted under 1 %.
+
+Interleaved A/B, plain release, `bench 16` median of three after a warm-up
+(2,815,799 nodes both):
+
+| Round | Before | After | Change |
+| ---: | ---: | ---: | ---: |
+| 1 | 2,196,411 | 2,261,685 | +3.0 % |
+| 2 | 2,174,362 | 2,298,611 | +5.7 % |
+| 3 | 2,161,012 | 2,287,407 | +5.9 % |
+
+Pins 15,528 / 456,308 / 2,815,799 / 6,892,874 exact and every per-depth delta
++0 at depths 1-12, 14, 16, 18. The equality with the full generator is pinned
+by `tests/legality.rs` (`the_early_exit_forced_reply_count_matches_the_full_generator`):
+over 340,000 walked positions plus four hand-found positions in which the side
+to move has exactly one pseudo-legal move (a random walk never reaches one:
+the king is walled in by its own pieces). Dropping the king from the count
+makes the test fail.

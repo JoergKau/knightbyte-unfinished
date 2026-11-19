@@ -38,6 +38,38 @@ pub fn pseudo_legal(position: &Position) -> MoveList {
     moves
 }
 
+/// Returns whether the side to move has exactly one pseudo-legal move.
+///
+/// The answer equals `pseudo_legal(position).len() == 1`, but nothing is
+/// generated into a list unless it is needed: the knight, slider and king
+/// targets are only counted, and the search stops as soon as a second move
+/// is seen, which is the case at almost every node. Pawn moves and castles
+/// are the only ones built, and only when the pieces produced fewer than two.
+pub fn has_exactly_one_pseudo_move(position: &Position) -> bool {
+    let us = position.side();
+    let own = position.occupancy(us);
+    let all = position.all_occupancy();
+
+    let mut count = 0_u32;
+    for piece_type_index in [KNIGHT, BISHOP, ROOK, QUEEN, KING] {
+        let mut pieces = position.pieces(us, piece_type_index);
+        while pieces != 0 {
+            let from = crate::board::bitboard::lsb(pieces);
+            pieces &= pieces.wrapping_sub(1);
+            count += (attacks(piece_type_index, us, from, all) & !own).count_ones();
+            if count >= 2 {
+                return false;
+            }
+        }
+    }
+
+    let them = flip(us);
+    let mut rest = MoveList::new();
+    generate_pawns(position, us, them, &mut rest);
+    generate_castles(position, us, them, &mut rest);
+    count as usize + rest.len() == 1
+}
+
 /// Generates all legal moves for the side to move.
 ///
 /// The pseudo-legal list is filtered with the make-free [`Legality`] test

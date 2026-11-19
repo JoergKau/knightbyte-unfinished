@@ -795,7 +795,7 @@ Full numbers and the composition table are in `docs/baselines.md` section 7.
 ### Project order of work (decided 2026-11-19) and the last step
 
 1. **Phase 6** - Syzygy (3-4-5 piece) and the opening book (Windows / Zen 4).
-2. **Finish the performance plan** (`knightbyte_perf_diagnosis.md`): the remaining Zen 4 items (P1c, P4 eval/SEE) and the match gate (legality, time losses, 1/2/4/8 threads, same time control against the predecessor).
+2. **Finish the performance plan** (`knightbyte_perf_diagnosis.md`): the remaining Zen 4 items (P4 eval/SEE; P1c was done 2026-11-19) and the match gate (legality, time losses, 1/2/4/8 threads, same time control against the predecessor).
 3. **Cross-platform validation, last of the engineering work:** Linux x64, macOS, the M4 NEON kernels (P4b), P8, the universal Windows build against the dedicated variants.
 4. **The final step: search tuning (`docs-new/enhancements-for-knightbyte.md` 1.9).** Lower the effective branching factor with SPRT-gated experiments (LMR constants, pruning margins, singular extensions, the features that ship off, a final SPSA pass) on the frozen, pinned baseline. Every accepted change gets new pins, an ADR and a baseline entry. Then tag and submit to CCRL.
 
@@ -985,4 +985,4 @@ KnightByte 1.0 is done when:
 - [ ] The net is embedded, checksum-verified and bit-identical to the C# evaluation.
 - [ ] `docs-new/KnightByte-feature-list.md` and `docs-new/new-bugs.md` are current.
 - [ ] The CCRL package is built, tested and ready to announce.
-- [ ] (Checked 2026-11-19: `src`, `tests` and `tools` contain no engine, author or tree names. The CI workflow installs the FEN verifier package by name, which is needed; left open until the owner confirms that is acceptable.) No source file references an unpublished internal tree, and no reference-engine/author names appear in the code.
+- [x] (Checked 2026-11-19: `src`, `tests` and `tools` contain no engine, author or tree names. The CI workflow installs the FEN verifier package by name; the owner confirmed on 2026-11-19 that this is fine because it is the verifier.) No source file references an unpublished internal tree, and no reference-engine/author names appear in the code.
