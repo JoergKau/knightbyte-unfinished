@@ -171,6 +171,10 @@ pub(crate) fn evaluate_head(
     output_weights: &[i16],
     output_bias: i32,
 ) -> i32 {
+    assert!(
+        pair[1].len() == pair[0].len() && output_weights.len() >= 2 * pair[0].len(),
+        "the output weights must cover both accumulators"
+    );
     let sum = match kernel() {
         KernelKind::Scalar => scalar::evaluate_head(stm, pair, output_weights, output_bias),
         #[cfg(target_arch = "x86_64")]
@@ -260,17 +264,19 @@ pub(crate) mod scalar {
 
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod wide {
-    //! The 128-bit and 256-bit x86 kernels.
+    //! The 128-bit, 256-bit and 512-bit x86 kernels.
     //!
-    //! The head computes per element `v = (clamp(a)²) >> 8` by widening the
-    //! clamped lanes to `i32` (a plain square in `i16` would wrap), multiplying
-    //! by the widened output weight and accumulating into `i32` lanes that
-    //! fold into an `i64` total every few chunks. The fold bounds keep every
-    //! `i32` partial sum far below overflow, so the result is bit-identical to
-    //! the scalar `i64` accumulation.
+    //! The head computes per element `v = (clamp(a)²) >> 8` exactly in 16-bit
+    //! lanes (the clamped square of a `QA = 255` value fits an unsigned 16-bit
+    //! lane), multiplies by the 16-bit output weight with `madd` and
+    //! accumulates into `i32` lanes that fold into an `i64` total on a fixed
+    //! schedule. The fold bounds keep every `i32` partial sum far below
+    //! overflow, so the result is bit-identical to the scalar `i64`
+    //! accumulation.
 
     use std::arch::x86_64::*;
 
+    use super::{output, screlu};
     use crate::types::color::Color;
 
     /// Adds or subtracts one weight row with 128-bit chunks.
@@ -296,59 +302,131 @@ pub(crate) mod wide {
         }
     }
 
-    /// Runs the output head with 128-bit chunks.
+    /// Generates one output-head kernel for a vector width.
     ///
-    /// # Safety
-    ///
-    /// The host CPU must support SSE4.1 (the x86-64 v2 baseline).
-    #[target_feature(enable = "sse4.1")]
-    pub(super) unsafe fn evaluate_head_sse41(
-        stm: Color,
-        pair: &[Vec<i16>; 2],
-        output_weights: &[i16],
-        output_bias: i32,
-    ) -> i64 {
-        let zero = _mm_setzero_si128();
-        let qa = _mm_set1_epi16(crate::eval::nnue::net::QA as i16);
-        let mut total = i64::from(output_bias);
-        let mut lanes = _mm_setzero_si128();
-
-        let stm_acc = &pair[stm as usize];
-        let ntm_acc = &pair[(stm ^ 1) as usize];
-        let l1 = stm_acc.len();
-        for base in (0..l1).step_by(8) {
-            // The stm rows and the ntm rows live in the two halves of the
-            // output weights; each chunk pairs its lanes with its own half.
-            for (acc_chunk, weight_base) in [(stm_acc, base), (ntm_acc, l1 + base)] {
-                unsafe {
-                    let a = _mm_loadu_si128(acc_chunk[base..].as_ptr() as *const __m128i);
-                    let clamped = _mm_min_epi16(_mm_max_epi16(a, zero), qa);
-                    // Widen to i32, square, shift: the per-element semantics
-                    // of the scalar path (a pairwise `madd` would sum the
-                    // squares of two lanes before the shift).
-                    let wide_lo = _mm_cvtepi16_epi32(clamped);
-                    let wide_hi = _mm_cvtepi16_epi32(_mm_unpackhi_epi64(clamped, clamped));
-                    let sq_lo = _mm_mullo_epi32(wide_lo, wide_lo);
-                    let sq_hi = _mm_mullo_epi32(wide_hi, wide_hi);
-                    let v_lo = _mm_srai_epi32::<8>(sq_lo);
-                    let v_hi = _mm_srai_epi32::<8>(sq_hi);
-                    let w =
-                        _mm_loadu_si128(output_weights[weight_base..].as_ptr() as *const __m128i);
-                    let w_lo = _mm_cvtepi16_epi32(w);
-                    let w_hi = _mm_cvtepi16_epi32(_mm_unpackhi_epi64(w, w));
-                    lanes = _mm_add_epi32(lanes, _mm_mullo_epi32(v_lo, w_lo));
-                    lanes = _mm_add_epi32(lanes, _mm_mullo_epi32(v_hi, w_hi));
+    /// The head needs `v = clamp(a, 0, QA)^2 >> 8` per element, multiplied by
+    /// the output weight and summed. With `QA = 255` (the loader rejects any
+    /// other network) the clamped square is at most 65,025 and fits an
+    /// unsigned 16-bit lane, so `mullo_epi16` gives it exactly and a logical
+    /// right shift by 8 leaves `v <= 254`, which fits a signed 16-bit lane.
+    /// `madd_epi16` then multiplies `v` by the 16-bit weight and adds adjacent
+    /// pairs into 32-bit lanes with no widening step. A lane gains at most
+    /// `2 x 254 x 32768` per half per iteration, so folding into the `i64`
+    /// total every 32 iterations keeps every partial sum below 1.1 G, far under
+    /// `i32` overflow: the result is bit-identical to the scalar `i64`
+    /// accumulation. A scalar loop finishes any tail narrower than one vector.
+    macro_rules! head_kernel {
+        ($name:ident, $feature:literal, $lanes:expr, $vector:ty, $load:ident,
+         $setzero:ident, $set1:ident, $max:ident, $min:ident, $mullo:ident,
+         $srli:ident, $madd:ident, $add32:ident, $fold:ident) => {
+            /// # Safety
+            ///
+            /// The host CPU must support the instruction set named in the
+            /// attribute, and `output_weights` must hold at least twice the
+            /// accumulator width.
+            #[target_feature(enable = $feature)]
+            pub(super) unsafe fn $name(
+                stm: Color,
+                pair: &[Vec<i16>; 2],
+                output_weights: &[i16],
+                output_bias: i32,
+            ) -> i64 {
+                let stm_acc = &pair[stm as usize];
+                let ntm_acc = &pair[(stm ^ 1) as usize];
+                let l1 = stm_acc.len();
+                let zero = $setzero();
+                let qa = $set1(crate::eval::nnue::net::QA as i16);
+                let mut total = i64::from(output_bias);
+                let mut lanes = zero;
+                let mut pending = 0_u32;
+                let mut offset = 0;
+                while offset + $lanes <= l1 {
+                    // The stm rows and the ntm rows live in the two halves of
+                    // the output weights; each chunk pairs its lanes with its
+                    // own half.
+                    for (accumulator, weight_base) in [(stm_acc, offset), (ntm_acc, l1 + offset)] {
+                        unsafe {
+                            let a = $load(accumulator.as_ptr().add(offset) as *const $vector);
+                            let clamped = $min($max(a, zero), qa);
+                            let v = $srli::<8>($mullo(clamped, clamped));
+                            let w =
+                                $load(output_weights.as_ptr().add(weight_base) as *const $vector);
+                            lanes = $add32(lanes, $madd(v, w));
+                        }
+                    }
+                    offset += $lanes;
+                    pending += 1;
+                    if pending == 32 {
+                        total += $fold(lanes);
+                        lanes = zero;
+                        pending = 0;
+                    }
                 }
+                total += $fold(lanes);
+                for index in offset..l1 {
+                    let a = stm_acc[index];
+                    if a > 0 {
+                        total += i64::from(output(screlu(a))) * i64::from(output_weights[index]);
+                    }
+                    let b = ntm_acc[index];
+                    if b > 0 {
+                        total +=
+                            i64::from(output(screlu(b))) * i64::from(output_weights[l1 + index]);
+                    }
+                }
+                total
             }
-            // Four chunks add at most 4 x 2 x 254 x 32767 = 66 M per lane,
-            // far below `i32` overflow, so the fold is exact.
-            if base % 32 == 24 {
-                total += fold_lanes128(lanes);
-                lanes = _mm_setzero_si128();
-            }
-        }
-        total + fold_lanes128(lanes)
+        };
     }
+
+    head_kernel!(
+        evaluate_head_sse41,
+        "sse4.1",
+        8,
+        __m128i,
+        _mm_loadu_si128,
+        _mm_setzero_si128,
+        _mm_set1_epi16,
+        _mm_max_epi16,
+        _mm_min_epi16,
+        _mm_mullo_epi16,
+        _mm_srli_epi16,
+        _mm_madd_epi16,
+        _mm_add_epi32,
+        fold_lanes128
+    );
+    head_kernel!(
+        evaluate_head_avx2,
+        "avx2",
+        16,
+        __m256i,
+        _mm256_loadu_si256,
+        _mm256_setzero_si256,
+        _mm256_set1_epi16,
+        _mm256_max_epi16,
+        _mm256_min_epi16,
+        _mm256_mullo_epi16,
+        _mm256_srli_epi16,
+        _mm256_madd_epi16,
+        _mm256_add_epi32,
+        fold_lanes
+    );
+    head_kernel!(
+        evaluate_head_avx512,
+        "avx512f,avx512bw,avx512vl",
+        32,
+        __m512i,
+        _mm512_loadu_si512,
+        _mm512_setzero_si512,
+        _mm512_set1_epi16,
+        _mm512_max_epi16,
+        _mm512_min_epi16,
+        _mm512_mullo_epi16,
+        _mm512_srli_epi16,
+        _mm512_madd_epi16,
+        _mm512_add_epi32,
+        fold_lanes512
+    );
 
     /// Adds or subtracts one weight row with 256-bit chunks.
     ///
@@ -373,58 +451,6 @@ pub(crate) mod wide {
         }
     }
 
-    /// Runs the output head with 256-bit chunks.
-    ///
-    /// # Safety
-    ///
-    /// The host CPU must support AVX2 (the x86-64 v3 baseline).
-    #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn evaluate_head_avx2(
-        stm: Color,
-        pair: &[Vec<i16>; 2],
-        output_weights: &[i16],
-        output_bias: i32,
-    ) -> i64 {
-        let zero = _mm256_setzero_si256();
-        let qa = _mm256_set1_epi16(crate::eval::nnue::net::QA as i16);
-        let mut total = i64::from(output_bias);
-        let mut lanes = _mm256_setzero_si256();
-
-        let stm_acc = &pair[stm as usize];
-        let ntm_acc = &pair[(stm ^ 1) as usize];
-        let l1 = stm_acc.len();
-        for base in (0..l1).step_by(16) {
-            // The stm rows and the ntm rows live in the two halves of the
-            // output weights; each chunk pairs its lanes with its own half.
-            for (acc_chunk, weight_base) in [(stm_acc, base), (ntm_acc, l1 + base)] {
-                unsafe {
-                    let a = _mm256_loadu_si256(acc_chunk[base..].as_ptr() as *const __m256i);
-                    let clamped = _mm256_min_epi16(_mm256_max_epi16(a, zero), qa);
-                    let wide_lo = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(clamped));
-                    let wide_hi = _mm256_cvtepi16_epi32(_mm256_extracti128_si256::<1>(clamped));
-                    let sq_lo = _mm256_mullo_epi32(wide_lo, wide_lo);
-                    let sq_hi = _mm256_mullo_epi32(wide_hi, wide_hi);
-                    let v_lo = _mm256_srai_epi32::<8>(sq_lo);
-                    let v_hi = _mm256_srai_epi32::<8>(sq_hi);
-                    let w = _mm256_loadu_si256(
-                        output_weights[weight_base..].as_ptr() as *const __m256i
-                    );
-                    let w_lo = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(w));
-                    let w_hi = _mm256_cvtepi16_epi32(_mm256_extracti128_si256::<1>(w));
-                    lanes = _mm256_add_epi32(lanes, _mm256_mullo_epi32(v_lo, w_lo));
-                    lanes = _mm256_add_epi32(lanes, _mm256_mullo_epi32(v_hi, w_hi));
-                }
-            }
-            // Four iterations add at most 4 x 2 x 8 x 254 x 32767 = 531 M per
-            // lane, far below `i32` overflow, so the fold is exact.
-            if base % 64 == 48 {
-                total += fold_lanes(lanes);
-                lanes = _mm256_setzero_si256();
-            }
-        }
-        total + fold_lanes(lanes)
-    }
-
     /// Adds or subtracts one weight row with 512-bit chunks.
     ///
     /// # Safety
@@ -447,68 +473,6 @@ pub(crate) mod wide {
                 _mm512_storeu_si512(acc_chunk.as_mut_ptr() as *mut __m512i, result);
             }
         }
-    }
-
-    /// Runs the output head with 512-bit chunks.
-    ///
-    /// Each 32-lane chunk splits into two 256-bit halves, which widen to
-    /// `i32` exactly like the 256-bit kernel's chunks; the products accumulate
-    /// into 16 `i32` lanes and fold into the `i64` total on the same bound.
-    ///
-    /// # Safety
-    ///
-    /// The host CPU must support AVX-512 Foundation and BW (the x86-64 v4
-    /// baseline).
-    #[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-    pub(super) unsafe fn evaluate_head_avx512(
-        stm: Color,
-        pair: &[Vec<i16>; 2],
-        output_weights: &[i16],
-        output_bias: i32,
-    ) -> i64 {
-        let zero = _mm512_setzero_si512();
-        let qa = _mm512_set1_epi16(crate::eval::nnue::net::QA as i16);
-        let mut total = i64::from(output_bias);
-        let mut lanes = _mm512_setzero_si512();
-
-        let stm_acc = &pair[stm as usize];
-        let ntm_acc = &pair[(stm ^ 1) as usize];
-        let l1 = stm_acc.len();
-        for base in (0..l1).step_by(32) {
-            // The stm rows and the ntm rows live in the two halves of the
-            // output weights; each chunk pairs its lanes with its own half.
-            for (acc_chunk, weight_base) in [(stm_acc, base), (ntm_acc, l1 + base)] {
-                unsafe {
-                    let a = _mm512_loadu_si512(acc_chunk[base..].as_ptr() as *const __m512i);
-                    let clamped = _mm512_min_epi16(_mm512_max_epi16(a, zero), qa);
-                    // Two widening squares per 32-lane chunk (lo/hi 256).
-                    let chunk_lo = _mm512_castsi512_si256(clamped);
-                    let chunk_hi = _mm512_extracti64x4_epi64::<1>(clamped);
-                    let v_lo = _mm512_srai_epi32::<8>(_mm512_mullo_epi32(
-                        _mm512_cvtepi16_epi32(chunk_lo),
-                        _mm512_cvtepi16_epi32(chunk_lo),
-                    ));
-                    let v_hi = _mm512_srai_epi32::<8>(_mm512_mullo_epi32(
-                        _mm512_cvtepi16_epi32(chunk_hi),
-                        _mm512_cvtepi16_epi32(chunk_hi),
-                    ));
-                    let w = _mm512_loadu_si512(
-                        output_weights[weight_base..].as_ptr() as *const __m512i
-                    );
-                    let w_lo = _mm512_cvtepi16_epi32(_mm512_castsi512_si256(w));
-                    let w_hi = _mm512_cvtepi16_epi32(_mm512_extracti64x4_epi64::<1>(w));
-                    lanes = _mm512_add_epi32(lanes, _mm512_mullo_epi32(v_lo, w_lo));
-                    lanes = _mm512_add_epi32(lanes, _mm512_mullo_epi32(v_hi, w_hi));
-                }
-            }
-            // Four iterations add at most 4 x 2 x 16 x 254 x 32767 = 1.06 G per
-            // lane, far below `i32` overflow, so the fold is exact.
-            if base % 128 == 96 {
-                total += fold_lanes512(lanes);
-                lanes = _mm512_setzero_si512();
-            }
-        }
-        total + fold_lanes512(lanes)
     }
 
     /// Generates one fused row-update kernel: `dst = src - sum(subs) + sum(adds)`.
@@ -757,6 +721,66 @@ mod tests {
                 let mut out = vec![0_i16; n];
                 unsafe { wide::push_rows_avx512::<2, 2>(&mut out, &src, &[a1, a2], &[s1, s2]) };
                 assert_eq!(out, expected, "avx512 n={n}");
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn every_supported_head_kernel_matches_the_scalar_reference() {
+        use super::wide;
+        type Head = unsafe fn(u8, &[Vec<i16>; 2], &[i16], i32) -> i64;
+        let mut kernels: Vec<(&str, Head)> = Vec::new();
+        if is_x86_feature_detected!("sse4.1") {
+            kernels.push(("sse4.1", wide::evaluate_head_sse41));
+        }
+        if is_x86_feature_detected!("avx2") {
+            kernels.push(("avx2", wide::evaluate_head_avx2));
+        }
+        if is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512bw")
+            && is_x86_feature_detected!("avx512vl")
+        {
+            kernels.push(("avx512", wide::evaluate_head_avx512));
+        }
+
+        let mut rng = Lcg(0xD00D);
+        // Random contents at several widths (including tails narrower than a
+        // vector), then the worst case for the 32-bit lanes at the largest
+        // width the loader accepts: every activation saturated and every
+        // weight at an `i16` extreme, in both signs.
+        struct Case {
+            first: Vec<i16>,
+            second: Vec<i16>,
+            output_weights: Vec<i16>,
+        }
+        let mut cases: Vec<Case> = Vec::new();
+        for l1 in [16, 48, 64, 512, 1040] {
+            cases.push(Case {
+                first: (0..l1).map(|_| rng.i16()).collect(),
+                second: (0..l1).map(|_| rng.i16()).collect(),
+                output_weights: (0..2 * l1).map(|_| rng.i16()).collect(),
+            });
+        }
+        for weight in [i16::MAX, i16::MIN] {
+            let l1 = 2048;
+            cases.push(Case {
+                first: vec![300; l1],
+                second: vec![255; l1],
+                output_weights: vec![weight; 2 * l1],
+            });
+        }
+
+        for case in cases {
+            let l1 = case.first.len();
+            let output_weights = case.output_weights;
+            let pair = [case.first, case.second];
+            for stm in [WHITE, BLACK] {
+                let expected = scalar::evaluate_head(stm, &pair, &output_weights, -777);
+                for (name, kernel) in &kernels {
+                    let got = unsafe { kernel(stm, &pair, &output_weights, -777) };
+                    assert_eq!(got, expected, "{name} head diverges at l1 {l1}, side {stm}");
+                }
             }
         }
     }

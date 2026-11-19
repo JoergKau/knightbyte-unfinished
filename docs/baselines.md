@@ -522,3 +522,29 @@ the machine state, not the code). Pins exact; every per-depth delta +0.
 `tests/` and the kernel unit tests compare the fused kernels with
 copy-then-apply for the production width, a width that is not a multiple of 32
 and an awkward tail, for every backend the host supports.
+
+### 7.14 P4c - exact `madd` output head (2026-11-19)
+
+The three SIMD heads widened the clamped activations and the weights to `i32`
+(two extractions and four widenings per vector), squared with `mullo_epi32`,
+shifted, multiplied by the weight with `mullo_epi32` again and added. Because
+the loader accepts only `QA = 255`, `clamp(a, 0, 255)^2` is at most 65,025 and
+fits an unsigned 16-bit lane, so the head is now exact in 16-bit lanes:
+`min`/`max` clamp, `mullo_epi16` squares, a logical shift by 8 leaves `v <=
+254` (it fits a signed lane), and `madd_epi16` multiplies by the 16-bit weight
+and adds adjacent pairs into 32-bit lanes with no widening. A lane gains at
+most `2 x 254 x 32768` per iteration and the kernel folds into the `i64` total
+every 32 iterations, which keeps every partial sum below 1.1 G. One macro
+generates the SSE4.1, AVX2 and AVX-512 versions; a scalar tail handles widths
+that are not a multiple of the vector (the old 512-bit head read past the end
+for widths of 16 mod 32; the production width is 512, so it was latent).
+
+Interleaved A/B, plain release, `bench 16` median of three after a warm-up,
+previous commit (P4a) against this one: 2,336,762 -> 2,388,294 (+2.2 %),
+2,366,217 -> 2,392,352 (+1.1 %), 2,400,510 -> 2,448,520 (+2.0 %),
+2,358,290 -> 2,398,465 (+1.7 %). Small, but positive in every round, and
+bit-exact: pins exact, per-depth deltas +0.
+`every_supported_head_kernel_matches_the_scalar_reference` runs each backend
+the host supports against the scalar oracle on random data at widths 16, 48,
+64, 512 and 1040 and on the overflow worst case at the maximum width (2048
+saturated activations against `i16::MAX` and `i16::MIN` weights).
