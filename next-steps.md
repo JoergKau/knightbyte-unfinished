@@ -6,7 +6,14 @@ repository or archive any more; everything lives in the repository above.
 **Last updated:** 2026-11-19 (P7.0/B44 done: 7.08x at 8T; P3a/B43 done: depth-20 ratio 1.69-1.73; P1.0, P1, P2, P5-prefetch done: ratio 0.629 -> 1.08-1.11; P1.0 and P1 done: depth-20 ratio 0.629 -> 0.87-0.91; earlier: P0 complete: the measurement rig is reproducible; same-session depth-20 baseline 669,773 vs 1,064,034 NPS (1.59x, identical tree); the legal filter is 89.8 % of all makes and ~45-55 % of the gap; B42 found; P1 one-pass move path is next)
 **Rule:** update this document at the end of every working session.
 
-## NEXT SESSION (top priority): P4 / P4b / P8 (R2, R3 and R4 reached)
+## ORDER OF WORK (decided 2026-11-19)
+
+1. **Phase 6: Syzygy (3-4-5 piece) and the opening book** - next. Windows / Zen 4 only.
+2. **Finish `knightbyte_perf_diagnosis.md`** on Zen 4: P1c (early-exit forced-reply count), P4 (eval rows/head, SEE), the match gate (legality, time losses, 1/2/4/8 threads, same time control against the predecessor).
+3. **macOS / Linux / M4 validation** (P4b NEON, P8, the universal Windows build against the variants) - deliberately last of the engineering work.
+4. **Last step: search tuning for a lower effective branching factor** (`docs-new/enhancements-for-knightbyte.md` 1.9): EBF comparison on Zen 4 showed KnightByte at 2.01 vs 1.79 for a top engine of its class (identical to the predecessor at a fixed depth, so no gain yet); SPRT-gated experiments (LMR constants, pruning margins, singular extensions retest, the features that ship off, SPSA) on the frozen and pinned baseline. Then tag and submit to CCRL.
+
+## NEXT SESSION (top priority): Phase 6 first; then P4 / P4b / P8 (R2, R3 and R4 reached)
 
 **2026-11-19 (P6):** PGO (`tools/pgo_build.ps1`) gives +7-12 %: same-session depth 20 = **2.51-2.61 M vs 1.36-1.41 M NPS (1.79-1.92x)**, formal R3 (>= 2.43 M) reached; target-cpu=znver4 gave nothing (docs/baselines.md 7.11). The release workflow must run the PGO script per host/ISA variant.
 

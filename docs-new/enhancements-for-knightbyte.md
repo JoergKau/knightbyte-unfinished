@@ -78,6 +78,50 @@ gains:
   after the post-migration baseline is frozen.
 - **Gate:** SPRT, with the baseline recorded first.
 
+### 1.9 Lower effective branching factor (the search-tuning campaign; the LAST project step)
+- **Evidence (2026-11-19, Zen 4, `perf-test/ebf_compare.py`, 5 s, 1 thread,
+  256 MB).** KnightByte and the predecessor are node-identical at a fixed depth
+  (identical EBF 2.131 over the four positions at depth 20), so KnightByte has no
+  pruning advantage yet; the 2.07 vs 2.02 of the 5-second table only reflects the
+  deeper end depth. A top engine of the same class reaches depth 26 on the start
+  position with 4.2 M nodes (EBF 1.80) where KnightByte reaches depth 20 with
+  9.3 M (EBF 2.23); average EBF 1.79 vs 2.01. The gap is largest in the opening
+  and middlegame (1.80 / 1.89 / 1.84 vs 2.23 / 2.02 / 2.02) and small in the
+  endgame (1.65 vs 1.76). That engine also spends about 2.2x more time per node,
+  so at equal time the speed advantage is on KnightByte's side.
+- **Likely sources:** a mild late-move-reduction schedule
+  (`1 + ln(depth) * ln(move) / 1.75`), singular extensions that never fire (Q1,
+  see 1.2), reference features that are off or not ported yet (1.6; 47 of the 83
+  levers are still inert), and margins tuned for a less accurate evaluation. The
+  network is fixed by the project rules, so its share of the gap cannot be closed.
+- **Why it is not a migration task:** every change here moves the node pins. And
+  EBF/depth is not strength: depth is counted differently by every engine and
+  aggressive pruning can lose Elo. EBF, node counts and best-move agreement are
+  guard rails only; **Elo under SPRT is the criterion**.
+- **When:** after phase 6, after the performance plan is finished and after the
+  macOS/Linux/M4 validation, with the baseline frozen and pinned on every
+  platform. It is the last step of the project before the CCRL submission.
+- **Method:** `Threads = 1`, short fast games (for example 8+0.08, many games per
+  hour at the current speed), one change at a time; every accepted change gets a
+  new set of bench pins, a line in `docs/baselines.md`, an ADR and a feature-list
+  entry.
+- **Experiments, cheapest first:**
+  1. LMR constants: the divisor (1.75 up to roughly 2.2-2.8), the base term and
+     the history-term scale.
+  2. Pruning margins: reverse futility, futility, razoring, SEE-pruning
+     thresholds, the null-move reduction base and divisor, late-move-pruning
+     limits.
+  3. Singular extensions, retested after step 1-2 (1.2; the earlier 904-game
+     test showed no gain, so retire the idea if it still does not).
+  4. The features that ship off (1.6), ported where needed and tested one at a
+     time: ProbCut first, then LMR v2 terms, SEE reach, quiescence checks.
+  5. A final SPSA pass over all margins together.
+- **Expected effect (an estimate, not a measurement):** EBF about 2.0 -> 1.85-1.9
+  and +50 to +150 Elo.
+- **Gate:** SPRT per change against the frozen baseline; accept only on a pass.
+  Also re-run the time-to-depth set, the 1/2/4/8-thread match gates and the
+  stability checks of `perf_test.py`.
+
 ---
 
 ## 2. Protocol and UCI
