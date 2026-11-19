@@ -64,8 +64,8 @@ most capable variant), checks each file (`uci`, the pinned `bench 6` node count,
 a forced-scalar run with the same count, the import table), and writes the zip
 with `SHA256SUMS.txt` and `manifest.json`:
 
-```powershell
-powershell -File tools\build_release.ps1
+```bat
+python tools\build_release.py
 ```
 
 The Rust toolchain is pinned in `rust-toolchain.toml` (stable 1.100.0); the PGO

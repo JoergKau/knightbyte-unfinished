@@ -6,8 +6,8 @@ order, with the exact option string, the fixed-depth pre-flight total and a
 copy-paste command, and it is the log in which the results are recorded. It follows
 the structure and the rules of the predecessor's test document (`audit-tests.md` of
 PawnForgeCS): one variable per match, the same decision rule, a results log, a quick
-reference. The tooling is KnightByte's own (`tools/sprt_arm.ps1`,
-`tools/lever_campaign.ps1`) around `fastchess`.
+reference. The tooling is KnightByte's own (`tools/sprt_arm.py`,
+`tools/lever_campaign.py`) around `fastchess`.
 
 **Status: NOT STARTED.** Nothing in the results log has been measured yet.
 
@@ -22,7 +22,7 @@ reference. The tooling is KnightByte's own (`tools/sprt_arm.ps1`,
 | Test suite | 339 tests, plus the release-mode gate `cargo test --release --test lever_effect` |
 | Levers | `docs/LEVERS.md` (generated from `src/search/lever_table.rs`) |
 | Arms | **60**: one primary arm per lever. P1 16, P2 9, P3 1, P4 4, P5 30 |
-| Campaign binary | `knightbyte-v4-vnni.exe` from `tools\build_release.ps1` (PGO, static C runtime). Both sides of every match use this one file. **sha256:** `__________` |
+| Campaign binary | `knightbyte-v4-vnni.exe` from `tools\build_release.py` (PGO, static C runtime). Both sides of every match use this one file. **sha256:** `__________` |
 | Host | Ryzen 7 260 (8 cores, 16 threads), Windows 11, high-performance power plan, AC power |
 
 **Status legend:** `PENDING` not started | `RUNNING` | `DONE` measured, verdict recorded |
@@ -47,10 +47,10 @@ reference. The tooling is KnightByte's own (`tools/sprt_arm.ps1`,
 ### 0.1 Measurement discipline
 
 - **One variable per match.** Never bundle two arms. A knob that only acts with its
-  switch (`ProbCutMargin` needs `UseProbCut`) runs with `-BaseOptions`: both sides get
+  switch (`ProbCutMargin` needs `UseProbCut`) runs with `--base`: both sides get
   the switch, only the knob differs. The queue marks these arms *Dependency*.
 - **Same binary on both sides.** The lever options go on engine `ON` only; `OFF` is the
-  same file with the defaults. `Invoke-SprtArm` builds both command lines, so a second
+  same file with the defaults. `tools/sprt_arm.py` builds both command lines, so a second
   option string cannot be dropped silently (the predecessor's Bug 118 class).
 - **`Move Overhead` 10 on both sides** (set by the helper).
 - **Standard:** 400 games (200 colour-reversed pairs), `10+0.1`, **1 thread**, 256 MB,
@@ -63,7 +63,7 @@ reference. The tooling is KnightByte's own (`tools/sprt_arm.ps1`,
   do not run benchmarks during a match. A loaded host shows up as time losses.
 - **Prerequisites every session (P0):** the binary's sha256 equals the one recorded in
   the snapshot, the handshake lists 70 options, `bench 12` prints the default total,
-  and each arm's pre-flight prints its recorded total. `tools/lever_campaign.ps1`
+  and each arm's pre-flight prints its recorded total. `tools/lever_campaign.py`
   checks all of these before it plays an arm. **A lever whose pre-flight prints the
   base total is not wired** (the predecessor's B103 class); do not play it.
 - **Decision rule:** LLR >= +2 => the arm wins (`BAKE`); LLR <= -2 => keep the default,
@@ -74,12 +74,12 @@ reference. The tooling is KnightByte's own (`tools/sprt_arm.ps1`,
   it earns its place; inconclusive keeps it, because it is the shipped default.
 - **Record every arm** in section 9, with the verbatim `matches\<ID>.result.txt` block and
   the log path.
-- **A match is only evidence if it was clean.** `Invoke-SprtArm` counts time forfeits
+- **A match is only evidence if it was clean.** `tools/sprt_arm.py` counts time forfeits
   and abnormal terminations (illegal move, disconnect, crash, stall) and warns if there
   is one. A time loss in more than 1 % of the games, or any crash or illegal move, is a
-  re-run signal: re-run it with `-Overhead 50` (both sides) and record the count.
-- **Unattended runs have a hard cap.** `-HardMinutes` (default 360) kills `fastchess`
-  and the engines. `tools/lever_campaign.ps1` resumes: an arm whose result file exists
+  re-run signal: re-run it with `--overhead 50` (both sides) and record the count.
+- **Unattended runs have a hard cap.** `--hard-minutes` (default 360) kills `fastchess`
+  and the engines. `tools/lever_campaign.py` resumes: an arm whose result file exists
   is skipped.
 - **No code change during the campaign.** A change to the engine, a default or the
   tools' standard invalidates every verdict, because every arm is measured against the
@@ -97,11 +97,11 @@ this net: a different net invalidates every verdict.
 
 ### 0.3 Paths (Windows)
 
-```powershell
+```bat
 cd C:\dev\knightbyte-unfinished
-$env:KB_ENGINE = "C:\dev\knightbyte-unfinished\dist\knightbyte-0.1.0-windows-x64\knightbyte-v4-vnni.exe"
-# optional: $env:KB_FASTCHESS (default C:\dev\fastchess-windows-x86-64\fastchess.exe)
-# optional: $env:KB_BOOK      (default books\UHO_Lichess_4852_v1.epd in the repository)
+set KB_ENGINE=C:\dev\knightbyte-unfinished\dist\knightbyte-0.1.0-windows-x64\knightbyte-v4-vnni.exe
+:: optional: set KB_FASTCHESS (default C:\dev\fastchess-windows-x86-64\fastchess.exe)
+:: optional: set KB_BOOK      (default books\UHO_Lichess_4852_v1.epd in the repository)
 ```
 
 ### 0.4 Time budget
@@ -130,45 +130,47 @@ last.
 
 ### 1.1 Session setup
 
-```powershell
+The tools are Python scripts (no PowerShell). Set the campaign binary once per command
+prompt, or pass `--engine <path>` to any command instead:
+
+```bat
 cd C:\dev\knightbyte-unfinished
-$env:KB_ENGINE = "<the campaign binary>"   # see section 0.3
-. .\tools\sprt_arm.ps1                      # Invoke-SprtArm, Get-ArmBench
+set KB_ENGINE=C:\dev\knightbyte-unfinished\dist\knightbyte-0.1.0-windows-x64\knightbyte-v4-vnni.exe
+python tools\sprt_arm.py check
 ```
 
-The campaign binary is built by `powershell -File tools\build_release.ps1` (it runs the
-lever effect gate first, builds the three PGO variants and writes `SHA256SUMS.txt`).
-Never measure a stale binary: compare the file's hash with the snapshot.
-
-```powershell
-(Get-FileHash $env:KB_ENGINE -Algorithm SHA256).Hash
-```
+`check` prints the binary's sha256, the number of handshake options (70) and the default
+`bench 12` total, and exits non-zero if either number is wrong. The campaign binary is
+built by `python tools\build_release.py` (about two minutes: it runs the lever effect gate,
+builds the three PGO variants and writes `SHA256SUMS.txt` and `manifest.json`). Never
+measure a stale binary: compare the hash with the snapshot.
 
 ### 1.2 One SPRT arm (the default template)
 
-```powershell
-Invoke-SprtArm -Id P1_01_UseProbCut -ArmOptions "UseProbCut=true"
+```bat
+python tools\sprt_arm.py arm --id P1_01_UseProbCut --arm "UseProbCut=true"
 ```
 
 The helper writes `matches\P1_01_UseProbCut.log`, `.pgn` and `.result.txt` and prints the
-result block. Variants: more games for a small effect (`-Games 800`), a coupled knob
-with its switch as the common base, and a clock-safe re-run:
+result block; the exit code is non-zero if the match was not clean. Variants: more games
+for a small effect (`--games 800`), a coupled knob with its switch as the common base
+(`--base`), and a re-run after time losses (`--overhead 50`):
 
-```powershell
-Invoke-SprtArm -Id P1_04_UseBadNoisyPruning -ArmOptions "UseBadNoisyPruning=true" -Games 800
-Invoke-SprtArm -Id P5_27_ProbCutMargin -BaseOptions "UseProbCut=true" -ArmOptions "ProbCutMargin=180"
-Invoke-SprtArm -Id P1_01_UseProbCut -ArmOptions "UseProbCut=true" -Overhead 50   # a re-run after time losses
+```bat
+python tools\sprt_arm.py arm --id P1_04_UseBadNoisyPruning --arm "UseBadNoisyPruning=true" --games 800
+python tools\sprt_arm.py arm --id P5_27_ProbCutMargin --base "UseProbCut=true" --arm "ProbCutMargin=180"
+python tools\sprt_arm.py arm --id P1_01_UseProbCut --arm "UseProbCut=true" --overhead 50
 ```
 
 ### 1.3 The unattended queue
 
-```powershell
-.\tools\lever_campaign.ps1 -Group P1        # every arm of one priority
-.\tools\lever_campaign.ps1 -Only P1.03      # one arm
-.\tools\lever_campaign.ps1 -All             # the whole queue; resumes where it stopped
+```bat
+python tools\lever_campaign.py --group P1        :: every arm of one priority
+python tools\lever_campaign.py --only P1.03      :: one arm
+python tools\lever_campaign.py --all             :: the whole queue; resumes where it stopped
 ```
 
-It runs the pre-flight of each arm, skips an arm whose result file exists (`-Force`
+It runs the pre-flight of each arm, skips an arm whose result file exists (`--force`
 repeats it) and refuses to play an arm whose pre-flight does not match the recorded
 totals of this document.
 
@@ -176,42 +178,39 @@ totals of this document.
 
 Eight short games to check the plumbing (not a result):
 
-```powershell
-Invoke-SprtArm -Id smoke -ArmOptions "UseProbCut=true" -Games 8 -Tc "3+0.03" -Concurrency 4 -OutDir matches\smoke
+```bat
+python tools\sprt_arm.py arm --id smoke --arm "UseProbCut=true" --games 8 --tc 3+0.03 --concurrency 4 --out-dir matches\smoke
 ```
 
 ### 1.5 Pre-flight of one arm
 
-```powershell
-Get-ArmBench -ArmOptions "UseProbCut=true"                                  # depth 12 total with the arm
-Get-ArmBench -ArmOptions "ProbCutMargin=180" -BaseOptions "UseProbCut=true"  # a knob against its base
-& $env:KB_ENGINE param:UseProbCut=true "bench 12"                              # the same by hand
-"setoption name UseProbCut value true`nbench 12`nquit" | & $env:KB_ENGINE      # or through UCI
+```bat
+python tools\sprt_arm.py bench --arm "UseProbCut=true"
+python tools\sprt_arm.py bench --arm "ProbCutMargin=180" --base "UseProbCut=true"
+%KB_ENGINE% param:UseProbCut=true "bench 12"
+(echo setoption name UseProbCut value true & echo bench 12 & echo quit) | "%KB_ENGINE%"
 ```
 
-`bench` runs with the levers as configured, with a 256 MB table and one thread whatever
-the options say. The total of an arm must differ from the total of its base.
+The first two print the arm's total and the base's total side by side. `bench` runs with
+the levers as configured (through `param:` or `setoption`), with a 256 MB table and one
+thread whatever the options say. The total of an arm must differ from the total of its
+base.
 
 ### 1.6 Frozen gates (P0)
 
-```powershell
-# 1. the code gates
-$env:KNIGHTBYTE_FEN_VERIFIER = "C:\dev\c#-chess-engines\stockfish\stockfish-windows-x86-64-universal.exe"
+```bat
+set KNIGHTBYTE_FEN_VERIFIER=C:\dev\c#-chess-engines\stockfish\stockfish-windows-x86-64-universal.exe
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
-cargo test --release --test lever_effect      # every lever changes the search
-
-# 2. the node pins and the per-depth identity
-foreach ($d in 6,12,16,18) { "bench $d" | & $env:KB_ENGINE | Select-String "^Nodes:" }
-python tools\capture_bench.py compare --engine $env:KB_ENGINE --baseline tests\golden\search_parity.json --depths 1-12,14,16,18
-
-# 3. the handshake
-("uci`nquit`n" | & $env:KB_ENGINE | Where-Object { $_ -match '^option name ' }).Count   # must be 70
-
-# 4. the binary itself
-(Get-FileHash $env:KB_ENGINE -Algorithm SHA256).Hash                                   # must match the snapshot
+cargo test --release --test lever_effect
+python tools\capture_bench.py compare --engine %KB_ENGINE% --baseline tests\golden\search_parity.json --depths 1-12,14,16,18
+python tools\sprt_arm.py check
 ```
+
+The code gates (the first four) and the pin comparison must be green at the commit of the
+snapshot; `check` ties the binary to the snapshot (hash, handshake of 70 options, default
+`bench 12`).
 
 ---
 
@@ -323,8 +322,8 @@ These are the arms most likely to matter. Run them first and in this order. The 
 - **Lever:** `UseProbCut`, default false, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_01_UseProbCut -ArmOptions "UseProbCut=true"
+```bat
+python tools\sprt_arm.py arm --id P1_01_UseProbCut --arm "UseProbCut=true"
 ```
 
 - **Status:** PENDING.
@@ -337,8 +336,8 @@ Invoke-SprtArm -Id P1_01_UseProbCut -ArmOptions "UseProbCut=true"
 - **Lever:** `UseTtExtension`, default false, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_02_UseTtExtension -ArmOptions "UseTtExtension=true"
+```bat
+python tools\sprt_arm.py arm --id P1_02_UseTtExtension --arm "UseTtExtension=true"
 ```
 
 - **Status:** PENDING.
@@ -351,8 +350,8 @@ Invoke-SprtArm -Id P1_02_UseTtExtension -ArmOptions "UseTtExtension=true"
 - **Lever:** `UseQsCorrectionHistory`, default false, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_03_UseQsCorrectionHistory -ArmOptions "UseQsCorrectionHistory=true"
+```bat
+python tools\sprt_arm.py arm --id P1_03_UseQsCorrectionHistory --arm "UseQsCorrectionHistory=true"
 ```
 
 - **Status:** PENDING.
@@ -365,8 +364,8 @@ Invoke-SprtArm -Id P1_03_UseQsCorrectionHistory -ArmOptions "UseQsCorrectionHist
 - **Lever:** `UseBadNoisyPruning`, default false, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_04_UseBadNoisyPruning -ArmOptions "UseBadNoisyPruning=true" -Games 800
+```bat
+python tools\sprt_arm.py arm --id P1_04_UseBadNoisyPruning --arm "UseBadNoisyPruning=true" --games 800
 ```
 
 - **Status:** PENDING.
@@ -378,8 +377,8 @@ Invoke-SprtArm -Id P1_04_UseBadNoisyPruning -ArmOptions "UseBadNoisyPruning=true
 - **Lever:** `LmrDivisor`, default 175, range 100 to 300.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_05_LmrDivisor -ArmOptions "LmrDivisor=225"
+```bat
+python tools\sprt_arm.py arm --id P1_05_LmrDivisor --arm "LmrDivisor=225"
 ```
 
 - **Status:** PENDING.
@@ -391,8 +390,8 @@ Invoke-SprtArm -Id P1_05_LmrDivisor -ArmOptions "LmrDivisor=225"
 - **Lever:** `LmrHistoryDivisor`, default 3419, range 1000 to 8000.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_06_LmrHistoryDivisor -ArmOptions "LmrHistoryDivisor=2500"
+```bat
+python tools\sprt_arm.py arm --id P1_06_LmrHistoryDivisor --arm "LmrHistoryDivisor=2500"
 ```
 
 - **Status:** PENDING.
@@ -404,8 +403,8 @@ Invoke-SprtArm -Id P1_06_LmrHistoryDivisor -ArmOptions "LmrHistoryDivisor=2500"
 - **Lever:** `LmrPvWeight`, default 1024, range 0 to 2048.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_07_LmrPvWeight -ArmOptions "LmrPvWeight=600"
+```bat
+python tools\sprt_arm.py arm --id P1_07_LmrPvWeight --arm "LmrPvWeight=600"
 ```
 
 - **Status:** PENDING.
@@ -417,8 +416,8 @@ Invoke-SprtArm -Id P1_07_LmrPvWeight -ArmOptions "LmrPvWeight=600"
 - **Lever:** `LmrKillerWeight`, default 1024, range 0 to 2048.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_08_LmrKillerWeight -ArmOptions "LmrKillerWeight=600"
+```bat
+python tools\sprt_arm.py arm --id P1_08_LmrKillerWeight --arm "LmrKillerWeight=600"
 ```
 
 - **Status:** PENDING.
@@ -430,8 +429,8 @@ Invoke-SprtArm -Id P1_08_LmrKillerWeight -ArmOptions "LmrKillerWeight=600"
 - **Lever:** `LmrMinMoves`, default 3, range 1 to 8.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_09_LmrMinMoves -ArmOptions "LmrMinMoves=2"
+```bat
+python tools\sprt_arm.py arm --id P1_09_LmrMinMoves --arm "LmrMinMoves=2"
 ```
 
 - **Status:** PENDING.
@@ -443,8 +442,8 @@ Invoke-SprtArm -Id P1_09_LmrMinMoves -ArmOptions "LmrMinMoves=2"
 - **Lever:** `UseTerm1NotImproving`, default false, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_10_UseTerm1NotImproving -ArmOptions "UseTerm1NotImproving=true"
+```bat
+python tools\sprt_arm.py arm --id P1_10_UseTerm1NotImproving --arm "UseTerm1NotImproving=true"
 ```
 
 - **Status:** PENDING.
@@ -456,8 +455,8 @@ Invoke-SprtArm -Id P1_10_UseTerm1NotImproving -ArmOptions "UseTerm1NotImproving=
 - **Lever:** `NmpBaseReduction`, default 3, range 1 to 6.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_11_NmpBaseReduction -ArmOptions "NmpBaseReduction=4"
+```bat
+python tools\sprt_arm.py arm --id P1_11_NmpBaseReduction --arm "NmpBaseReduction=4"
 ```
 
 - **Status:** PENDING.
@@ -469,8 +468,8 @@ Invoke-SprtArm -Id P1_11_NmpBaseReduction -ArmOptions "NmpBaseReduction=4"
 - **Lever:** `NmpEvalDivisor`, default 191, range 50 to 400.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_12_NmpEvalDivisor -ArmOptions "NmpEvalDivisor=140"
+```bat
+python tools\sprt_arm.py arm --id P1_12_NmpEvalDivisor --arm "NmpEvalDivisor=140"
 ```
 
 - **Status:** PENDING.
@@ -482,8 +481,8 @@ Invoke-SprtArm -Id P1_12_NmpEvalDivisor -ArmOptions "NmpEvalDivisor=140"
 - **Lever:** `RfpNotImprovingScale`, default 95, range 10 to 300.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_13_RfpNotImprovingScale -ArmOptions "RfpNotImprovingScale=80"
+```bat
+python tools\sprt_arm.py arm --id P1_13_RfpNotImprovingScale --arm "RfpNotImprovingScale=80"
 ```
 
 - **Status:** PENDING.
@@ -495,8 +494,8 @@ Invoke-SprtArm -Id P1_13_RfpNotImprovingScale -ArmOptions "RfpNotImprovingScale=
 - **Lever:** `FutilityScale`, default 100, range 25 to 300.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_14_FutilityScale -ArmOptions "FutilityScale=85"
+```bat
+python tools\sprt_arm.py arm --id P1_14_FutilityScale --arm "FutilityScale=85"
 ```
 
 - **Status:** PENDING.
@@ -508,8 +507,8 @@ Invoke-SprtArm -Id P1_14_FutilityScale -ArmOptions "FutilityScale=85"
 - **Lever:** `LmpScale`, default 100, range 25 to 300.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_15_LmpScale -ArmOptions "LmpScale=80"
+```bat
+python tools\sprt_arm.py arm --id P1_15_LmpScale --arm "LmpScale=80"
 ```
 
 - **Status:** PENDING.
@@ -522,8 +521,8 @@ Invoke-SprtArm -Id P1_15_LmpScale -ArmOptions "LmpScale=80"
 - **Lever:** `UseQsNarrowing`, default false, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P1_16_UseQsNarrowing -ArmOptions "UseQsNarrowing=true"
+```bat
+python tools\sprt_arm.py arm --id P1_16_UseQsNarrowing --arm "UseQsNarrowing=true"
 ```
 
 - **Status:** PENDING.
@@ -542,8 +541,8 @@ Each arm switches a shipped feature off. The predecessor measured most of them a
 - **Lever:** `UseTtScoreEval`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P2_01_UseTtScoreEval -ArmOptions "UseTtScoreEval=false"
+```bat
+python tools\sprt_arm.py arm --id P2_01_UseTtScoreEval --arm "UseTtScoreEval=false"
 ```
 
 - **Status:** PENDING.
@@ -556,8 +555,8 @@ Invoke-SprtArm -Id P2_01_UseTtScoreEval -ArmOptions "UseTtScoreEval=false"
 - **Lever:** `UseMicroRiders`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P2_02_UseMicroRiders -ArmOptions "UseMicroRiders=false"
+```bat
+python tools\sprt_arm.py arm --id P2_02_UseMicroRiders --arm "UseMicroRiders=false"
 ```
 
 - **Status:** PENDING.
@@ -570,8 +569,8 @@ Invoke-SprtArm -Id P2_02_UseMicroRiders -ArmOptions "UseMicroRiders=false"
 - **Lever:** `UseImprovingFlag`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P2_03_UseImprovingFlag -ArmOptions "UseImprovingFlag=false"
+```bat
+python tools\sprt_arm.py arm --id P2_03_UseImprovingFlag --arm "UseImprovingFlag=false"
 ```
 
 - **Status:** PENDING.
@@ -584,8 +583,8 @@ Invoke-SprtArm -Id P2_03_UseImprovingFlag -ArmOptions "UseImprovingFlag=false"
 - **Lever:** `UseCutNode`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P2_04_UseCutNode -ArmOptions "UseCutNode=false"
+```bat
+python tools\sprt_arm.py arm --id P2_04_UseCutNode --arm "UseCutNode=false"
 ```
 
 - **Status:** PENDING.
@@ -598,8 +597,8 @@ Invoke-SprtArm -Id P2_04_UseCutNode -ArmOptions "UseCutNode=false"
 - **Lever:** `UseNegativeExtensions`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P2_05_UseNegativeExtensions -ArmOptions "UseNegativeExtensions=false"
+```bat
+python tools\sprt_arm.py arm --id P2_05_UseNegativeExtensions --arm "UseNegativeExtensions=false"
 ```
 
 - **Status:** PENDING.
@@ -611,8 +610,8 @@ Invoke-SprtArm -Id P2_05_UseNegativeExtensions -ArmOptions "UseNegativeExtension
 - **Lever:** `UseInternalIterativeReduction`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P2_06_UseInternalIterativeReduction -ArmOptions "UseInternalIterativeReduction=false"
+```bat
+python tools\sprt_arm.py arm --id P2_06_UseInternalIterativeReduction --arm "UseInternalIterativeReduction=false"
 ```
 
 - **Status:** PENDING.
@@ -624,8 +623,8 @@ Invoke-SprtArm -Id P2_06_UseInternalIterativeReduction -ArmOptions "UseInternalI
 - **Lever:** `UseTrioHindsight`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P2_07_UseTrioHindsight -ArmOptions "UseTrioHindsight=false"
+```bat
+python tools\sprt_arm.py arm --id P2_07_UseTrioHindsight --arm "UseTrioHindsight=false"
 ```
 
 - **Status:** PENDING.
@@ -637,8 +636,8 @@ Invoke-SprtArm -Id P2_07_UseTrioHindsight -ArmOptions "UseTrioHindsight=false"
 - **Lever:** `UseHistoryPruning`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P2_08_UseHistoryPruning -ArmOptions "UseHistoryPruning=false"
+```bat
+python tools\sprt_arm.py arm --id P2_08_UseHistoryPruning --arm "UseHistoryPruning=false"
 ```
 
 - **Status:** PENDING.
@@ -650,8 +649,8 @@ Invoke-SprtArm -Id P2_08_UseHistoryPruning -ArmOptions "UseHistoryPruning=false"
 - **Lever:** `UseReSearchReduction`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P2_09_UseReSearchReduction -ArmOptions "UseReSearchReduction=false"
+```bat
+python tools\sprt_arm.py arm --id P2_09_UseReSearchReduction --arm "UseReSearchReduction=false"
 ```
 
 - **Status:** PENDING.
@@ -670,8 +669,8 @@ The only lever that a fixed-depth search cannot see. All matches here are timed,
 - **Lever:** `UseStableTimeManagement`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P3_01_UseStableTimeManagement -ArmOptions "UseStableTimeManagement=false"
+```bat
+python tools\sprt_arm.py arm --id P3_01_UseStableTimeManagement --arm "UseStableTimeManagement=false"
 ```
 
 - **Status:** PENDING.
@@ -689,8 +688,8 @@ The three KnightByte switches (features the reference always runs) and the quies
 - **Lever:** `UseCorrectionHistory`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P4_01_UseCorrectionHistory -ArmOptions "UseCorrectionHistory=false"
+```bat
+python tools\sprt_arm.py arm --id P4_01_UseCorrectionHistory --arm "UseCorrectionHistory=false"
 ```
 
 - **Status:** PENDING.
@@ -702,8 +701,8 @@ Invoke-SprtArm -Id P4_01_UseCorrectionHistory -ArmOptions "UseCorrectionHistory=
 - **Lever:** `UseCheckAwareQuiescence`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P4_02_UseCheckAwareQuiescence -ArmOptions "UseCheckAwareQuiescence=false"
+```bat
+python tools\sprt_arm.py arm --id P4_02_UseCheckAwareQuiescence --arm "UseCheckAwareQuiescence=false"
 ```
 
 - **Status:** PENDING.
@@ -715,8 +714,8 @@ Invoke-SprtArm -Id P4_02_UseCheckAwareQuiescence -ArmOptions "UseCheckAwareQuies
 - **Lever:** `UseSeeApproxPrefilter`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P4_03_UseSeeApproxPrefilter -ArmOptions "UseSeeApproxPrefilter=false"
+```bat
+python tools\sprt_arm.py arm --id P4_03_UseSeeApproxPrefilter --arm "UseSeeApproxPrefilter=false"
 ```
 
 - **Status:** PENDING.
@@ -729,8 +728,8 @@ Invoke-SprtArm -Id P4_03_UseSeeApproxPrefilter -ArmOptions "UseSeeApproxPrefilte
 - **Lever:** `UseQsTtProbe`, default true, range true / false.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P4_04_UseQsTtProbe -ArmOptions "UseQsTtProbe=false"
+```bat
+python tools\sprt_arm.py arm --id P4_04_UseQsTtProbe --arm "UseQsTtProbe=false"
 ```
 
 - **Status:** PENDING.
@@ -749,8 +748,8 @@ Single numeric knobs, each moved to one value on the more aggressive side (small
 - **Lever:** `AspirationBase`, default 50, range 10 to 100.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_01_AspirationBase -ArmOptions "AspirationBase=33"
+```bat
+python tools\sprt_arm.py arm --id P5_01_AspirationBase --arm "AspirationBase=33"
 ```
 
 - **Status:** PENDING.
@@ -762,8 +761,8 @@ Invoke-SprtArm -Id P5_01_AspirationBase -ArmOptions "AspirationBase=33"
 - **Lever:** `AspirationStartDepth`, default 5, range 1 to 10.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_02_AspirationStartDepth -ArmOptions "AspirationStartDepth=7"
+```bat
+python tools\sprt_arm.py arm --id P5_02_AspirationStartDepth --arm "AspirationStartDepth=7"
 ```
 
 - **Status:** PENDING.
@@ -776,8 +775,8 @@ Invoke-SprtArm -Id P5_02_AspirationStartDepth -ArmOptions "AspirationStartDepth=
 - **Lever:** `NmpDepthDivisor`, default 4, range 1 to 8.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_03_NmpDepthDivisor -ArmOptions "NmpDepthDivisor=3"
+```bat
+python tools\sprt_arm.py arm --id P5_03_NmpDepthDivisor --arm "NmpDepthDivisor=3"
 ```
 
 - **Status:** PENDING.
@@ -790,8 +789,8 @@ Invoke-SprtArm -Id P5_03_NmpDepthDivisor -ArmOptions "NmpDepthDivisor=3"
 - **Lever:** `NmpEvalBonusMax`, default 4, range 0 to 8.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_04_NmpEvalBonusMax -ArmOptions "NmpEvalBonusMax=0"
+```bat
+python tools\sprt_arm.py arm --id P5_04_NmpEvalBonusMax --arm "NmpEvalBonusMax=0"
 ```
 
 - **Status:** PENDING.
@@ -803,8 +802,8 @@ Invoke-SprtArm -Id P5_04_NmpEvalBonusMax -ArmOptions "NmpEvalBonusMax=0"
 - **Lever:** `NmpMinDepth`, default 3, range 2 to 8.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_05_NmpMinDepth -ArmOptions "NmpMinDepth=4"
+```bat
+python tools\sprt_arm.py arm --id P5_05_NmpMinDepth --arm "NmpMinDepth=4"
 ```
 
 - **Status:** PENDING.
@@ -816,8 +815,8 @@ Invoke-SprtArm -Id P5_05_NmpMinDepth -ArmOptions "NmpMinDepth=4"
 - **Lever:** `RfpFormulaMaxDepth`, default 8, range 4 to 12.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_06_RfpFormulaMaxDepth -ArmOptions "RfpFormulaMaxDepth=10"
+```bat
+python tools\sprt_arm.py arm --id P5_06_RfpFormulaMaxDepth --arm "RfpFormulaMaxDepth=10"
 ```
 
 - **Status:** PENDING.
@@ -829,8 +828,8 @@ Invoke-SprtArm -Id P5_06_RfpFormulaMaxDepth -ArmOptions "RfpFormulaMaxDepth=10"
 - **Lever:** `RfpImprovingScale`, default 65, range 10 to 200.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_07_RfpImprovingScale -ArmOptions "RfpImprovingScale=55"
+```bat
+python tools\sprt_arm.py arm --id P5_07_RfpImprovingScale --arm "RfpImprovingScale=55"
 ```
 
 - **Status:** PENDING.
@@ -842,8 +841,8 @@ Invoke-SprtArm -Id P5_07_RfpImprovingScale -ArmOptions "RfpImprovingScale=55"
 - **Lever:** `RfpDamping`, default 3, range 1 to 8.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_08_RfpDamping -ArmOptions "RfpDamping=2"
+```bat
+python tools\sprt_arm.py arm --id P5_08_RfpDamping --arm "RfpDamping=2"
 ```
 
 - **Status:** PENDING.
@@ -855,8 +854,8 @@ Invoke-SprtArm -Id P5_08_RfpDamping -ArmOptions "RfpDamping=2"
 - **Lever:** `RazorMaxDepth`, default 3, range 2 to 8.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_09_RazorMaxDepth -ArmOptions "RazorMaxDepth=4"
+```bat
+python tools\sprt_arm.py arm --id P5_09_RazorMaxDepth --arm "RazorMaxDepth=4"
 ```
 
 - **Status:** PENDING.
@@ -868,8 +867,8 @@ Invoke-SprtArm -Id P5_09_RazorMaxDepth -ArmOptions "RazorMaxDepth=4"
 - **Lever:** `RazorMarginScale`, default 100, range 25 to 300.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_10_RazorMarginScale -ArmOptions "RazorMarginScale=80"
+```bat
+python tools\sprt_arm.py arm --id P5_10_RazorMarginScale --arm "RazorMarginScale=80"
 ```
 
 - **Status:** PENDING.
@@ -881,8 +880,8 @@ Invoke-SprtArm -Id P5_10_RazorMarginScale -ArmOptions "RazorMarginScale=80"
 - **Lever:** `FutilityMaxDepth`, default 7, range 4 to 10.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_11_FutilityMaxDepth -ArmOptions "FutilityMaxDepth=9"
+```bat
+python tools\sprt_arm.py arm --id P5_11_FutilityMaxDepth --arm "FutilityMaxDepth=9"
 ```
 
 - **Status:** PENDING.
@@ -894,8 +893,8 @@ Invoke-SprtArm -Id P5_11_FutilityMaxDepth -ArmOptions "FutilityMaxDepth=9"
 - **Lever:** `LmpMaxDepth`, default 4, range 2 to 8.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_12_LmpMaxDepth -ArmOptions "LmpMaxDepth=6"
+```bat
+python tools\sprt_arm.py arm --id P5_12_LmpMaxDepth --arm "LmpMaxDepth=6"
 ```
 
 - **Status:** PENDING.
@@ -907,8 +906,8 @@ Invoke-SprtArm -Id P5_12_LmpMaxDepth -ArmOptions "LmpMaxDepth=6"
 - **Lever:** `HistPruneMaxDepth`, default 3, range 1 to 8.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_13_HistPruneMaxDepth -ArmOptions "HistPruneMaxDepth=1"
+```bat
+python tools\sprt_arm.py arm --id P5_13_HistPruneMaxDepth --arm "HistPruneMaxDepth=1"
 ```
 
 - **Status:** PENDING.
@@ -920,8 +919,8 @@ Invoke-SprtArm -Id P5_13_HistPruneMaxDepth -ArmOptions "HistPruneMaxDepth=1"
 - **Lever:** `HistPruneMargin`, default 2000, range 800 to 4000.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_14_HistPruneMargin -ArmOptions "HistPruneMargin=1500"
+```bat
+python tools\sprt_arm.py arm --id P5_14_HistPruneMargin --arm "HistPruneMargin=1500"
 ```
 
 - **Status:** PENDING.
@@ -934,8 +933,8 @@ Invoke-SprtArm -Id P5_14_HistPruneMargin -ArmOptions "HistPruneMargin=1500"
 - **Lever:** `SeePruningMaxDepth`, default 8, range 2 to 10.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_15_SeePruningMaxDepth -ArmOptions "SeePruningMaxDepth=10"
+```bat
+python tools\sprt_arm.py arm --id P5_15_SeePruningMaxDepth --arm "SeePruningMaxDepth=10"
 ```
 
 - **Status:** PENDING.
@@ -947,8 +946,8 @@ Invoke-SprtArm -Id P5_15_SeePruningMaxDepth -ArmOptions "SeePruningMaxDepth=10"
 - **Lever:** `SeeQuietMargin`, default -43, range -120 to 0.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_16_SeeQuietMargin -ArmOptions "SeeQuietMargin=-30"
+```bat
+python tools\sprt_arm.py arm --id P5_16_SeeQuietMargin --arm "SeeQuietMargin=-30"
 ```
 
 - **Status:** PENDING.
@@ -960,8 +959,8 @@ Invoke-SprtArm -Id P5_16_SeeQuietMargin -ArmOptions "SeeQuietMargin=-30"
 - **Lever:** `SeeNoisyMargin`, default -26, range -100 to 0.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_17_SeeNoisyMargin -ArmOptions "SeeNoisyMargin=-18"
+```bat
+python tools\sprt_arm.py arm --id P5_17_SeeNoisyMargin --arm "SeeNoisyMargin=-18"
 ```
 
 - **Status:** PENDING.
@@ -973,8 +972,8 @@ Invoke-SprtArm -Id P5_17_SeeNoisyMargin -ArmOptions "SeeNoisyMargin=-18"
 - **Lever:** `SeeHistoryDivisor`, default 128, range 32 to 512.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_18_SeeHistoryDivisor -ArmOptions "SeeHistoryDivisor=192"
+```bat
+python tools\sprt_arm.py arm --id P5_18_SeeHistoryDivisor --arm "SeeHistoryDivisor=192"
 ```
 
 - **Status:** PENDING.
@@ -986,8 +985,8 @@ Invoke-SprtArm -Id P5_18_SeeHistoryDivisor -ArmOptions "SeeHistoryDivisor=192"
 - **Lever:** `NegExtHistoryThreshold`, default 3000, range 500 to 8000.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_19_NegExtHistoryThreshold -ArmOptions "NegExtHistoryThreshold=2000"
+```bat
+python tools\sprt_arm.py arm --id P5_19_NegExtHistoryThreshold --arm "NegExtHistoryThreshold=2000"
 ```
 
 - **Status:** PENDING.
@@ -999,8 +998,8 @@ Invoke-SprtArm -Id P5_19_NegExtHistoryThreshold -ArmOptions "NegExtHistoryThresh
 - **Lever:** `IirMinDepth`, default 4, range 2 to 10.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_20_IirMinDepth -ArmOptions "IirMinDepth=6"
+```bat
+python tools\sprt_arm.py arm --id P5_20_IirMinDepth --arm "IirMinDepth=6"
 ```
 
 - **Status:** PENDING.
@@ -1012,8 +1011,8 @@ Invoke-SprtArm -Id P5_20_IirMinDepth -ArmOptions "IirMinDepth=6"
 - **Lever:** `HindsightMargin`, default 62, range 0 to 200.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_21_HindsightMargin -ArmOptions "HindsightMargin=30"
+```bat
+python tools\sprt_arm.py arm --id P5_21_HindsightMargin --arm "HindsightMargin=30"
 ```
 
 - **Status:** PENDING.
@@ -1025,8 +1024,8 @@ Invoke-SprtArm -Id P5_21_HindsightMargin -ArmOptions "HindsightMargin=30"
 - **Lever:** `LmrMinDepth`, default 3, range 2 to 8.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_22_LmrMinDepth -ArmOptions "LmrMinDepth=2"
+```bat
+python tools\sprt_arm.py arm --id P5_22_LmrMinDepth --arm "LmrMinDepth=2"
 ```
 
 - **Status:** PENDING.
@@ -1038,8 +1037,8 @@ Invoke-SprtArm -Id P5_22_LmrMinDepth -ArmOptions "LmrMinDepth=2"
 - **Lever:** `QsDeltaMargin`, default 1100, range 700 to 1500.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_23_QsDeltaMargin -ArmOptions "QsDeltaMargin=900"
+```bat
+python tools\sprt_arm.py arm --id P5_23_QsDeltaMargin --arm "QsDeltaMargin=900"
 ```
 
 - **Status:** PENDING.
@@ -1049,11 +1048,11 @@ Invoke-SprtArm -Id P5_23_QsDeltaMargin -ArmOptions "QsDeltaMargin=900"
 - **Gate:** SPRT. **Pre-flight:** 437,102 (the base `UseQsNarrowing=true` alone: 428,894); change +1.9 %.
 - **Hypothesis:** With narrowing on, only recaptures from ply 4 instead of 8.
 - **Lever:** `QsRecaptureOnlyPly`, default 8, range 0 to 16.
-- **Dependency:** acts only with `UseQsNarrowing=true`; both sides run with it (`-BaseOptions`).
+- **Dependency:** acts only with `UseQsNarrowing=true`; both sides run with it (`--base`).
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_24_QsRecaptureOnlyPly -BaseOptions "UseQsNarrowing=true" -ArmOptions "QsRecaptureOnlyPly=4"
+```bat
+python tools\sprt_arm.py arm --id P5_24_QsRecaptureOnlyPly --base "UseQsNarrowing=true" --arm "QsRecaptureOnlyPly=4"
 ```
 
 - **Status:** PENDING.
@@ -1065,8 +1064,8 @@ Invoke-SprtArm -Id P5_24_QsRecaptureOnlyPly -BaseOptions "UseQsNarrowing=true" -
 - **Lever:** `HistoryBonusScale`, default 100, range 25 to 300.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_25_HistoryBonusScale -ArmOptions "HistoryBonusScale=130"
+```bat
+python tools\sprt_arm.py arm --id P5_25_HistoryBonusScale --arm "HistoryBonusScale=130"
 ```
 
 - **Status:** PENDING.
@@ -1078,8 +1077,8 @@ Invoke-SprtArm -Id P5_25_HistoryBonusScale -ArmOptions "HistoryBonusScale=130"
 - **Lever:** `HistoryMalusScale`, default 100, range 25 to 300.
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_26_HistoryMalusScale -ArmOptions "HistoryMalusScale=130"
+```bat
+python tools\sprt_arm.py arm --id P5_26_HistoryMalusScale --arm "HistoryMalusScale=130"
 ```
 
 - **Status:** PENDING.
@@ -1089,11 +1088,11 @@ Invoke-SprtArm -Id P5_26_HistoryMalusScale -ArmOptions "HistoryMalusScale=130"
 - **Gate:** SPRT. **Pre-flight:** 404,945 (the base `UseProbCut=true` alone: 442,190); change -8.4 %.
 - **Hypothesis:** With ProbCut on, a smaller margin: more cutoffs, more risk.
 - **Lever:** `ProbCutMargin`, default 235, range 100 to 400.
-- **Dependency:** acts only with `UseProbCut=true`; both sides run with it (`-BaseOptions`).
+- **Dependency:** acts only with `UseProbCut=true`; both sides run with it (`--base`).
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_27_ProbCutMargin -BaseOptions "UseProbCut=true" -ArmOptions "ProbCutMargin=180"
+```bat
+python tools\sprt_arm.py arm --id P5_27_ProbCutMargin --base "UseProbCut=true" --arm "ProbCutMargin=180"
 ```
 
 - **Status:** PENDING.
@@ -1103,11 +1102,11 @@ Invoke-SprtArm -Id P5_27_ProbCutMargin -BaseOptions "UseProbCut=true" -ArmOption
 - **Gate:** SPRT. **Pre-flight:** 459,622 (the base `UseProbCut=true` alone: 442,190); change +3.9 %.
 - **Hypothesis:** With ProbCut on, only at depth 7 and more.
 - **Lever:** `ProbCutMinDepth`, default 5, range 4 to 10.
-- **Dependency:** acts only with `UseProbCut=true`; both sides run with it (`-BaseOptions`).
+- **Dependency:** acts only with `UseProbCut=true`; both sides run with it (`--base`).
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_28_ProbCutMinDepth -BaseOptions "UseProbCut=true" -ArmOptions "ProbCutMinDepth=7"
+```bat
+python tools\sprt_arm.py arm --id P5_28_ProbCutMinDepth --base "UseProbCut=true" --arm "ProbCutMinDepth=7"
 ```
 
 - **Status:** PENDING.
@@ -1117,11 +1116,11 @@ Invoke-SprtArm -Id P5_28_ProbCutMinDepth -BaseOptions "UseProbCut=true" -ArmOpti
 - **Gate:** SPRT. **Pre-flight:** 538,355 (the base `UseTtExtension=true` alone: 502,408); change +7.2 %.
 - **Hypothesis:** With the table extension on, nodes up to depth 8 may extend instead of 6.
 - **Lever:** `TtExtensionMaxDepth`, default 6, range 0 to 12.
-- **Dependency:** acts only with `UseTtExtension=true`; both sides run with it (`-BaseOptions`).
+- **Dependency:** acts only with `UseTtExtension=true`; both sides run with it (`--base`).
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_29_TtExtensionMaxDepth -BaseOptions "UseTtExtension=true" -ArmOptions "TtExtensionMaxDepth=8"
+```bat
+python tools\sprt_arm.py arm --id P5_29_TtExtensionMaxDepth --base "UseTtExtension=true" --arm "TtExtensionMaxDepth=8"
 ```
 
 - **Status:** PENDING.
@@ -1131,11 +1130,11 @@ Invoke-SprtArm -Id P5_29_TtExtensionMaxDepth -BaseOptions "UseTtExtension=true" 
 - **Gate:** SPRT. **Pre-flight:** 446,211 (the base `UseBadNoisyPruning=true` alone: 445,981); change +0.1 %.
 - **Hypothesis:** With bad-noisy pruning on, only below depth 4 instead of 6.
 - **Lever:** `BnpDepth`, default 6, range 2 to 10.
-- **Dependency:** acts only with `UseBadNoisyPruning=true`; both sides run with it (`-BaseOptions`).
+- **Dependency:** acts only with `UseBadNoisyPruning=true`; both sides run with it (`--base`).
 - **Command:**
 
-```powershell
-Invoke-SprtArm -Id P5_30_BnpDepth -BaseOptions "UseBadNoisyPruning=true" -ArmOptions "BnpDepth=4"
+```bat
+python tools\sprt_arm.py arm --id P5_30_BnpDepth --base "UseBadNoisyPruning=true" --arm "BnpDepth=4"
 ```
 
 - **Status:** PENDING.
@@ -1305,6 +1304,6 @@ commit `__________`, host state (power plan, other load) `__________`.
 
 _Test plan written 2026-11-19 for the frozen source named in the snapshot. Levers:
 `docs/LEVERS.md`. Decisions: `docs/decisions/ADR-0014-the-sixty-levers.md`. Helpers:
-`tools/sprt_arm.ps1`, `tools/lever_campaign.ps1`. Predecessor template:
+`tools/sprt_arm.py`, `tools/lever_campaign.py`. Predecessor template:
 `audit-tests.md` of PawnForgeCS. **No code change may be made during the campaign: a
 code change invalidates every verdict.**_

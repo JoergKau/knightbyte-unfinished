@@ -714,7 +714,7 @@ the documented multi-thread "collapse" was a node-accounting bug (B44: helpers n
 published their blocks, the main thread counted itself twice): with it fixed the
 scaling is 2.07x / 4.01x / 7.08x at 2 / 4 / 8 threads (aggregate 16.4 M NPS at 8
 threads; the predecessor reaches 5.74x on the same host). **P6**: the PGO workflow
-(`tools/pgo_build.ps1`, pins verified) adds +7-12 %: same-session depth 20 is
+(`tools/pgo_build.py`, pins verified) adds +7-12 %: same-session depth 20 is
 2.51-2.61 M vs 1.36-1.41 M NPS (1.79-1.92x); `target-cpu=znver4` gave no gain.
 Full numbers and the composition table are in `docs/baselines.md` section 7.
 
@@ -754,7 +754,7 @@ Full numbers and the composition table are in `docs/baselines.md` section 7.
 - [ ] Lazy SMP: persistent workers, false-sharing audit, node-counter publication cadence, TT contention.
 - [ ] (Windows done 2026-11-19: `v3`/`v4-vnni`/`v2` with per-variant PGO and static C runtime; macOS open.) Compiler: `target-cpu=apple-m1` for macOS, `v3`/`v4-vnni` for Windows, PGO per artifact, LTO validation.
 - [ ] Optional experiments: PEXT vs magic per host, i8mm (nightly/asm), AVX-512 vs AVX2 on Zen 4, huge pages, mlock, QoS class.
-- [x] Windows universal build: compare against dedicated `v3` and `v4-vnni`; accept only within 2%; force-ISA test every backend. (Done 2026-11-19 on the Zen 4 host, ADR-0011 and `docs/baselines.md` 7.20: the shipped baseline is `v3`; forced-scalar identity is checked by `tools/build_release.ps1` and `tests/kernels_backends.rs`. The second host is open.)
+- [x] Windows universal build: compare against dedicated `v3` and `v4-vnni`; accept only within 2%; force-ISA test every backend. (Done 2026-11-19 on the Zen 4 host, ADR-0011 and `docs/baselines.md` 7.20: the shipped baseline is `v3`; forced-scalar identity is checked by `tools/build_release.py` and `tests/kernels_backends.rs`. The second host is open.)
 - [x] Update the performance notes in `docs-new/` with commands, host, and results. (`docs/baselines.md` 7.x and the feature list, kept current after every step.)
 
 **Exit gate G6 (performance part):** at least 1.5Ã— C# NPS on the M4 at identical bench nodes; time-to-depth improvement on the 20-position set; no node-count drift; no platform-specific correctness differences.
@@ -770,7 +770,7 @@ Full numbers and the composition table are in `docs/baselines.md` section 7.
 - [ ] (2026-11-19: delivered as three executables `v3`, `v4-vnni`, `v2`, each with its own PGO profile, ADR-0011; `v3-vnni` is not built because no kernel uses it. The smoke test on the i7-10750H is open.) Windows: universal `.exe` with `v3`, `v3-vnni`, `v4-vnni` paths (and `v2` if the ADR keeps it); per-variant PGO; smoke test on i7-10750H and Ryzen 7 260.
 - [ ] On the i7-10750H, record a C# baseline and a KnightByte baseline at the same protocol (`v3` path) so the relative gain is apples-to-apples. Do not compare its NPS to the Zen 4 or CCRL numbers.
 - [x] (Done 2026-11-19 by the import table: the executable imports only `KERNEL32`, `ntdll`, `bcryptprimitives` and `api-ms-win-core-synch`, all on Windows 10, and the static C runtime removed the `VCRUNTIME140.dll` dependency, bug B51. Not run on a Windows 10 machine.) Confirm Windows 10 compatibility if the CCRL host is not on Windows 11; avoid Win11-only APIs in the engine. The i7-10750H on Windows 11 does not cover this case.
-- [x] `xtask` (or a checked-in script) builds all artifacts, verifies hashes, and emits a manifest. (Windows done 2026-11-19: `tools/build_release.ps1`; the macOS and Linux scripts are open.)
+- [x] `xtask` (or a checked-in script) builds all artifacts, verifies hashes, and emits a manifest. (Windows done 2026-11-19: `tools/build_release.py`; the macOS and Linux scripts are open.)
 - [x] (Windows zip done 2026-11-19: three executables, README, LICENSE, THIRD-PARTY-NOTICES, SHA256SUMS.txt, manifest.json; the README links the repository for the source.) Release package: engine, `README.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md`, source archive pointer, checksum file. The net is embedded; no separate net file is required.
 - [x] README: UCI usage, options, supported platforms, build instructions, test instructions, known limitations. (Done 2026-11-19.)
 - [ ] CI release workflow: macOS + Linux on every tag; Windows universal on a manual/nightly job (build time and PGO), with the dedicated builds kept as CI artifacts.

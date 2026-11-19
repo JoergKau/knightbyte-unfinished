@@ -16,7 +16,7 @@ AVX-512 VNNI), the only Windows host available for this step.
 
 ## Measurements
 
-All builds are PGO builds with their own profile (`tools/pgo_build.ps1`), the node
+All builds are PGO builds with their own profile (`tools/pgo_build.py`), the node
 pins verified exact; speeds are balanced ABBA means of 12-16 runs at `bench 16`
 unless stated (`tools/ab_bench.py`; the A/A control reads +0.1 %, the per-run
 spread is 2-3 %). "Gain" is how much faster the second build is.
@@ -47,7 +47,7 @@ runtime costs nothing (+0.3 %, inside the noise).
    Zen 1 and newer (Zen 1/2 use magic bitboards because their PEXT is
    microcoded).
 2. The release ships **three executables**, each with its own PGO profile, built
-   by one script (`tools/build_release.ps1`):
+   by one script (`tools/build_release.py`):
 
    | File | Compiled for | For |
    | :--- | :--- | :--- |
@@ -76,7 +76,7 @@ runtime costs nothing (+0.3 %, inside the noise).
    Windows 10 installation does not have unless the Visual C++ redistributable
    was installed. The executable now imports only `KERNEL32`, `ntdll`,
    `bcryptprimitives` (`ProcessPrng`) and the `api-ms-win-core-synch` forwarder
-   (`WaitOnAddress`), all present on Windows 10; `tools/build_release.ps1` fails
+   (`WaitOnAddress`), all present on Windows 10; `tools/build_release.py` fails
    if any other DLL appears (`tools/pe_imports.py`).
 6. Plain `cargo build --release` stays the portable development build (no
    `target-cpu`), so tests and CI behave the same on every host.
@@ -90,5 +90,11 @@ runtime costs nothing (+0.3 %, inside the noise).
 - The gate is measured on one host. The second Windows host (a mainstream AVX2
   CPU) should repeat the `v3` against `v2` comparison before the release; the
   `v4-vnni` build cannot run there.
-- Adding a variant means a row in the table of `tools/build_release.ps1`, a row
+- Adding a variant means a row in the table of `tools/build_release.py`, a row
   here and a gate measurement.
+- The release and campaign tooling (`tools/build_release.py`, `tools/pgo_build.py`,
+  `tools/sprt_arm.py`, `tools/lever_campaign.py`) is Python, not PowerShell. The
+  first versions were PowerShell scripts; on a machine whose execution policy
+  forbids scripts they could not even start, and Python is already required by
+  the other tools in `tools/`. The Python versions are also portable to macOS and
+  Linux, which the release engineering for those hosts will need.

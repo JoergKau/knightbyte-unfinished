@@ -254,7 +254,7 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       `nodes`/`nps` and the `go nodes` limit now cover all threads. Measured
       scaling 2.07x / 4.01x / 7.08x at 2/4/8 threads (aggregate NPS 16.4 M at
       8 threads).
-- [x] P6 (2026-11-19): `tools/pgo_build.ps1` builds a profile-guided binary
+- [x] P6 (2026-11-19): `tools/pgo_build.py` builds a profile-guided binary
       (instrumented build, deterministic bench workloads, merge, rebuild) and
       verifies the four node pins; +7-12 % speed, same-session depth-20 ratio
       vs the predecessor 1.79-1.92. Profiles stay local to the host.
@@ -279,7 +279,7 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       the project owner: no errors reported (figures to be added).
 - [x] Windows release engineering (2026-11-19, ADR-0011, docs/baselines.md 7.20):
       three PGO executables (`v3` default, `v4-vnni`, `v2`) built, checked,
-      hashed and zipped by `tools/build_release.ps1` (SHA256SUMS.txt,
+      hashed and zipped by `tools/build_release.py` (SHA256SUMS.txt,
       manifest.json); the universal-build gate measured on the Zen 4 host (a
       `v3` baseline is within 1.5-1.8 % of dedicated `v4-vnni`); start-up guard
       that rejects a CPU the build was not compiled for; static C runtime, no
@@ -485,7 +485,7 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       and skip silently otherwise; a name-scan unit test registers one dummy
       file per material family so CI covers the scan without the large tables.
 - [x] `EvalFile` and `Contempt`: removed 2026-11-19 (ADR-0014), neither is advertised or accepted.
-- [x] Lever test plan (2026-11-19): `docs/audit-tests-KB.md`, built on the predecessor's `audit-tests.md`: 60 arms (one per lever) in five priorities, each with its option string, a measured fixed-depth pre-flight total and a command; the standard (400 games, 10+0.1, one thread, SPRT 0 to 5, LLR +/-2), the results log and a quick reference. Tooling: `tools/sprt_arm.ps1` (`Invoke-SprtArm`, `Get-ArmBench`) and `tools/lever_campaign.ps1` (the resumable queue with a pre-flight guard). `bench` now runs with the configured levers, so a lever that does nothing prints the default total. Nothing has been measured yet.
+- [x] Lever test plan (2026-11-19): `docs/audit-tests-KB.md`, built on the predecessor's `audit-tests.md`: 60 arms (one per lever) in five priorities, each with its option string, a measured fixed-depth pre-flight total and a command; the standard (400 games, 10+0.1, one thread, SPRT 0 to 5, LLR +/-2), the results log and a quick reference. Tooling: `tools/sprt_arm.py` (`Invoke-SprtArm`, `Get-ArmBench`) and `tools/lever_campaign.py` (the resumable queue with a pre-flight guard). `bench` now runs with the configured levers, so a lever that does nothing prints the default total. Nothing has been measured yet.
 - [x] The sixty levers (2026-11-19, ADR-0014, `docs/LEVERS.md`): 24 reference levers,
       25 hard-coded constants exposed with defaults equal to their old values (null
       move, RFP damping, razor, futility, LMP, history pruning, SEE margins,

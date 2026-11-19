@@ -445,7 +445,7 @@ reached. The 1-thread pins are unchanged.
 
 * **`target-cpu=znver4`** (plain build): no gain (`bench 16` 2.17-2.18 M vs
   2.17-2.21 M), so no per-CPU rung is worth shipping for this host class.
-* **PGO** (`tools/pgo_build.ps1`: instrumented build, `bench 12` + `bench 16`
+* **PGO** (`tools/pgo_build.py`: instrumented build, `bench 12` + `bench 16`
   profile runs, `llvm-profdata merge`, `-Cprofile-use` rebuild, node pins
   verified): `bench 16` median 2.16-2.21 M -> 2.36-2.42 M (+7-12 %). Pins
   exact at 6/12/16/18. The profile is per host and is never checked in
@@ -660,7 +660,7 @@ profile of 7.11 was recorded before these changes).
 
 ### 7.18 PGO rebuild of the new code (2026-11-19)
 
-`tools/pgo_build.ps1` was re-run on the code after P1c and P4 (the profile of 7.11
+`tools/pgo_build.py` was re-run on the code after P1c and P4 (the profile of 7.11
 predates the fused kernels and the madd head; profiles are per host and per
 build, never reused). Pins verified exact by the script.
 
@@ -741,7 +741,7 @@ against `v4-vnni`; a `v3` baseline meets it (1.5-1.8 %). All builds run the same
 AVX-512 kernels on this host (the dispatch is at run time), so the differences
 are compiler code generation outside the kernels. Decision in ADR-0011: ship
 `v3` (default), `v4-vnni` and `v2`, each with its own profile, built by
-`tools/build_release.ps1`.
+`tools/build_release.py`.
 
 `bench 16` on the shipped files, same session: `v3` 2.70 M NPS (balanced
 against the previous dynamic-runtime `v3`). The release script's checks (all

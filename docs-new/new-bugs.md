@@ -689,7 +689,7 @@ disagreed before versus 0 of 315 (400 samples each) after.
 - **Command or FEN:** `python tools/pe_imports.py target/release/knightbyte.exe`
 - **Expected:** an executable that starts on a plain Windows 10 or 11 installation: only system DLLs are imported.
 - **Actual:** the default MSVC build links the C runtime dynamically and imported `VCRUNTIME140.dll` (and the `api-ms-win-crt-*` forwarders). A machine without the Visual C++ redistributable, which a tester's clean installation or a virtual machine often is, refuses to start the engine with a "VCRUNTIME140.dll was not found" dialog and no UCI output. On a development machine the DLL is always present, so no test could notice.
-- **Status:** fixed 2026-11-19. The C runtime is linked statically (`-Ctarget-feature=+crt-static` in `.cargo/config.toml`, repeated in `tools/pgo_build.ps1` because `RUSTFLAGS` replaces the config). The executable now imports only `KERNEL32`, `ntdll`, `bcryptprimitives` and the `api-ms-win-core-synch` forwarder. `tools/build_release.ps1` fails when any other DLL appears. Speed unchanged (+0.3 %, inside the noise). Not verified on a machine without the redistributable (none available here); the import table is the evidence.
+- **Status:** fixed 2026-11-19. The C runtime is linked statically (`-Ctarget-feature=+crt-static` in `.cargo/config.toml`, repeated in `tools/pgo_build.py` because `RUSTFLAGS` replaces the config). The executable now imports only `KERNEL32`, `ntdll`, `bcryptprimitives` and the `api-ms-win-core-synch` forwarder. `tools/build_release.py` fails when any other DLL appears. Speed unchanged (+0.3 %, inside the noise). Not verified on a machine without the redistributable (none available here); the import table is the evidence.
 
 ## Predecessor behaviour
 
