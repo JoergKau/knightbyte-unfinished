@@ -31,6 +31,23 @@ kernels at bench 12. Absolute: 1.68-2.19 MNPS at bench 12-18. See ADR-0016 and
 
 **2026-11-20 (macOS Apple Silicon finish):** the AArch64 target did not compile at all (B52: per-target `KernelKind` variants left the dispatch non-exhaustive), so the macOS work started with a portability fix. The NEON backend (`KernelKind::Neon`) is now the single AArch64 kernel set — 128-bit row, refresh and SCReLU-head kernels, bit-exact against scalar and selected through `KNIGHTBYTE_FORCE_ISA=neon|scalar`. On the M4, bench 12/16/18 rose from 0.43-0.44 MNPS (scalar) to **1.72-1.89 MNPS** (3.9-4.4x) with all four bench pins exact. The release is deliberately one binary: `aarch64-apple-darwin` with `-Ctarget-cpu=apple-m1`, which runs on every Apple M processor (M1-M5); Intel Macs are unsupported and there are no per-chip variants (ADR-0015). PGO is on by default (`--no-pgo` for the plain build): interleaved three-run pairs on the M4 give **+6.0 / +7.2 / +7.5 %** at bench 12/16/18 (1.95-2.01 MNPS PGO against 1.84-1.87 plain), pins exact. `tools/build_release_macos.py` runs the lever gate, verifies `uciok`, the four pins, the forced scalar/NEON identity and the arm64-only slice, and packs the `tar.gz` with `SHA256SUMS.txt` and `manifest.json`; `.github/workflows/release.yml` does it on every `v*` tag. Verified on the M4: `cargo test --all-targets` (with the Stockfish verifier), fmt/clippy clean, `perft 3` = 8,902, `nnueeval` = 27, release archive unpacked and re-run. The M5 Pro smoke test and Linux x64 remain open.
 
+**2026-11-20 (release-script ergonomics):** `tools/build_release_macos.py` no
+longer makes the operator choose between build kinds and no longer litters the
+tree. PGO is documented as the release build; `--no-pgo` is the measurement
+variant. The `llvm-profdata` check now runs before the lever gate and before
+anything is replaced, and an existing artifact is replaced only after every
+check passed. A successful run now writes exactly two files, the `.tar.gz` and
+its `.sha256` in `dist/`, and nothing else: the lever gate, the compiler cache
+and the unpacked package all live in one scratch tree under `target/` that is
+deleted at the end (previously the gate alone left 88 MB / 166 files in
+`target/release`, and the loose package duplicated the archive in `dist/`).
+`--keep-cache` keeps the scratch tree for a fast re-run, `--keep-staging`
+leaves the unpacked package next to the archive, and `--variant-suffix plain`
+names a measurement build so it cannot collide with the release artifact. The
+developer's own `cargo build` cache is never touched.
+`tools/build_release_linux.py` still has the old layout and should get the same
+treatment.
+
 **2026-11-19 (Windows finish):** the performance plan is complete on Zen 4 (P1c, P4a-P4e, PGO, the match gate: docs/baselines.md 7.12-7.20; whole session +17.3 % balanced, then PGO +6.4 %; same-session depth 20 about 2.25x the predecessor; 500 games at 1 thread 75.1 % with no time loss, illegal move or crash). `tools/ab_bench.py` is the balanced A/B tool (a back-to-back pair is biased by 2-4 %). The Windows release is built by `tools/build_release.py` (ADR-0011). `nnueregions`/`searchstats` are real now (ADR-0012) and the allocation audit is done (docs/baselines.md 7.21). `tbhits` is decided and done (ADR-0013: printed only while tablebases are in use). **The lever surface is decided and done (ADR-0014): `EvalFile` and `Contempt` are removed and exactly sixty levers are visible, all functional (`docs/LEVERS.md`); the owner tests them next.** No feature item is left on the Windows list. The tests of the sixty levers are prepared in `docs/audit-tests-KB.md` (60 arms, measured pre-flight totals, `tools/lever_campaign.py`); the campaign is the owner's and has not been run.
 
 **2026-11-19 (Phase 6):** Syzygy and the opening book are ported and tested.

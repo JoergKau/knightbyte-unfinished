@@ -98,9 +98,17 @@ the LLVM tools once per machine:
 ```bash
 rustup target add aarch64-apple-darwin      # once per machine
 rustup component add llvm-tools-preview     # once per machine (PGO)
-python3 tools/build_release_macos.py        # PGO build (default)
-python3 tools/build_release_macos.py --no-pgo
+python3 tools/build_release_macos.py        # the release build (PGO)
+python3 tools/build_release_macos.py --no-pgo --variant-suffix plain   # measurement build
 ```
+
+The archive and its `.sha256` are the only files written to `dist/`. The whole
+build — the lever gate, the compiler's cache and the unpacked package — runs in
+one scratch tree under `target/` that is deleted afterwards, so a release does
+not fill `target/` and never mixes into your normal `cargo build` cache. Pass
+`--keep-cache` to keep it for a fast re-run. `--no-pgo` is a measurement
+variant, not a second release: it skips the profile and names its artifact
+differently so it cannot be mistaken for the shipped build.
 
 PGO gives about +6-7.5 % on the M4 with the node pins unchanged; the profile
 is generated on the build host and is never committed.
