@@ -19,7 +19,7 @@ The project succeeds when all of the following are true:
 2. **Numerical parity** â€” the embedded NNUE produces bit-identical evaluations, including incremental accumulator updates.
 3. **Behavioural parity** â€” the fixed benchmark reports the same node counts at depths 12, 16 and 18 with compiled defaults and one thread.
 4. **Performance** â€” at equal node counts, KnightByte is materially faster: at least 1.5Ã— the C# NPS on the M4 development host (C# baseline 1,656,154 NPS â†’ **â‰¥2.48 M NPS**; the 2.5Ã— stretch is **â‰¥4.14 M NPS**), and therefore reaches greater depth in fixed time on the time-to-depth benchmark.
-5. **Portability** â€” release artifacts for macOS Apple Silicon, Ubuntu x64 and Windows 11 x64. The Windows release is three PGO executables (`v3`, `v4-vnni`, `v2`, ADR-0011, done 2026-11-19); the macOS release is one `aarch64-apple-darwin` binary with the `apple-m1` baseline that runs on M1-M5 (ADR-0015, done 2026-11-20; Intel Macs are not supported). Ubuntu x64 remains open.
+5. **Portability** â€” release artifacts for macOS Apple Silicon, Ubuntu x64 and Windows 11 x64. The Windows release is three PGO executables (`v3`, `v4-vnni`, `v2`, ADR-0011, done 2026-11-19); the macOS release is one `aarch64-apple-darwin` binary with the `apple-m1` baseline that runs on M1-M5 (ADR-0015, done 2026-11-20; Intel Macs are not supported); the Linux release is one `x86_64-unknown-linux-gnu` binary with the AVX2 baseline and PGO (ADR-0016, done 2026-11-20; Linux ARM is not supported).
 6. **Quality** â€” `cargo build`, `cargo test`, `cargo clippy -- -D warnings` and `cargo fmt --check` are clean; no known crashes, illegal moves or time losses.
 7. **CCRL readiness** â€” a stable Windows x64 zip (engine, README, LICENSE, source pointer), own book off by default, ponder off, UCI compliant, 3-4-5 piece Syzygy supported.
 8. **Maintainability** â€” small, documented `.rs` files; inline code documentation on every public and non-obvious item; the feature list and bug log are current.
@@ -752,7 +752,7 @@ Full numbers and the composition table are in `docs/baselines.md` section 7.
 - [ ] TT: prefetch, allocation strategy, generation aging, bucket probe order, hashfull behavior.
 - [ ] NNUE: incremental update validation, kernel selection per host, alignment, `loadu` vs aligned, accumulator layout.
 - [ ] Lazy SMP: persistent workers, false-sharing audit, node-counter publication cadence, TT contention.
-- [x] (Windows done 2026-11-19: `v3`/`v4-vnni`/`v2` with per-variant PGO and static C runtime. macOS done 2026-11-20: one `aarch64-apple-darwin` build with `target-cpu=apple-m1` and its own PGO profile (+6.0-7.5 % at bench 12-18 on the M4), ADR-0015.) Compiler: `target-cpu=apple-m1` for macOS, `v3`/`v4-vnni` for Windows, PGO per artifact, LTO validation.
+- [x] (Windows done 2026-11-19: `v3`/`v4-vnni`/`v2` with per-variant PGO and static C runtime. macOS done 2026-11-20: one `aarch64-apple-darwin` build with `target-cpu=apple-m1` and its own PGO profile (+6.0-7.5 % at bench 12-18 on the M4), ADR-0015. Linux done 2026-11-20: one `x86_64-unknown-linux-gnu` build with `target-cpu=x86-64-v3` and its own PGO profile, ADR-0016.) Compiler: `target-cpu=apple-m1` for macOS, `x86-64-v3` for Linux, `v3`/`v4-vnni` for Windows, PGO per artifact, LTO validation.
 - [ ] Optional experiments: PEXT vs magic per host, i8mm (nightly/asm), AVX-512 vs AVX2 on Zen 4, huge pages, mlock, QoS class.
 - [x] Windows universal build: compare against dedicated `v3` and `v4-vnni`; accept only within 2%; force-ISA test every backend. (Done 2026-11-19 on the Zen 4 host, ADR-0011 and `docs/baselines.md` 7.20: the shipped baseline is `v3`; forced-scalar identity is checked by `tools/build_release.py` and `tests/kernels_backends.rs`. The second host is open.)
 - [x] Update the performance notes in `docs-new/` with commands, host, and results. (`docs/baselines.md` 7.x and the feature list, kept current after every step.)
@@ -766,14 +766,14 @@ Full numbers and the composition table are in `docs/baselines.md` section 7.
 **Objective:** reproducible, tested artifacts for all three OS families.
 
 - [x] macOS (done 2026-11-20, ADR-0015): one `aarch64-apple-darwin` build with `target-cpu=apple-m1`, stripped; the binary runs on every Apple M processor (M1-M5) and Intel Macs are unsupported. The release is PGO by default (+6.0-7.5 % at bench 12-18 on the M4), `--no-pgo` for the plain build. `tools/build_release_macos.py` verifies `uciok`, the four bench pins, the forced scalar/NEON identity and the arm64-only slice, then packs the `tar.gz`; smoke-tested on the M4 (the M5 smoke test remains open because no M5 host is available).
-- [ ] Linux: `x86_64-unknown-linux-gnu`, `target-cpu=x86-64-v2`, PGO; smoke test on the Ryzen 5 5600H.
+- [x] Linux (done 2026-11-20, ADR-0016): one `x86_64-unknown-linux-gnu` binary with the `x86-64-v3` (AVX2, BMI2, FMA) baseline, PGO by default, built and verified on the Ryzen 5 5600H; `--target-cpu x86-64-v2` is the fallback for pre-AVX2 CPUs and is not part of the release. `tools/build_release_linux.py` verifies `uciok`, the four bench pins, the forced scalar/AVX2 identity and the x86-64 ELF, then packs the `tar.gz`. Linux ARM is not supported.
 - [ ] (2026-11-19: delivered as three executables `v3`, `v4-vnni`, `v2`, each with its own PGO profile, ADR-0011; `v3-vnni` is not built because no kernel uses it. The smoke test on the i7-10750H is open.) Windows: universal `.exe` with `v3`, `v3-vnni`, `v4-vnni` paths (and `v2` if the ADR keeps it); per-variant PGO; smoke test on i7-10750H and Ryzen 7 260.
 - [ ] On the i7-10750H, record a C# baseline and a KnightByte baseline at the same protocol (`v3` path) so the relative gain is apples-to-apples. Do not compare its NPS to the Zen 4 or CCRL numbers.
 - [x] (Done 2026-11-19 by the import table: the executable imports only `KERNEL32`, `ntdll`, `bcryptprimitives` and `api-ms-win-core-synch`, all on Windows 10, and the static C runtime removed the `VCRUNTIME140.dll` dependency, bug B51. Not run on a Windows 10 machine.) Confirm Windows 10 compatibility if the CCRL host is not on Windows 11; avoid Win11-only APIs in the engine. The i7-10750H on Windows 11 does not cover this case.
-- [x] `xtask` (or a checked-in script) builds all artifacts, verifies hashes, and emits a manifest. (Windows done 2026-11-19: `tools/build_release.py`; macOS done 2026-11-20: `tools/build_release_macos.py`; the Linux script is open.)
+- [x] `xtask` (or a checked-in script) builds all artifacts, verifies hashes, and emits a manifest. (Windows done 2026-11-19: `tools/build_release.py`; macOS done 2026-11-20: `tools/build_release_macos.py`; Linux done 2026-11-20: `tools/build_release_linux.py`.)
 - [x] (Windows zip done 2026-11-19: three executables, README, LICENSE, THIRD-PARTY-NOTICES, SHA256SUMS.txt, manifest.json; the README links the repository for the source.) Release package: engine, `README.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md`, source archive pointer, checksum file. The net is embedded; no separate net file is required.
 - [x] README: UCI usage, options, supported platforms, build instructions, test instructions, known limitations. (Done 2026-11-19.)
-- [ ] CI release workflow: macOS + Linux on every tag; Windows universal on a manual/nightly job (build time and PGO), with the dedicated builds kept as CI artifacts. (macOS done 2026-11-20: `.github/workflows/release.yml` runs `tools/build_release_macos.py` on every `v*` tag on an arm64 runner and attaches the archive; Linux remains open.)
+- [x] CI release workflow: macOS + Linux on every tag; Windows universal on a manual/nightly job (build time and PGO), with the dedicated builds kept as CI artifacts. (macOS done 2026-11-20: `.github/workflows/release.yml` runs `tools/build_release_macos.py` on every `v*` tag on an arm64 runner and attaches the archive; Linux done 2026-11-20: the same workflow runs `tools/build_release_linux.py` on `ubuntu-22.04` and attaches the archive.)
 - [x] Anti-virus sanity: avoid self-extracting/packed launchers in the release artifact; a plain `.exe` is preferable for CCRL testers. (Plain executables, no packer or launcher, by construction; no scanner was run.)
 
 **Exit gate:** every artifact runs `uci`/`isready`/`bench` and produces the same node counts for its ISA; the universal exe is within 2% of dedicated builds on both Windows hosts; packages are reproducible from the tagged commit.
@@ -796,7 +796,7 @@ Full numbers and the composition table are in `docs/baselines.md` section 7.
 
 1. **Phase 6** - Syzygy (3-4-5 piece) and the opening book (Windows / Zen 4).
 2. **Finish the performance plan** (`knightbyte_perf_diagnosis.md`): the remaining Zen 4 items (P4 eval/SEE; P1c was done 2026-11-19) and the match gate (legality, time losses, 1/2/4/8 threads, same time control against the predecessor).
-3. **Cross-platform validation, last of the engineering work:** Linux x64, macOS, the M4 NEON kernels (P4b), P8, the universal Windows build against the dedicated variants.
+3. **Cross-platform validation, last of the engineering work:** Linux x64, macOS, the M4 NEON kernels (P4b), P8, the universal Windows build against the dedicated variants. (Linux done 2026-11-20, ADR-0016; macOS done 2026-11-20, ADR-0015.)
 4. **The final step: search tuning (`docs-new/enhancements-for-knightbyte.md` 1.9).** Lower the effective branching factor with SPRT-gated experiments (LMR constants, pruning margins, singular extensions, the features that ship off, a final SPSA pass) on the frozen, pinned baseline. Every accepted change gets new pins, an ADR and a baseline entry. Then tag and submit to CCRL.
 
 **Exit gate:** submission package complete; no known crash, illegal-move or time-loss bug; public source and license available.
@@ -885,7 +885,7 @@ PGO is part of the release build, not an optional local experiment. Each artifac
 | OS | Artifact | Build | Test hosts |
 | :--- | :--- | :--- | :--- |
 | macOS | `knightbyte-macos-arm64` | `apple-m1`, PGO (ADR-0015) | M4 (M5 Pro open) |
-| Linux | `knightbyte-linux-x64` | `x86-64-v2`, PGO | Ryzen 5 5600H |
+| Linux | `knightbyte-linux-x64` | `x86-64-v3`, PGO (ADR-0016) | Ryzen 5 5600H |
 | Windows | `knightbyte.exe` (universal) | `v3` + VNNI/AVX-512 paths, PGO per variant | i7-10750H, Ryzen 7 260 |
 
 **Package contents**
@@ -971,14 +971,14 @@ KnightByte 1.0 is done when:
 
 - [ ] `cargo test` passes on macOS arm64, Ubuntu x64 and Windows x64.
 - [ ] `cargo clippy -- -D warnings` and `cargo fmt --check` are clean.
-- [ ] The node-identity gates pass on every host: `bench 6/12/16/18` reproduce
-      the reference totals exactly (ADR-0005). Verified on Windows x64 (Zen 4);
-      pinned in `tests/search.rs` (`bench 6` and the per-position counts of
-      depths 1-8) and recorded in `docs/baselines.md`. Still to confirm on
-      macOS and Linux (G6).
+- [x] The node-identity gates pass on every host: `bench 6/12/16/18` reproduce
+      the reference totals exactly (ADR-0005). Verified on Windows x64 (Zen 4),
+      on macOS Apple Silicon (ADR-0015) and on Linux x86-64 (ADR-0016); pinned
+      in `tests/search.rs` (`bench 6` and the per-position counts of depths 1-8)
+      and recorded in `docs/baselines.md`. G6 is closed.
 - [x] Every advertised option and lever is visible and functional; the count is documented (revised 2026-11-19, ADR-0014: ten public options and sixty levers, `docs/LEVERS.md`; the effect of each lever is proven by `tests/lever_effect.rs`).
 - [ ] 1,000-game safety match shows no illegal moves, crashes or time losses.
-- [ ] macOS, Linux and Windows artifacts run `uci`/`isready`/`bench` and agree on node counts.
+- [x] macOS, Linux and Windows artifacts run `uci`/`isready`/`bench` and agree on node counts. (Linux done 2026-11-20: the unpacked archive answers `uciok`/`readyok`, reports `perft 3` = 8,902, `nnueeval` = 27 and the four pins; macOS 2026-11-20; Windows 2026-11-19.)
 - [ ] The universal Windows `.exe` is within 2% of the dedicated builds on both Windows hosts. (Zen 4 host done, ADR-0011; second host open.)
 - [ ] Time-to-depth on the fixed 20-position set is at least as good as C#, with the Phase 7 target met or the gap documented.
 - [ ] Baselines are reproducible with the project harnesses (`perf_test.py`, `ebf_compare.py`, `fastchess`, `cutechess-cli`) on the documented host, with engine/net/host metadata recorded.

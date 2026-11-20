@@ -2,8 +2,8 @@
 
 > **Work in progress.** This repository is an unfinished engine. The search is
 > functional, tested and node-identical to the reference implementation; the
-> Windows and macOS release work (speed, kernels, packaging) is done, and what
-> remains is Linux validation and search tuning (`next-steps.md`). History
+> Windows, macOS and Linux release work (speed, kernels, packaging) is done, and
+> what remains is search tuning (`next-steps.md`). History
 > begins with the public snapshot of 2026-11-17.
 
 KnightByte is a UCI chess engine written in Rust. It is a headless engine: it
@@ -31,7 +31,7 @@ There is no external network file at runtime.
 ## Supported platforms
 
 * macOS on Apple Silicon (M1-M5); Intel Macs are not supported
-* Ubuntu x64
+* Linux on x86-64 with AVX2 (Intel Haswell 2013 and newer, AMD Zen and newer); Linux on ARM is not supported
 * Windows 10 and 11 x64
 
 The Windows release contains three executables, each profile-guided for its
@@ -53,7 +53,18 @@ The macOS release is one **Apple Silicon** binary: `aarch64-apple-darwin` built
 with `-Ctarget-cpu=apple-m1`, which is the baseline of every Apple M processor
 (M1-M5). NEON is part of the AArch64 baseline, so there is no per-chip variant
 and no start-up feature selection. Intel Macs are **not** supported and no
-x86_64 slice is produced. The Linux release is still open.
+x86_64 slice is produced.
+
+The Linux release is one **x86-64** binary: `x86_64-unknown-linux-gnu` built
+with `-Ctarget-cpu=x86-64-v3`, the AVX2 baseline (Intel Haswell 2013 and newer,
+AMD Zen and newer), profile-guided like the other releases. ARM is not
+supported and no other architecture is produced. Inside the file the SIMD
+kernels are still chosen at start-up, so a CPU with AVX-512 uses the wider
+kernels anyway. A CPU without AVX2, BMI2 and FMA gets a clear message naming
+the missing features instead of an illegal-instruction crash; `--target-cpu
+x86-64-v2` builds the portable fallback for such machines. The artifact is
+built on Ubuntu 22.04, so it needs glibc 2.35 or newer (Ubuntu 22.04/24.04,
+Debian 12 and newer).
 
 ## Build
 
@@ -93,6 +104,24 @@ python3 tools/build_release_macos.py --no-pgo
 
 PGO gives about +6-7.5 % on the M4 with the node pins unchanged; the profile
 is generated on the build host and is never committed.
+
+The Linux x86-64 artifact is produced by one script, which builds with
+`-Ctarget-cpu=x86-64-v3` (AVX2 baseline; profile-guided by default), runs the
+lever effect gate, verifies the four bench node pins and the scalar/AVX2 kernel
+identity, checks that the file is an x86-64 ELF, and writes the `tar.gz` with
+`SHA256SUMS.txt` and `manifest.json`. It must run on an x86-64 Linux host; PGO
+needs the LLVM tools once per machine:
+
+```bash
+rustup component add llvm-tools-preview     # once per machine (PGO)
+python3 tools/build_release_linux.py        # PGO build (default)
+python3 tools/build_release_linux.py --no-pgo
+python3 tools/build_release_linux.py --target-cpu x86-64-v2   # older CPUs
+```
+
+The artifact is built on Ubuntu 22.04 in CI (glibc 2.35 floor). Processors
+without AVX2/BMI2/FMA are not supported by the shipped binary; the start-up
+guard names the missing features, and the `x86-64-v2` build is the fallback.
 
 The archive is ad-hoc signed by the toolchain but not notarized, so macOS may
 ask you to allow the downloaded binary once (System Settings → Privacy &
@@ -171,9 +200,9 @@ two hidden developer diagnostics, both off by default:
 * `go infinite` ends on its own at the engine's depth cap (128) or on a proven
   mate, instead of waiting for `stop`; this only happens in positions that are
   trivially drawn or already decided.
-* The Windows x64 builds and the macOS Apple Silicon build have been through
-  the release validation (build, node pins, forced-backend identity, packaging).
-  The Linux build exists and passes the tests but has no release validation yet.
+* The Windows x64 builds, the macOS Apple Silicon build and the Linux x86-64
+  build have been through the release validation (build, node pins,
+  forced-backend identity, packaging).
 
 ## Repository workflow
 
@@ -192,11 +221,11 @@ copying directories.
   folder outside this repository. Everything inside the repository is published
   during the migration; the publishing policy for predecessor material is
   decided at the end of the migration.
-* CI runs on push. Windows/macOS artifacts are attached to tags or GitHub
+* CI runs on push. Windows/macOS/Linux artifacts are attached to tags or GitHub
   Releases rather than copied between machines.
 * The source and the MIT licence are already public, which is what CCRL
   requires of a submission; what remains is a tagged release with the Windows
-  x64 zip and the macOS Apple Silicon archive.
+  x64 zip and the macOS and Linux archives.
 
 ## Development workflow
 

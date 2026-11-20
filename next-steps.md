@@ -3,7 +3,7 @@
 **Repository:** https://github.com/JoergKau/knightbyte-unfinished (public, `main`)  
 **History:** starts with the public snapshot of 2026-11-17. There is no private
 repository or archive any more; everything lives in the repository above.  
-**Last updated:** 2026-11-20 (macOS Apple Silicon complete: AArch64 build fixed, NEON kernels, one `apple-m1` release binary and the tag workflow, ADR-0015; next: Linux x64 release, then search tuning)
+**Last updated:** 2026-11-20 (Linux x64 release complete: one AVX2 PGO binary, packaging and tag job, ADR-0016; next: search tuning)
 **Rule:** update this document at the end of every working session.
 
 ## ORDER OF WORK (decided 2026-11-19)
@@ -11,10 +11,23 @@ repository or archive any more; everything lives in the repository above.
 1. ~~**Phase 6: Syzygy (3-4-5 piece) and the opening book**~~ — **complete 2026-11-19** (see the session note below).
 2. **Finish `knightbyte_perf_diagnosis.md`** on Zen 4: ~~P1c (early-exit forced-reply count)~~ done 2026-11-19 (+1.1 %), P4 eval path ~~(fused push, madd head, fused refresh, lazy-pin SEE)~~ done 2026-11-19 (docs/baselines.md 7.13-7.16), ~~the match gate~~ done (500 games at 1 thread: 75.1 %, no errors; multi-thread matches run by the owner: no errors, docs/baselines.md 7.19) (legality, time losses, 1/2/4/8 threads, same time control against the predecessor).
 2a. **Windows release engineering - done 2026-11-19** (ADR-0011): three PGO executables built, checked and zipped by `tools/build_release.py`; the universal-build gate measured on the Zen 4 host; static C runtime (B51); start-up guard; README. Open on Windows only what needs another machine: the second Windows host (i7-10750H: `v3` against `v2`, smoke test, baseline), a clean Windows 10 machine, and the owner's multi-thread match figures.
-3. ~~**macOS validation and release**~~ — **complete 2026-11-20** (AArch64 build fixed under B52, NEON kernels, one `apple-m1` binary for M1-M5, `tools/build_release_macos.py`, tag workflow; ADR-0015). Remaining here: **Linux x64** release (P8) only.
+3. ~~**macOS validation and release**~~ — **complete 2026-11-20** (AArch64 build fixed under B52, NEON kernels, one `apple-m1` binary for M1-M5, `tools/build_release_macos.py`, tag workflow; ADR-0015). ~~Remaining here: **Linux x64** release (P8) only.~~
 4. **Last step: search tuning for a lower effective branching factor** (`docs-new/enhancements-for-knightbyte.md` 1.9): EBF comparison on Zen 4 showed KnightByte at 2.01 vs 1.79 for a top engine of its class (identical to the predecessor at a fixed depth, so no gain yet); SPRT-gated experiments (LMR constants, pruning margins, singular extensions retest, the features that ship off, SPSA) on the frozen and pinned baseline. Then tag and submit to CCRL.
 
-## NEXT SESSION: Linux x64 release (P8), then search tuning; Windows and macOS are finished
+## NEXT SESSION: search tuning; Windows, macOS and Linux are finished
+
+**2026-11-20 (Linux x64 finish):** the last platform is done. One
+`x86_64-unknown-linux-gnu` binary compiled with `-Ctarget-cpu=x86-64-v3` (AVX2
+baseline, Intel Haswell 2013+/AMD Zen+) and PGO by default, packaged by
+`tools/build_release_linux.py` and built on every `v*` tag by the
+`ubuntu-22.04` job in `.github/workflows/release.yml` (glibc 2.35 floor).
+Linux ARM is not supported. Bench 6/12/16/18 = **15,528 / 456,308 / 2,815,799 /
+6,892,874** on the Ryzen 5 5600H in the packaged binary, with the forced scalar
+and forced AVX2 kernels reporting the same totals. The PGO build is **+5.0 /
++9.0 / +8.9 %** against the plain `x86-64-v3` build at bench 12/16/18 (ABBA
+pairs, A/A control +1.4 %); the AVX2 kernels are 3.94x the forced scalar
+kernels at bench 12. Absolute: 1.68-2.19 MNPS at bench 12-18. See ADR-0016 and
+`docs/baselines.md` 7.24.
 
 **2026-11-20 (macOS Apple Silicon finish):** the AArch64 target did not compile at all (B52: per-target `KernelKind` variants left the dispatch non-exhaustive), so the macOS work started with a portability fix. The NEON backend (`KernelKind::Neon`) is now the single AArch64 kernel set — 128-bit row, refresh and SCReLU-head kernels, bit-exact against scalar and selected through `KNIGHTBYTE_FORCE_ISA=neon|scalar`. On the M4, bench 12/16/18 rose from 0.43-0.44 MNPS (scalar) to **1.72-1.89 MNPS** (3.9-4.4x) with all four bench pins exact. The release is deliberately one binary: `aarch64-apple-darwin` with `-Ctarget-cpu=apple-m1`, which runs on every Apple M processor (M1-M5); Intel Macs are unsupported and there are no per-chip variants (ADR-0015). PGO is on by default (`--no-pgo` for the plain build): interleaved three-run pairs on the M4 give **+6.0 / +7.2 / +7.5 %** at bench 12/16/18 (1.95-2.01 MNPS PGO against 1.84-1.87 plain), pins exact. `tools/build_release_macos.py` runs the lever gate, verifies `uciok`, the four pins, the forced scalar/NEON identity and the arm64-only slice, and packs the `tar.gz` with `SHA256SUMS.txt` and `manifest.json`; `.github/workflows/release.yml` does it on every `v*` tag. Verified on the M4: `cargo test --all-targets` (with the Stockfish verifier), fmt/clippy clean, `perft 3` = 8,902, `nnueeval` = 27, release archive unpacked and re-run. The M5 Pro smoke test and Linux x64 remain open.
 
@@ -254,7 +267,8 @@ pass locally on Windows (the full-set DTZ-ranking tests skip when
 exact and `capture_bench.py compare` shows every per-position delta at +0.
 Node identity is verified on Windows and, since 2026-11-20, on macOS Apple
 Silicon (NEON, forced scalar and the release binary all report the four pins
-exactly, ADR-0015). Linux still has to confirm it (migration-plan G6).
+exactly, ADR-0015) and on Linux x86-64 (AVX2, forced scalar and the packaged
+PGO binary, ADR-0016), which closes migration-plan G6.
 
 ---
 
@@ -537,7 +551,7 @@ Syzygy optional.
 | Hash 128/256 MB | the `Hash` option accepts 1-1024 MB (default 256) |
 | Threads | implemented (Phase 5 step 8, Lazy SMP pool; multi-thread play is stress-gated in step 9) |
 | Syzygy | implemented (Phase 6): WDL/DTZ probing, 3-4-5 and larger sets, root DTZ ranking; optional, off until `SyzygyPath` is set |
-| Windows x64 zip, README, licence | README and MIT licence exist; the release packaging, a tagged public release and a Linux build are Phase 8 |
+| Windows x64 zip, README, licence | README and MIT licence exist; the Windows zip and the macOS/Linux archives are produced by the release scripts (ADR-0011, ADR-0015, ADR-0016). A tagged public release is still open |
 
 The lesson of this round: node identity says nothing about *time* or *game
 history*. Both bugs lived in code that bench never runs. Before a CCRL
@@ -685,6 +699,13 @@ NEON (the AArch64 baseline), with the same parity gates on the M4. Bench 12-18
 macOS release, adds +6.0-7.5 % (1.95-2.01 MNPS at bench 12-18). The >= 2.48
 MNPS M4 goal is not reached yet; it remains search-tuning work.
 
+**P4c - Linux x86-64 release — done 2026-11-20 (ADR-0016).** One
+`x86_64-unknown-linux-gnu` binary with the `x86-64-v3` (AVX2) baseline and PGO
+by default; `tools/build_release_linux.py` and the tag workflow build and
+verify it. On the Ryzen 5 5600H the release reads 1.68-2.19 MNPS at bench
+12-18; PGO adds +5.0-9.0 % over the plain build, and the AVX2 kernels are
+3.94x the forced scalar kernels. Pins exact with every backend.
+
 **P5 - TT and caches (1 day).** Prefetch after every make and null move;
 advance the shared generation once per `go` in the main thread; keep the
 replacement policy exactly.
@@ -740,6 +761,17 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 cargo build --release
 python3 tools/build_release_macos.py   # release archive, pins verified
+```
+
+### Linux (x86-64)
+
+```bash
+cd ~/dev/knightbyte-unfinished
+git pull --rebase
+KNIGHTBYTE_FEN_VERIFIER=/usr/games/stockfish cargo test --all-targets
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+python3 tools/build_release_linux.py   # PGO archive, pins verified
 ```
 
 ### Parity measurement
@@ -809,7 +841,8 @@ Nothing needs to be made public any more: the source and the MIT licence are
 already published in the repository, which is what CCRL asks for. What is still
 open for a submission is the release artifact (a tagged GitHub Release with the
 Windows x64 zip, readme and licence; Phase 8) and the stability evidence in
-§2.10.
+§2.10. The macOS and Linux archives are produced by the tag workflow; the
+Windows zip still comes from the Windows host.
 
 GitHub Actions on a public repository is not minute-limited the way a private
 one is. The macOS runner queue can still be slow (§2.7); that is a latency

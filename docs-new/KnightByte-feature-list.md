@@ -512,7 +512,12 @@ well. See `docs/SEARCH-PARITY.md`, `docs/audit/migration-audit.md` and
       and packed by `tools/build_release_macos.py` with a `tar.gz`,
       `SHA256SUMS.txt` and `manifest.json`; CI workflow on `v*` tags
       (ADR-0015).
-- [ ] Ubuntu x64 release.
+- [x] Linux x64 release (2026-11-20): one `x86_64-unknown-linux-gnu` binary
+      compiled with `-Ctarget-cpu=x86-64-v3` (AVX2 baseline; Linux ARM is not
+      supported), **PGO by default** (`tools/pgo_build.py`; `--no-pgo` for the
+      plain build), built, verified and packed by `tools/build_release_linux.py`
+      with a `tar.gz`, `SHA256SUMS.txt` and `manifest.json`; CI workflow on
+      `v*` tags (ADR-0016).
 - [ ] Windows universal executable with per-variant PGO.
 - [ ] CCRL submission package.
 

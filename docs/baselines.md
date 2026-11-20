@@ -843,3 +843,42 @@ That is the same order as the Windows PGO result (+6.4 % in 7.18), and the
 four pins stay exact. The profile is generated on the build host, is never
 committed and does not change the instruction baseline: the binary still runs
 on M1-M5.
+
+### 7.24 Linux x86-64 release: AVX2 baseline, PGO and the last G6 row (2026-11-20, Ryzen 5 5600H)
+
+The Linux artifact is one `x86_64-unknown-linux-gnu` binary compiled with
+`-Ctarget-cpu=x86-64-v3` (AVX2, BMI2, FMA) and PGO by default (ADR-0016).
+Host: AMD Ryzen 5 5600H (Zen 3, 6C/12T, no AVX-512), Linux, rustc 1.100.0,
+release profile, one thread, 256 MB hash.
+
+Medians of 5 (bench 12) or 3 (16/18) interleaved runs:
+
+| Build | bench 12 NPS | bench 16 NPS | bench 18 NPS |
+| :--- | ---: | ---: | ---: |
+| portable (no `target-cpu`) | 1,505,966 | 1,920,736 | 1,997,355 |
+| `x86-64-v3`, plain | 1,584,402 | 1,935,257 | 2,017,820 |
+| `x86-64-v3`, PGO (the release) | 1,683,793 | 2,131,566 | 2,186,131 |
+
+Balanced ABBA pairs (`tools/ab_bench.py`; A/A control +1.4 % at bench 16, the
+noise floor of the host):
+
+| Comparison | bench 12 | bench 16 | bench 18 |
+| :--- | ---: | ---: | ---: |
+| `v3` plain -> `v3` PGO | +5.0 % | +9.0 % | +8.9 % |
+| portable -> `v3` plain | - | +0.9 % | - |
+
+PGO is larger on this host than on Windows (+6.4 %) or the M4 (+6.0-7.5 %).
+The `target-cpu` flag itself is close to free: with the kernels already
+dispatched at run time, it mostly changes the rest of the code generation.
+
+Kernel backends forced on the PGO binary at `bench 12` (median of 5 interleaved
+runs, pin exact): scalar **427,254 NPS** vs AVX2 **1,683,793 NPS**, a **3.94x**
+gain. This matches the macOS NEON ratio (3.91x) and confirms that the AVX2
+kernels, not the compiler flags, carry the Linux speed.
+
+Node identity across the platform: `bench 6/12/16/18` =
+**15,528 / 456,308 / 2,815,799 / 6,892,874** in the plain `v3` build, the PGO
+build and the packaged binary, with the scalar and AVX2 kernels forced. The
+unpacked archive answers `uciok`/`readyok`, reports `perft 3` = 8,902 and
+`nnueeval` = 27 on the start position. With this row the migration plan's G6
+is verified on Windows x64, macOS Apple Silicon and Linux x86-64.

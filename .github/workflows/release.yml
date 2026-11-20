@@ -1,9 +1,11 @@
 name: Release
 
 # The macOS artifact is one Apple Silicon binary (aarch64, `apple-m1` baseline):
-# it runs on every Apple M processor, Intel Macs are not supported. The Windows
-# artifacts are built on a Windows host (`tools/build_release.py`); this
-# workflow covers the macOS side of a tagged release.
+# it runs on every Apple M processor, Intel Macs are not supported. The Linux
+# artifact is one x86-64 binary with the AVX2 (`x86-64-v3`) baseline; ARM is not
+# supported. The Windows artifacts are built on a Windows host
+# (`tools/build_release.py`); this workflow covers macOS and Linux on a tagged
+# release.
 on:
   push:
     tags: ["v*"]
@@ -34,6 +36,40 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: knightbyte-macos-arm64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+
+  linux-x64:
+    name: Linux x64 release
+    # Ubuntu 22.04 keeps the glibc requirement at 2.35: the artifact runs on
+    # Ubuntu 22.04/24.04, Debian 12 and newer. The engine itself is the same
+    # everywhere; only the C library floor depends on the build image.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+          components: llvm-tools-preview
+      - name: Install the FEN verifier
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y stockfish
+          echo "KNIGHTBYTE_FEN_VERIFIER=$(command -v stockfish)" >> "$GITHUB_ENV"
+      - name: Build, verify and package
+        run: python3 tools/build_release_linux.py
+      - name: Upload the artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: knightbyte-linux-x64
           path: |
             dist/*.tar.gz
             dist/*.sha256
