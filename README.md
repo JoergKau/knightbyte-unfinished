@@ -122,10 +122,14 @@ needs the LLVM tools once per machine:
 
 ```bash
 rustup component add llvm-tools-preview     # once per machine (PGO)
-python3 tools/build_release_linux.py        # PGO build (default)
-python3 tools/build_release_linux.py --no-pgo
-python3 tools/build_release_linux.py --target-cpu x86-64-v2   # older CPUs
+python3 tools/build_release_linux.py        # the release build (PGO)
+python3 tools/build_release_linux.py --no-pgo --variant-suffix plain   # measurement build
+python3 tools/build_release_linux.py --target-cpu x86-64-v2            # older CPUs
 ```
+
+As on macOS, the archive and its `.sha256` are the only files written to
+`dist/`; the whole build runs in a scratch tree under `target/` that is deleted
+afterwards (`--keep-cache` keeps it for a fast re-run).
 
 The artifact is built on Ubuntu 22.04 in CI (glibc 2.35 floor). Processors
 without AVX2/BMI2/FMA are not supported by the shipped binary; the start-up
