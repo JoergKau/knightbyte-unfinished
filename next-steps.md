@@ -43,9 +43,11 @@ deleted at the end (previously the gate alone left 88 MB / 166 files in
 `target/release`, and the loose package duplicated the archive in `dist/`).
 `--keep-cache` keeps the scratch tree for a fast re-run, `--keep-staging`
 leaves the unpacked package next to the archive, and `--variant-suffix plain`
-names a measurement build so it cannot collide with the release artifact. The
-developer's own `cargo build` cache is never touched. `tools/build_release_linux.py`
-has the same layout and flags now.
+names a measurement build so it cannot collide with the release artifact.
+`--keep-binary` writes a ready-to-run copy of the executable next to the
+archive, and the final summary names where the executable is. The developer's
+own `cargo build` cache is never touched. `tools/build_release_linux.py` has
+the same layout and flags now.
 
 **2026-11-19 (Windows finish):** the performance plan is complete on Zen 4 (P1c, P4a-P4e, PGO, the match gate: docs/baselines.md 7.12-7.20; whole session +17.3 % balanced, then PGO +6.4 %; same-session depth 20 about 2.25x the predecessor; 500 games at 1 thread 75.1 % with no time loss, illegal move or crash). `tools/ab_bench.py` is the balanced A/B tool (a back-to-back pair is biased by 2-4 %). The Windows release is built by `tools/build_release.py` (ADR-0011). `nnueregions`/`searchstats` are real now (ADR-0012) and the allocation audit is done (docs/baselines.md 7.21). `tbhits` is decided and done (ADR-0013: printed only while tablebases are in use). **The lever surface is decided and done (ADR-0014): `EvalFile` and `Contempt` are removed and exactly sixty levers are visible, all functional (`docs/LEVERS.md`); the owner tests them next.** No feature item is left on the Windows list. The tests of the sixty levers are prepared in `docs/audit-tests-KB.md` (60 arms, measured pre-flight totals, `tools/lever_campaign.py`); the campaign is the owner's and has not been run.
 

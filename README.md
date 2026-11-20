@@ -106,9 +106,11 @@ The archive and its `.sha256` are the only files written to `dist/`. The whole
 build — the lever gate, the compiler's cache and the unpacked package — runs in
 one scratch tree under `target/` that is deleted afterwards, so a release does
 not fill `target/` and never mixes into your normal `cargo build` cache. Pass
-`--keep-cache` to keep it for a fast re-run. `--no-pgo` is a measurement
-variant, not a second release: it skips the profile and names its artifact
-differently so it cannot be mistaken for the shipped build.
+`--keep-cache` to keep it for a fast re-run and `--keep-binary` to also drop a
+ready-to-run `dist/knightbyte` next to the archive; the executable inside the
+archive is `knightbyte-<version>-macos-arm64/knightbyte`. `--no-pgo` is a
+measurement variant, not a second release: it skips the profile and names its
+artifact differently so it cannot be mistaken for the shipped build.
 
 PGO gives about +6-7.5 % on the M4 with the node pins unchanged; the profile
 is generated on the build host and is never committed.
@@ -129,7 +131,8 @@ python3 tools/build_release_linux.py --target-cpu x86-64-v2            # older C
 
 As on macOS, the archive and its `.sha256` are the only files written to
 `dist/`; the whole build runs in a scratch tree under `target/` that is deleted
-afterwards (`--keep-cache` keeps it for a fast re-run).
+afterwards (`--keep-cache` keeps it for a fast re-run, `--keep-binary` drops a
+ready-to-run `dist/knightbyte` next to the archive).
 
 The artifact is built on Ubuntu 22.04 in CI (glibc 2.35 floor). Processors
 without AVX2/BMI2/FMA are not supported by the shipped binary; the start-up

@@ -37,8 +37,9 @@ under `target/` that is deleted after a successful run (a failed run keeps it
 for inspection), so `target/` is not filled with a release cache and the
 developer's own `cargo build` cache is never touched.
 
-Pass `--keep-cache` to keep that tree for a fast re-run and `--keep-staging` to
-keep the unpacked package next to the archive. A previous artifact is replaced
+Pass `--keep-cache` to keep that tree for a fast re-run, `--keep-staging` to
+keep the unpacked package and `--keep-binary` to keep a ready-to-run copy of
+the executable next to the archive. A previous artifact is replaced
 only after the new build has passed every check, so a failed run cannot destroy
 a good release. `--variant-suffix` gives a measurement build its own name (for
 example `--variant-suffix plain` produces `...-linux-x64-plain.tar.gz`) so it
@@ -176,6 +177,11 @@ def main():
         "--keep-staging",
         action="store_true",
         help="also keep the unpacked package folder in --out-dir",
+    )
+    parser.add_argument(
+        "--keep-binary",
+        action="store_true",
+        help="also copy the bare executable to --out-dir/knightbyte",
     )
     parser.add_argument(
         "--keep-cache",
@@ -353,6 +359,8 @@ def main():
     shutil.rmtree(out / stem, ignore_errors=True)
     if args.keep_staging:
         shutil.copytree(staging, out / stem)
+    if args.keep_binary:
+        shutil.copy2(binary, out / "knightbyte")
     shutil.move(str(archive_staged), archive)
     (out / f"{stem}.tar.gz.sha256").write_text(f"{archive_hash} *{archive.name}\n", encoding="ascii")
 
@@ -370,9 +378,12 @@ def main():
 
     print()
     print(f"wrote  : {archive}")
+    print(f"         the executable is inside at {stem}/knightbyte")
     print(f"wrote  : {archive}.sha256")
     if args.keep_staging:
         print(f"wrote  : {out / stem}/")
+    if args.keep_binary:
+        print(f"wrote  : {out / 'knightbyte'}")
     if dirty:
         print("WARNING: the working tree has uncommitted changes; the manifest says so", file=sys.stderr)
 
